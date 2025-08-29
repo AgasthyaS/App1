@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "App1",
-    "slug": "App1",
+    "name": "Green Bible",
+    "slug": "Green Bible",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",

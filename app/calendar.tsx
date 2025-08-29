@@ -14,7 +14,6 @@ import {
   View
 } from 'react-native';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 // Configure calendar locale
 LocaleConfig.locales['en'] = {
@@ -282,7 +281,7 @@ export default function CalendarScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <>
       {/* Confetti (positioned absolutely but behind calendar) */}
       {confettiPieces.map((piece) => (
         <Animated.View
@@ -498,7 +497,7 @@ export default function CalendarScreen() {
             </View>
           </View>
         </Modal>
-    </SafeAreaView>
+    </>
   );
 }
 
