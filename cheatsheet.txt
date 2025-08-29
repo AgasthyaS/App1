@@ -1,0 +1,28 @@
+
+npx expo prebuild - for native code generation
+npx expo run:android - for dev build
+
+
+For a dev build:
+npx eas build -p android --profile development
+
+For a production APK:
+npx eas build -p android --profile production
+
+npx eas build --profile development --platform android --local
+
+npx expo run:android
+
+NEW BUILD
+cd android
+./gradlew clean
+./gradlew assembleRelease
+
+
+x86, arm, arm64    ------  UNIVERSAL BUILD [More MBs]^^
+AAB -> Playstore -> Android Devices
+APK -> Android Devices
+
+
+SOS button for immediate emergency contact.
+Conversational AI for daily and friendly interactions.

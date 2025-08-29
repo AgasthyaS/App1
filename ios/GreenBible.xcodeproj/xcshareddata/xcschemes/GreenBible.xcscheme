@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-               BuildableName = "App1.app"
-               BlueprintName = "App1"
-               ReferencedContainer = "container:App1.xcodeproj">
+               BuildableName = "GreenBible.app"
+               BlueprintName = "GreenBible"
+               ReferencedContainer = "container:GreenBible.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "00E356ED1AD99517003FC87E"
-               BuildableName = "App1Tests.xctest"
-               BlueprintName = "App1Tests"
-               ReferencedContainer = "container:App1.xcodeproj">
+               BuildableName = "GreenBibleTests.xctest"
+               BlueprintName = "GreenBibleTests"
+               ReferencedContainer = "container:GreenBible.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -55,9 +55,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-            BuildableName = "App1.app"
-            BlueprintName = "App1"
-            ReferencedContainer = "container:App1.xcodeproj">
+            BuildableName = "GreenBible.app"
+            BlueprintName = "GreenBible"
+            ReferencedContainer = "container:GreenBible.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -72,9 +72,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-            BuildableName = "App1.app"
-            BlueprintName = "App1"
-            ReferencedContainer = "container:App1.xcodeproj">
+            BuildableName = "GreenBible.app"
+            BlueprintName = "GreenBible"
+            ReferencedContainer = "container:GreenBible.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
