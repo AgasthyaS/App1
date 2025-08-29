@@ -1,69 +1,46 @@
-import { Ionicons } from '@expo/vector-icons';
-import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Drawer } from 'react-native-drawer-layout';
-import Sidebar from '../components/Sidebar';
+import React from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const Meta = () => {
-  const [open, setOpen] = useState(false);
-
   return (
-    <Drawer
-      open={open}
-      onOpen={() => setOpen(true)}
-      onClose={() => setOpen(false)}
-      drawerPosition="left"
-      drawerStyle={{ 
-        backgroundColor: '#E8F5E9',
-        width: '30%'
-      }}
-      renderDrawerContent={() => <Sidebar onClose={() => setOpen(false)} />}
-    >
-      <View style={styles.mainContainer}>
-        <TouchableOpacity
-          style={styles.menuButton}
-          onPress={() => setOpen(true)}
-        >
-          <Ionicons name="menu" size={28} color="#2E7D32" />
-        </TouchableOpacity>
-        
-        <ScrollView style={styles.container}>
-          <View style={styles.section}>
-            <Text style={styles.title}>Our Mission</Text>
-            <Text style={styles.content}>
-              Our mission is to empower gardeners by providing innovative tools and knowledge, enabling them to create and nurture thriving gardens. By promoting a love for gardening and fostering sustainable practices, we aim to help communities cultivate their own beautiful, eco-friendly oasis.
-            </Text>
+    <SafeAreaView style={styles.mainContainer}>
+      <ScrollView style={styles.container}>
+        <View style={styles.section}>
+          <Text style={styles.title}>Our Mission</Text>
+          <Text style={styles.content}>
+            Our mission is to empower gardeners by providing innovative tools and knowledge, enabling them to create and nurture thriving gardens. By promoting a love for gardening and fostering sustainable practices, we aim to help communities cultivate their own beautiful, eco-friendly oasis.
+          </Text>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.title}>About Us</Text>
+          <Text style={styles.content}>
+            I am a passionate individual who loves gardening, technology, and nature. My goal is to create a gardening app that supports users in cultivating their dream gardens and fosters a sense of community.
+            In my spare time, I enjoy staying active through swimming and playing basketball with friends. I believe that my interests and experiences will help me develop a gardening app that empowers gardeners worldwide.
+          </Text>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.title}>FAQs</Text>
+
+          <View style={styles.qaBlock}>
+            <Text style={styles.question}>Q: How do I contact support?</Text>
+            <Text style={styles.answer}>A: You can email me at agasthya.shukla@gmail.com</Text>
           </View>
 
-          <View style={styles.section}>
-            <Text style={styles.title}>About Us</Text>
-            <Text style={styles.content}>
-              I am a passionate individual who loves gardening, technology, and nature. My goal is to create a gardening app that supports users in cultivating their dream gardens and fosters a sense of community.
-              In my spare time, I enjoy staying active through swimming and playing basketball with friends. I believe that my interests and experiences will help me develop a gardening app that empowers gardeners worldwide.
-            </Text>
+          <View style={styles.qaBlock}>
+            <Text style={styles.question}>Q: What platforms do you support?</Text>
+            <Text style={styles.answer}>A: We develop for both iOS and Android</Text>
           </View>
 
-          <View style={styles.section}>
-            <Text style={styles.title}>FAQs</Text>
-
-            <View style={styles.qaBlock}>
-              <Text style={styles.question}>Q: How do I contact support?</Text>
-              <Text style={styles.answer}>A: You can email me at agasthya.shukla@gmail.com</Text>
-            </View>
-
-            <View style={styles.qaBlock}>
-              <Text style={styles.question}>Q: What platforms do you support?</Text>
-              <Text style={styles.answer}>A: We develop for both iOS and Android</Text>
-            </View>
-
-            <View style={styles.qaBlock}>
-              <Text style={styles.question}>Q: What are the core features of the app?</Text>
-              <Text style={styles.answer}>A: The core feature of the app is the planting calendar, which suggests the right plants for particular contexts (time of the year, plant type) and allows users to track plant growth.</Text>
-            </View>
+          <View style={styles.qaBlock}>
+            <Text style={styles.question}>Q: What are the core features of the app?</Text>
+            <Text style={styles.answer}>A: The core feature of the app is the planting calendar, which suggests the right plants for particular contexts (time of the year, plant type) and allows users to track plant growth.</Text>
           </View>
-        </ScrollView>
-      </View>
-    </Drawer>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 };
 
@@ -71,16 +48,9 @@ const styles = StyleSheet.create({
   mainContainer: {
     flex: 1,
   },
-  menuButton: {
-    position: 'absolute',
-    top: 40,
-    left: 20,
-    zIndex: 1,
-  },
   container: {
     flex: 1,
     padding: 20,
-    paddingTop: 70,
     backgroundColor: '#E8F5E9',
   },
   section: {

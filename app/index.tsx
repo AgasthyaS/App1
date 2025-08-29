@@ -1,14 +1,11 @@
-import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Drawer } from 'react-native-drawer-layout';
-import Sidebar from '../components/Sidebar';
+import { StyleSheet, Text } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
-  const [open, setOpen] = useState(false);
-  const [location, setLocation] = useState(null);
-  const [errorMsg, setErrorMsg] = useState(null);
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -34,28 +31,10 @@ export default function HomeScreen() {
   }
 
   return (
-    <Drawer
-      open={open}
-      onOpen={() => setOpen(true)}
-      onClose={() => setOpen(false)}
-      drawerPosition="left"
-      drawerStyle={{ 
-        backgroundColor: '#E8F5E9',
-        width: '30%'
-      }}
-      renderDrawerContent={() => <Sidebar onClose={() => setOpen(false)} />}
-    >
-      <View style={styles.container}>
-        <TouchableOpacity
-          style={styles.menuButton}
-          onPress={() => setOpen(true)}
-        >
-          <Ionicons name="menu" size={28} color="#2E7D32" />
-        </TouchableOpacity>
-        <Text style={styles.welcomeText}>Welcome to your garden!</Text>
-        <Text style={styles.locationText}>{text}</Text>
-      </View>
-    </Drawer>
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.welcomeText}>Welcome to your garden!</Text>
+      <Text style={styles.locationText}>{text}</Text>
+    </SafeAreaView>
   );
 }
 
@@ -78,12 +57,5 @@ const styles = StyleSheet.create({
     marginTop: 20,
     paddingHorizontal: 20,
     textAlign: 'center',
-  },
-  menuButton: {
-    position: 'absolute',
-    top: 25,
-    left: 16,
-    zIndex: 1,
-    padding: 8,
   },
 });

@@ -14,8 +14,7 @@ import {
   View
 } from 'react-native';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
-import { Drawer } from 'react-native-drawer-layout';
-import Sidebar from '../components/Sidebar';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 // Configure calendar locale
 LocaleConfig.locales['en'] = {
@@ -101,7 +100,6 @@ const generateYearlyTasks = () => {
 };
 
 export default function CalendarScreen() {
-  const [open, setOpen] = useState(false);
   const now = new Date();
   const currentDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState(currentDate);
@@ -284,50 +282,32 @@ export default function CalendarScreen() {
   };
 
   return (
-    <Drawer
-      open={open}
-      onOpen={() => setOpen(true)}
-      onClose={() => setOpen(false)}
-      drawerPosition="left"
-      drawerStyle={{ 
-        backgroundColor: '#E8F5E9',
-        width: '30%'
-      }}
-      renderDrawerContent={() => <Sidebar onClose={() => setOpen(false)} />}
-    >
-      <View style={styles.container}>
-        {/* Confetti (positioned absolutely but behind calendar) */}
-        {confettiPieces.map((piece) => (
-          <Animated.View
-            key={piece.id}
-            style={[
-              styles.confettiPiece,
-              {
-                left: piece.left,
-                width: piece.size,
-                height: piece.size,
-                borderRadius: piece.size / 2,
-                transform: [
-                  { translateY: piece.top },
-                  { rotate: piece.rotation.interpolate({
-                    inputRange: [0, 360],
-                    outputRange: ['0deg', '360deg']
-                  })},
-                ],
-                backgroundColor: piece.color,
-                opacity: piece.opacity,
-                zIndex: 1, // Behind calendar but above background
-              }
-            ]}
-          />
-        ))}
-
-        <TouchableOpacity
-          style={styles.menuButton}
-          onPress={() => setOpen(true)}
-        >
-          <Ionicons name="menu" size={28} color="#2E7D32" />
-        </TouchableOpacity>
+    <SafeAreaView style={styles.container}>
+      {/* Confetti (positioned absolutely but behind calendar) */}
+      {confettiPieces.map((piece) => (
+        <Animated.View
+          key={piece.id}
+          style={[
+            styles.confettiPiece,
+            {
+              left: piece.left,
+              width: piece.size,
+              height: piece.size,
+              borderRadius: piece.size / 2,
+              transform: [
+                { translateY: piece.top },
+                { rotate: piece.rotation.interpolate({
+                  inputRange: [0, 360],
+                  outputRange: ['0deg', '360deg']
+                })},
+              ],
+              backgroundColor: piece.color,
+              opacity: piece.opacity,
+              zIndex: 1, // Behind calendar but above background
+            }
+          ]}
+        />
+      ))}
         
         {/* Calendar (positioned above confetti) */}
         <View style={{ zIndex: 2 }}>
@@ -518,8 +498,7 @@ export default function CalendarScreen() {
             </View>
           </View>
         </Modal>
-      </View>
-    </Drawer>
+    </SafeAreaView>
   );
 }
 
@@ -527,7 +506,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#E8F5E9',
-    paddingTop: 20,
   },
   header: {
     fontSize: 24,
@@ -597,13 +575,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 10,
   },
-  menuButton: {
-    position: 'absolute',
-    top: 25,
-    left: 16,
-    zIndex: 10,
-    padding: 8,
-  },
+
   addButton: {
     position: 'absolute',
     bottom: 30,

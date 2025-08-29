@@ -49,7 +49,7 @@ export function ChatBotComponent() {
   }, [])
 
   return (
-    <View style={{ backgroundColor: '#E8F5E9', flex: 1, marginBottom: 50 }}>
+    <View style={{ backgroundColor: '#E8F5E9', flex: 1}}>
       <GiftedChat
         messages={messages}
         onSend={messages => onSend(messages)}
