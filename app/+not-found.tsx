@@ -1,32 +1,26 @@
-import { Link, Stack } from 'expo-router';
-import { StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
+import React from 'react';
+import { Text } from 'react-native';
 
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
+import { GButton, Screen } from '@/components/greenr/UI';
+import { dark, type } from '@/constants/theme';
 
-export default function NotFoundScreen() {
+export default function NotFound() {
+  const router = useRouter();
   return (
-    <>
-      <Stack.Screen options={{ title: 'Oops!' }} />
-      <ThemedView style={styles.container}>
-        <ThemedText type="title">This screen does not exist.</ThemedText>
-        <Link href="/" style={styles.link}>
-          <ThemedText type="link">Go to home screen!</ThemedText>
-        </Link>
-      </ThemedView>
-    </>
+    <Screen scroll={false} style={{ alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ fontSize: 44 }}>🌫️</Text>
+      <Text style={[type.screenTitle, { color: dark.ink, fontSize: 22, marginTop: 14 }]}>
+        Nothing grows here.
+      </Text>
+      <Text style={[type.caption, { color: dark.inkMuted, marginTop: 8, textAlign: 'center' }]}>
+        This screen isn&apos;t registered — if you just updated the app, restart the dev server.
+      </Text>
+      <GButton
+        title="Back to Forecast"
+        onPress={() => router.replace('/(tabs)')}
+        style={{ marginTop: 24, alignSelf: 'stretch' }}
+      />
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  link: {
-    marginTop: 15,
-    paddingVertical: 15,
-  },
-});

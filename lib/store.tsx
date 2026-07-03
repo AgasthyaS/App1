@@ -1,0 +1,519 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { SEED_ACCURACY, SEED_PLANTS, SEED_SENSORS, SEED_SPOTS, SEED_TASKS } from './seed';
+import {
+  AccuracyEntry,
+  CareTask,
+  Plant,
+  Sensor,
+  Settings,
+  Spot,
+} from './types';
+
+const STORAGE_KEY = 'greenr.state.v2';
+
+interface GreenrState {
+  onboarded: boolean;
+  /** true while the seeded demo garden is loaded (testing only) */
+  demo: boolean;
+  plants: Plant[];
+  spots: Spot[];
+  sensors: Sensor[];
+  tasks: CareTask[];
+  accuracy: AccuracyEntry[];
+  settings: Settings;
+  briefingOpened: boolean;
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  briefingDay: 'Sunday',
+  briefingTime: '9:00',
+  emergencyLeadHours: 48,
+  quietHours: ['21:00', '08:00'],
+  unitsF: true,
+  voice: 'Standard',
+  appearance: 'Dark',
+  researchOptIn: true,
+  plus: false,
+};
+
+/** Real users start with nothing — the garden is theirs to build. */
+function emptyState(): GreenrState {
+  return {
+    onboarded: false,
+    demo: false,
+    plants: [],
+    spots: [],
+    sensors: [],
+    tasks: [],
+    accuracy: [],
+    settings: DEFAULT_SETTINGS,
+    briefingOpened: false,
+  };
+}
+
+function demoData() {
+  return {
+    plants: SEED_PLANTS,
+    spots: SEED_SPOTS,
+    sensors: SEED_SENSORS,
+    tasks: SEED_TASKS,
+    accuracy: SEED_ACCURACY,
+  };
+}
+
+interface GreenrApi extends GreenrState {
+  hydrated: boolean;
+  completeOnboarding: () => void;
+  addPlant: (p: Plant) => void;
+  addSpot: (s: Spot) => void;
+  logWater: (plantId: string) => void;
+  pairSensor: (plantId: string) => Sensor;
+  completeTask: (taskId: string, verified: boolean) => void;
+  skipTask: (taskId: string) => void;
+  resetCareSession: () => void;
+  markBriefingOpened: () => void;
+  setSettings: (patch: Partial<Settings>) => void;
+  setPlus: (on: boolean) => void;
+  movePlant: (plantId: string, spotId: string) => void;
+  archivePlant: (plantId: string, cause?: string) => void;
+  addDiagnosis: (plantId: string, text: string) => void;
+  addTasks: (tasks: CareTask[]) => void;
+  addPhoto: (plantId: string) => void;
+  renamePlant: (plantId: string, name: string) => void;
+  readNow: (sensorId: string) => void;
+  reassignSensor: (sensorId: string, plantId: string) => void;
+  recalibrateSensor: (sensorId: string) => void;
+  installFirmware: (sensorId: string) => void;
+  forgetSensor: (sensorId: string) => void;
+  remeasureSpot: (spotId: string) => void;
+  /** testing: load the seeded demo garden */
+  loadDemoGarden: () => void;
+  /** testing: wipe everything back to a fresh install */
+  resetApp: () => void;
+}
+
+const Ctx = createContext<GreenrApi | null>(null);
+
+export function GreenrProvider({ children }: { children: React.ReactNode }) {
+  const [state, setState] = useState<GreenrState>(emptyState);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const saved = JSON.parse(raw) as Partial<GreenrState>;
+        setState((s) => {
+          const base: GreenrState = {
+            ...s,
+            ...saved,
+            settings: { ...s.settings, ...saved.settings },
+          };
+          // demo garden always re-seeds from code so it stays fresh
+          return saved.demo ? { ...base, ...demoData() } : base;
+        });
+      })
+      .catch(() => {})
+      .finally(() => setHydrated(true));
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const toSave: Partial<GreenrState> = {
+      onboarded: state.onboarded,
+      demo: state.demo,
+      settings: state.settings,
+      briefingOpened: state.briefingOpened,
+    };
+    if (!state.demo) {
+      // the user's real garden persists; demo data never does
+      toSave.plants = state.plants;
+      toSave.spots = state.spots;
+      toSave.sensors = state.sensors;
+      toSave.tasks = state.tasks;
+    }
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(toSave)).catch(() => {});
+  }, [hydrated, state]);
+
+  const completeOnboarding = useCallback(
+    () => setState((s) => ({ ...s, onboarded: true })),
+    [],
+  );
+
+  const addPlant = useCallback(
+    (p: Plant) => setState((s) => ({ ...s, plants: [...s.plants, p] })),
+    [],
+  );
+
+  const addSpot = useCallback(
+    (sp: Spot) => setState((s) => ({ ...s, spots: [...s.spots, sp] })),
+    [],
+  );
+
+  const logWater = useCallback((plantId: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) => {
+        if (p.id !== plantId) return p;
+        const [lo, hi] = p.comfortBand;
+        const newMoisture = Math.round((lo + hi) / 2 + 8);
+        return {
+          ...p,
+          score: Math.min(100, p.score + 6),
+          moistureHistory: [
+            { daysAgo: 0, moisture: newMoisture, watered: true },
+            ...p.moistureHistory,
+          ],
+          forecast: { ...p.forecast, warnInDays: null, criticalInDays: null, action: 'Nothing needed' },
+          timeline: [
+            {
+              id: `tl-${Date.now()}`,
+              daysAgo: 0,
+              kind: 'care' as const,
+              text: p.sensorId
+                ? `Watered — soil ${p.moistureHistory[0]?.moisture ?? lo}% → ${newMoisture}%`
+                : 'Watered (logged)',
+              verified: !!p.sensorId,
+            },
+            ...p.timeline,
+          ],
+        };
+      }),
+    }));
+  }, []);
+
+  const pairSensor = useCallback((plantId: string): Sensor => {
+    const hex = Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, '0');
+    const sensor: Sensor = {
+      id: `sn-${hex.toLowerCase()}`,
+      name: `Greenr-${hex}`,
+      plantId,
+      status: 'online',
+      batteryPct: 100,
+      batteryEta: '~6 months',
+      rssiDbm: -55,
+      lastReadingMinsAgo: 0,
+      wakeIntervalMins: 180,
+      firmware: 'v1.4.2',
+      updateAvailable: false,
+      calibratedOn: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      calDry: 2870,
+      calWet: 1180,
+      latest: { soilPct: 40, dli: 3.0, tempF: 72, rhPct: 55, rawAdc: 2100 },
+    };
+    setState((s) => ({
+      ...s,
+      sensors: [...s.sensors, sensor],
+      plants: s.plants.map((p) =>
+        p.id === plantId ? { ...p, sensorId: sensor.id, estimate: false, estimateBand: 0 } : p,
+      ),
+    }));
+    return sensor;
+  }, []);
+
+  const completeTask = useCallback((taskId: string, verified: boolean) => {
+    setState((s) => ({
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, done: true, verified } : t)),
+    }));
+  }, []);
+
+  const skipTask = useCallback((taskId: string) => {
+    setState((s) => ({
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, done: true, skipped: true } : t)),
+    }));
+  }, []);
+
+  const resetCareSession = useCallback(() => {
+    setState((s) => ({
+      ...s,
+      tasks: s.tasks.map((t) => ({ ...t, done: false, verified: false, skipped: false })),
+    }));
+  }, []);
+
+  const markBriefingOpened = useCallback(
+    () => setState((s) => ({ ...s, briefingOpened: true })),
+    [],
+  );
+
+  const setSettings = useCallback((patch: Partial<Settings>) => {
+    setState((s) => ({ ...s, settings: { ...s.settings, ...patch } }));
+  }, []);
+
+  const setPlus = useCallback((on: boolean) => {
+    setState((s) => ({ ...s, settings: { ...s.settings, plus: on } }));
+  }, []);
+
+  const movePlant = useCallback((plantId: string, spotId: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) =>
+        p.id === plantId
+          ? {
+              ...p,
+              spotId,
+              timeline: [
+                {
+                  id: `tl-${Date.now()}`,
+                  daysAgo: 0,
+                  kind: 'care' as const,
+                  text: `Moved to ${s.spots.find((sp) => sp.id === spotId)?.name ?? 'a new spot'} — expectations re-baselined for 7 days.`,
+                },
+                ...p.timeline,
+              ],
+            }
+          : p,
+      ),
+    }));
+  }, []);
+
+  const archivePlant = useCallback((plantId: string, cause?: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) =>
+        p.id === plantId ? { ...p, archived: true, archivedCause: cause } : p,
+      ),
+      tasks: s.tasks.filter((t) => t.plantId !== plantId),
+    }));
+  }, []);
+
+  const addDiagnosis = useCallback((plantId: string, text: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) =>
+        p.id === plantId
+          ? {
+              ...p,
+              timeline: [
+                { id: `tl-${Date.now()}`, daysAgo: 0, kind: 'diagnosis' as const, text },
+                ...p.timeline,
+              ],
+            }
+          : p,
+      ),
+    }));
+  }, []);
+
+  const addTasks = useCallback((newTasks: CareTask[]) => {
+    setState((s) => ({ ...s, tasks: [...s.tasks, ...newTasks] }));
+  }, []);
+
+  const addPhoto = useCallback((plantId: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) =>
+        p.id === plantId
+          ? {
+              ...p,
+              timeline: [
+                {
+                  id: `tl-${Date.now()}`,
+                  daysAgo: 0,
+                  kind: 'photo' as const,
+                  text: 'Photo added — aligned for the growth scrubber.',
+                },
+                ...p.timeline,
+              ],
+            }
+          : p,
+      ),
+    }));
+  }, []);
+
+  const renamePlant = useCallback((plantId: string, name: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) => (p.id === plantId ? { ...p, name } : p)),
+    }));
+  }, []);
+
+  const readNow = useCallback((sensorId: string) => {
+    setState((s) => ({
+      ...s,
+      sensors: s.sensors.map((sn) =>
+        sn.id === sensorId
+          ? {
+              ...sn,
+              status: 'online' as const,
+              lastReadingMinsAgo: 0,
+              latest: {
+                ...sn.latest,
+                soilPct: Math.max(4, sn.latest.soilPct - 1),
+                rawAdc: sn.latest.rawAdc + 18,
+              },
+            }
+          : sn,
+      ),
+    }));
+  }, []);
+
+  const reassignSensor = useCallback((sensorId: string, plantId: string) => {
+    setState((s) => ({
+      ...s,
+      sensors: s.sensors.map((sn) => (sn.id === sensorId ? { ...sn, plantId } : sn)),
+      plants: s.plants.map((p) => {
+        if (p.sensorId === sensorId && p.id !== plantId) {
+          // old plant: stream archives to its history, back to estimate mode
+          return {
+            ...p,
+            sensorId: null,
+            estimate: true,
+            estimateBand: 6,
+            timeline: [
+              {
+                id: `tl-${Date.now()}`,
+                daysAgo: 0,
+                kind: 'insight' as const,
+                text: 'Sensor moved — its stream is archived here; scores continue as estimates.',
+              },
+              ...p.timeline,
+            ],
+          };
+        }
+        if (p.id === plantId) {
+          return { ...p, sensorId, estimate: false, estimateBand: 0 };
+        }
+        return p;
+      }),
+    }));
+  }, []);
+
+  const recalibrateSensor = useCallback((sensorId: string) => {
+    setState((s) => ({
+      ...s,
+      sensors: s.sensors.map((sn) =>
+        sn.id === sensorId
+          ? {
+              ...sn,
+              calibratedOn: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+              calDry: 2860 + Math.floor(Math.random() * 30),
+              calWet: 1170 + Math.floor(Math.random() * 30),
+            }
+          : sn,
+      ),
+    }));
+  }, []);
+
+  const installFirmware = useCallback((sensorId: string) => {
+    setState((s) => ({
+      ...s,
+      sensors: s.sensors.map((sn) =>
+        sn.id === sensorId ? { ...sn, updateAvailable: false, firmware: 'v1.4.2' } : sn,
+      ),
+    }));
+  }, []);
+
+  const forgetSensor = useCallback((sensorId: string) => {
+    setState((s) => ({
+      ...s,
+      sensors: s.sensors.filter((sn) => sn.id !== sensorId),
+      plants: s.plants.map((p) =>
+        p.sensorId === sensorId
+          ? {
+              ...p,
+              sensorId: null,
+              estimate: true,
+              estimateBand: 7,
+              timeline: [
+                {
+                  id: `tl-${Date.now()}`,
+                  daysAgo: 0,
+                  kind: 'insight' as const,
+                  text: 'Sensor forgotten — history stays with this plant; scores continue as estimates.',
+                },
+                ...p.timeline,
+              ],
+            }
+          : p,
+      ),
+    }));
+  }, []);
+
+  const remeasureSpot = useCallback((spotId: string) => {
+    setState((s) => ({
+      ...s,
+      spots: s.spots.map((sp) =>
+        sp.id === spotId
+          ? { ...sp, dli: Math.round((sp.dli + (Math.random() - 0.45) * 0.4) * 10) / 10 }
+          : sp,
+      ),
+    }));
+  }, []);
+
+  const loadDemoGarden = useCallback(() => {
+    setState((s) => ({
+      ...s,
+      demo: true,
+      onboarded: true,
+      // Plus comes with the demo so every surface is explorable in testing
+      settings: { ...s.settings, plus: true },
+      ...demoData(),
+    }));
+  }, []);
+
+  const resetApp = useCallback(() => {
+    AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
+    setState(emptyState());
+  }, []);
+
+  const api = useMemo<GreenrApi>(
+    () => ({
+      ...state,
+      hydrated,
+      completeOnboarding,
+      addPlant,
+      addSpot,
+      logWater,
+      pairSensor,
+      completeTask,
+      skipTask,
+      resetCareSession,
+      markBriefingOpened,
+      setSettings,
+      setPlus,
+      movePlant,
+      archivePlant,
+      addDiagnosis,
+      addTasks,
+      addPhoto,
+      renamePlant,
+      readNow,
+      reassignSensor,
+      recalibrateSensor,
+      installFirmware,
+      forgetSensor,
+      remeasureSpot,
+      loadDemoGarden,
+      resetApp,
+    }),
+    [state, hydrated, completeOnboarding, addPlant, addSpot, logWater, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
+  );
+
+  return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
+}
+
+export function useGreenr(): GreenrApi {
+  const v = useContext(Ctx);
+  if (!v) throw new Error('useGreenr must be used inside GreenrProvider');
+  return v;
+}
+
+/** Plants on active surfaces — archived ones live only in history. */
+export function activePlants(plants: Plant[]): Plant[] {
+  return plants.filter((p) => !p.archived);
+}
+
+export function gardenAverage(plants: Plant[]): number {
+  const act = activePlants(plants);
+  if (!act.length) return 0;
+  return Math.round(act.reduce((a, p) => a + p.score, 0) / act.length);
+}
