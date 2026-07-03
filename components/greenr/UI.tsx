@@ -1,4 +1,6 @@
 import { accent, dark, layout, light, type } from '@/constants/theme';
+import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import {
   Pressable,
@@ -69,12 +71,15 @@ export function Card({
       backgroundColor: elevated ? t.surface2 : t.surface1,
       borderRadius: layout.cardRadius,
       padding: layout.cardPadding,
+      // a whisper of a border gives depth without shadows on dark (§1.3)
+      borderWidth: 1,
+      borderColor: mode === 'dark' ? 'rgba(255,255,255,0.05)' : t.hairline,
     },
     mode === 'light' && {
       shadowColor: '#3D2B1F',
-      shadowOpacity: 0.08,
-      shadowRadius: 8,
-      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.07,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
       elevation: 2,
     },
     accentBorder ? { borderLeftWidth: 2, borderLeftColor: accentBorder } : null,
@@ -82,7 +87,10 @@ export function Card({
   ];
   if (onPress) {
     return (
-      <Pressable onPress={onPress} style={({ pressed }) => [base, pressed && { opacity: 0.85 }]}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [base, pressed && { opacity: 0.9, transform: [{ scale: 0.985 }] }]}
+      >
         {children}
       </Pressable>
     );
@@ -128,25 +136,53 @@ export function GButton({
   disabled?: boolean;
 }) {
   const t = mode === 'dark' ? dark : light;
-  const bg =
-    kind === 'primary' ? accent.verdant : kind === 'destructive' ? 'transparent' : kind === 'secondary' ? t.surface2 : 'transparent';
   const fg =
     kind === 'primary' ? '#FFFFFF' : kind === 'destructive' ? accent.clay : kind === 'ghost' ? accent.verdant : t.ink;
+  const press = () => {
+    Haptics.selectionAsync().catch(() => {});
+    onPress?.();
+  };
+  const shape: ViewStyle = {
+    minHeight: layout.touchTarget + 4,
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  };
+  if (kind === 'primary') {
+    return (
+      <Pressable
+        onPress={press}
+        disabled={disabled}
+        style={({ pressed }) => [
+          shape,
+          { opacity: disabled ? 0.4 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
+          style,
+        ]}
+      >
+        <LinearGradient
+          colors={[accent.verdant, accent.verdantDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0 }}
+        />
+        <Text style={[type.cardTitle, { color: fg, fontSize: 16 }]}>{title}</Text>
+      </Pressable>
+    );
+  }
   return (
     <Pressable
-      onPress={onPress}
+      onPress={press}
       disabled={disabled}
       style={({ pressed }) => [
+        shape,
         {
-          minHeight: layout.touchTarget,
-          borderRadius: 14,
-          paddingHorizontal: 20,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: bg,
-          borderWidth: kind === 'destructive' ? 1 : 0,
-          borderColor: accent.clay,
-          opacity: disabled ? 0.4 : pressed ? 0.85 : 1,
+          backgroundColor: kind === 'secondary' ? t.surface2 : 'transparent',
+          borderWidth: kind === 'destructive' ? 1 : kind === 'secondary' ? 1 : 0,
+          borderColor: kind === 'destructive' ? accent.clay : mode === 'dark' ? 'rgba(255,255,255,0.07)' : t.hairline,
+          opacity: disabled ? 0.4 : 1,
+          transform: [{ scale: pressed ? 0.97 : 1 }],
         },
         style,
       ]}

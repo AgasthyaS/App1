@@ -397,7 +397,7 @@ export const SEED_TASKS: CareTask[] = [
   {
     id: 'task-1',
     plantId: 'pl-calathea',
-    title: 'Water the Calathea — about 1 cup, until the top drains',
+    title: 'Water the Calathea — 1¼ cups (325 ml), slowly, until the top drains',
     why: 'Soil at 27%, dropping ~4%/day; critical projected Thu AM.',
     minutes: 3,
     verifiable: true,
@@ -405,7 +405,7 @@ export const SEED_TASKS: CareTask[] = [
   {
     id: 'task-2',
     plantId: 'pl-fern',
-    title: 'Water the Fern — keep it evenly moist',
+    title: 'Water the Fern — 1½ cups (350 ml), keep it evenly moist',
     why: 'Projected to leave its band Sunday; watering Saturday keeps it in range.',
     minutes: 2,
     verifiable: true,

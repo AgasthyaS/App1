@@ -12,6 +12,7 @@ import {
   AccuracyEntry,
   CareTask,
   Plant,
+  Profile,
   Sensor,
   Settings,
   Spot,
@@ -21,6 +22,8 @@ const STORAGE_KEY = 'greenr.state.v2';
 
 interface GreenrState {
   onboarded: boolean;
+  /** null until sign-in + survey complete */
+  profile: Profile | null;
   /** true while the seeded demo garden is loaded (testing only) */
   demo: boolean;
   plants: Plant[];
@@ -48,6 +51,7 @@ const DEFAULT_SETTINGS: Settings = {
 function emptyState(): GreenrState {
   return {
     onboarded: false,
+    profile: null,
     demo: false,
     plants: [],
     spots: [],
@@ -71,6 +75,8 @@ function demoData() {
 
 interface GreenrApi extends GreenrState {
   hydrated: boolean;
+  setProfile: (p: Profile) => void;
+  signOut: () => void;
   completeOnboarding: () => void;
   addPlant: (p: Plant) => void;
   addSpot: (s: Spot) => void;
@@ -129,6 +135,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     const toSave: Partial<GreenrState> = {
       onboarded: state.onboarded,
+      profile: state.profile,
       demo: state.demo,
       settings: state.settings,
       briefingOpened: state.briefingOpened,
@@ -148,6 +155,17 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setProfile = useCallback(
+    (p: Profile) => setState((s) => ({ ...s, profile: p })),
+    [],
+  );
+
+  const signOut = useCallback(
+    // account leaves; the garden stays on this device
+    () => setState((s) => ({ ...s, profile: null, onboarded: false })),
+    [],
+  );
+
   const addPlant = useCallback(
     (p: Plant) => setState((s) => ({ ...s, plants: [...s.plants, p] })),
     [],
@@ -159,35 +177,80 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logWater = useCallback((plantId: string) => {
-    setState((s) => ({
+    setState((s) => {
+      const plant = s.plants.find((p) => p.id === plantId);
+      const [plo, phi] = plant?.comfortBand ?? [0, 100];
+      const cur = plant?.moistureHistory[0]?.moisture ?? plo;
+      const soaked =
+        cur >= phi
+          ? Math.min(96, cur + 18)
+          : cur > (plo + phi) / 2
+            ? Math.min(96, cur + 20)
+            : Math.round((plo + phi) / 2 + 8);
+      return {
       ...s,
+      // the paired sensor sees the pour on its next reading
+      sensors: s.sensors.map((sn) =>
+        sn.plantId === plantId
+          ? { ...sn, lastReadingMinsAgo: 0, latest: { ...sn.latest, soilPct: soaked } }
+          : sn,
+      ),
       plants: s.plants.map((p) => {
         if (p.id !== plantId) return p;
         const [lo, hi] = p.comfortBand;
-        const newMoisture = Math.round((lo + hi) / 2 + 8);
+        const current = p.moistureHistory[0]?.moisture ?? lo;
+
+        // Water isn't free points — pouring into wet soil overshoots the band.
+        let newMoisture: number;
+        let scoreDelta: number;
+        let action: string;
+        let note: string;
+        if (current >= hi) {
+          newMoisture = Math.min(96, current + 18);
+          scoreDelta = -8;
+          action = 'Hold off — soil above the band, let it dry';
+          note = p.sensorId
+            ? `Watered while already wet — soil ${current}% → ${newMoisture}%, over the band. Root-rot risk climbs with every repeat.`
+            : 'Watered while the model read wet — now over the band. Root-rot risk climbs with every repeat.';
+        } else if (current > (lo + hi) / 2) {
+          newMoisture = Math.min(96, current + 20);
+          const over = newMoisture > hi;
+          scoreDelta = over ? -3 : 1;
+          action = over ? 'Hold off — soil pushed over the band' : 'Nothing needed';
+          note = over
+            ? `Watered early — soil ${current}% → ${newMoisture}%, past the band edge. It didn't need it yet.`
+            : `Topped up — soil ${current}% → ${newMoisture}%.`;
+        } else {
+          newMoisture = Math.round((lo + hi) / 2 + 8);
+          scoreDelta = 6;
+          action = 'Nothing needed';
+          note = p.sensorId
+            ? `Watered — soil ${current}% → ${newMoisture}%`
+            : 'Watered (logged)';
+        }
+
         return {
           ...p,
-          score: Math.min(100, p.score + 6),
+          score: Math.max(5, Math.min(100, p.score + scoreDelta)),
           moistureHistory: [
             { daysAgo: 0, moisture: newMoisture, watered: true },
             ...p.moistureHistory,
           ],
-          forecast: { ...p.forecast, warnInDays: null, criticalInDays: null, action: 'Nothing needed' },
+          forecast: { ...p.forecast, warnInDays: null, criticalInDays: null, action },
           timeline: [
             {
               id: `tl-${Date.now()}`,
               daysAgo: 0,
-              kind: 'care' as const,
-              text: p.sensorId
-                ? `Watered — soil ${p.moistureHistory[0]?.moisture ?? lo}% → ${newMoisture}%`
-                : 'Watered (logged)',
-              verified: !!p.sensorId,
+              kind: (scoreDelta < 0 ? 'insight' : 'care') as 'insight' | 'care',
+              text: note,
+              verified: scoreDelta >= 0 && !!p.sensorId,
             },
             ...p.timeline,
           ],
         };
       }),
-    }));
+      };
+    });
   }, []);
 
   const pairSensor = useCallback((plantId: string): Sensor => {
@@ -454,6 +517,18 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       ...s,
       demo: true,
       onboarded: true,
+      // demo shouldn't dead-end at the sign-in gate
+      profile:
+        s.profile ?? {
+          name: 'Demo Gardener',
+          email: null,
+          method: 'guest',
+          experience: '1–5 years',
+          plantCount: '4–10',
+          where: 'Both',
+          struggle: 'Watering',
+          joined: 'Mar 2026',
+        },
       // Plus comes with the demo so every surface is explorable in testing
       settings: { ...s.settings, plus: true },
       ...demoData(),
@@ -469,6 +544,8 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     () => ({
       ...state,
       hydrated,
+      setProfile,
+      signOut,
       completeOnboarding,
       addPlant,
       addSpot,
@@ -495,7 +572,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, completeOnboarding, addPlant, addSpot, logWater, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

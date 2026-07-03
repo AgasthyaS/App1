@@ -281,6 +281,23 @@ export default function PairSensor() {
               </Text>
             </Card>
           ))}
+          {/* a brand-new plant — loops through the add-plant flow (§5.1 S8) */}
+          <Card
+            mode="light"
+            style={{ width: '48%', alignItems: 'center', borderWidth: 2, borderColor: 'transparent' }}
+            onPress={() => {
+              router.dismiss();
+              router.push('/add-plant');
+            }}
+          >
+            <Ionicons name="add-circle-outline" size={30} color={accent.verdant} />
+            <Text style={[type.cardTitle, { color: accent.verdant, marginTop: 6 }]} numberOfLines={1}>
+              New plant
+            </Text>
+            <Text style={[type.micro, { color: light.inkMuted }]} numberOfLines={1}>
+              add it first, then pair
+            </Text>
+          </Card>
         </View>
         {plants.filter((p) => !p.archived).length === 0 && (
           <Card mode="light" style={{ marginTop: 4 }}>

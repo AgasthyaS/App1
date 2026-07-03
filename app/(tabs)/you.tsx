@@ -11,11 +11,12 @@ import { activePlants, gardenAverage, useGreenr } from '@/lib/store';
 /** You tab (§11) — identity, the stats band, collection, devices, Plus, settings. */
 export default function YouTab() {
   const router = useRouter();
-  const { plants: allPlants, sensors, spots, accuracy, settings } = useGreenr();
+  const { plants: allPlants, sensors, spots, accuracy, settings, profile } = useGreenr();
   const plants = activePlants(allPlants);
   const avg = gardenAverage(plants);
   const hits = accuracy.filter((a) => a.hit).length;
   const accuracyPct = accuracy.length ? Math.round((hits / accuracy.length) * 100) : null;
+  const name = profile?.name ?? 'Gardener';
 
   return (
     <Screen>
@@ -33,11 +34,17 @@ export default function YouTab() {
             borderColor: dark.hairline,
           }}
         >
-          <Text style={[type.cardTitle, { color: dark.ink }]}>A</Text>
+          <Text style={[type.cardTitle, { color: dark.ink }]}>{name.charAt(0).toUpperCase()}</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={[type.screenTitle, { color: dark.ink, fontSize: 24 }]}>Agasthya</Text>
-          <Text style={[type.caption, { color: dark.inkMuted }]}>Gardener since Mar 2026</Text>
+          <Text style={[type.screenTitle, { color: dark.ink, fontSize: 24 }]} numberOfLines={1}>
+            {name}
+          </Text>
+          <Text style={[type.caption, { color: dark.inkMuted }]}>
+            {profile
+              ? `${profile.experience} of gardening · joined ${profile.joined}`
+              : 'Gardener'}
+          </Text>
         </View>
         {plants.length > 0 && <VitalityRing score={avg} size={56} />}
       </View>
@@ -47,7 +54,7 @@ export default function YouTab() {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
         <Card style={{ width: 180 }}>
           <Text style={[type.micro, { color: dark.inkMuted }]}>GARDEN VITALITY</Text>
-          <Text style={[type.numBold as any, { fontSize: 30, color: dark.ink, marginTop: 6 }]}>
+          <Text style={[type.numHero as any, { fontSize: 32, color: dark.ink, marginTop: 6 }]}>
             {plants.length ? avg : '—'}
           </Text>
           {plants.length > 0 && (
@@ -55,10 +62,15 @@ export default function YouTab() {
               <Sparkline trend14={plants[0]?.scoreTrend14 ?? []} width={60} height={18} color={accent.sage} />
             </View>
           )}
+          {plants.some((p) => p.estimate) && (
+            <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 14 }]}>
+              Partly estimated — a prediction, not a promise.
+            </Text>
+          )}
         </Card>
         <Card style={{ width: 180 }}>
           <Text style={[type.micro, { color: dark.inkMuted }]}>CARE CONSISTENCY</Text>
-          <Text style={[type.numBold as any, { fontSize: 30, color: dark.ink, marginTop: 6 }]}>
+          <Text style={[type.numHero as any, { fontSize: 32, color: dark.ink, marginTop: 6 }]}>
             {plants.length ? '92%' : '—'}
           </Text>
           <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6 }]}>
@@ -88,7 +100,28 @@ export default function YouTab() {
             <Text style={[type.caption, { color: dark.inkMuted, marginTop: 6 }]}>none yet</Text>
           )}
         </Card>
+        {plants.some((p) => p.estimate) && (
+          <Card
+            elevated
+            style={{ width: 200, justifyContent: 'center' }}
+            onPress={() => router.push('/pair-sensor')}
+          >
+            <Text style={[type.micro, { color: accent.verdant }]}>GREENR SENSOR</Text>
+            <Text style={[type.cardTitle, { color: dark.ink, marginTop: 6, lineHeight: 22 }]}>
+              These numbers are educated guesses.
+            </Text>
+            <Text style={[type.caption, { color: dark.inkMuted, marginTop: 4 }]}>
+              A sensor in the soil makes them measurements →
+            </Text>
+          </Card>
+        )}
       </ScrollView>
+      {plants.some((p) => p.estimate) && (
+        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 15 }]}>
+          Stats on estimated plants are model predictions and can be off — Greenr says so rather
+          than pretending. Sensors close the gap.
+        </Text>
+      )}
 
       {/* collection summary */}
       <SectionHeader>Collection</SectionHeader>

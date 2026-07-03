@@ -8,38 +8,30 @@ import { dark, type } from '@/constants/theme';
 
 /** "How Greenr calculates" (§11 About) — every formula published, in-app. */
 
+/**
+ * Plain-language principles only — the exact weights, formulas, and model
+ * internals are Greenr's recipe and stay out of the app.
+ */
 const SECTIONS: { title: string; body: string }[] = [
   {
-    title: 'Vitality Score (0–100)',
-    body: 'Hydration /40 + Light /25 + Climate /15 + Consistency /10 + Trend ±10.\nEvery component row in Plant Detail expands to its inputs and arithmetic — nothing is a black box.',
+    title: 'The Vitality Score',
+    body: 'A 0–100 read of how your plant is doing, blended from five signals: hydration, light, climate, care consistency, and its recent trend. Each species weighs them differently — a fern forgives dim light; a tomato does not.',
   },
   {
-    title: 'Hydration /40',
-    body: 'Sensored: 40 × share of the last 14 days inside the species comfort band, minus 2 per over-wet day.\nManual: the same, from a drying model (pot size, material, species, weather evaporation) fitted to your logged waterings. Model uncertainty is the ± you see on the score.',
-  },
-  {
-    title: 'Light /25',
-    body: '25 × min(measured DLI ÷ species target, 1), averaged over 7 days.\nDLI comes from a sensor where present, else your 10-second phone audits.',
-  },
-  {
-    title: 'Climate /15',
-    body: '15 × share of hours inside the species temperature and humidity bands.\nIndoor spots: sensor or weather-derived estimate. Outdoor spots: local forecast.',
-  },
-  {
-    title: 'Consistency /10',
-    body: '10 × share of the last 12 weeks where care landed within a day of the forecast. Verified (sensor-seen) care counts fully; logged care counts at 0.8.',
-  },
-  {
-    title: 'Trend ±10',
-    body: 'The 14-day slope of the daily score, clamped to ±10. Rewards recovery, flags slow declines before they look bad.',
+    title: 'Where the numbers come from',
+    body: 'With a Greenr Sensor: real readings from the soil, on your calibration. Without one: a model built from your pot, species, spot, and logged care. Modeled numbers always carry a ± band and say "estimate" — they are educated guesses, and we label them as such.',
   },
   {
     title: 'Forecasts',
-    body: 'Each plant\'s drying rate is fitted from its own history, adjusted for the weather ahead. The tick you see is the projected band exit; the blur is the confidence interval. Every prediction lands in the Accuracy Ledger against what actually happened — misses included.',
+    body: 'Greenr learns how fast each plant drinks and projects it forward, adjusted for the weather ahead. Predictions can be wrong — every one is checked against what actually happened in your Accuracy Ledger, misses included.',
   },
   {
-    title: 'Estimates vs. measurements',
-    body: 'Dashed ring = modeled, with a ± band. Solid ring = measured by a sensor with your calibration. The app never argues the upgrade — it shows it.',
+    title: 'Advice',
+    body: 'Watering advice includes an exact amount, sized to your pot. Light, humidity, and heat advice comes from comparing your spot to what the species wants.',
+  },
+  {
+    title: 'What we keep private',
+    body: 'The exact formulas, weights, and models are Greenr\'s recipe and stay ours. What you always get: the inputs behind any number, the honesty labels on estimates, and a public record of our forecast accuracy.',
   },
 ];
 

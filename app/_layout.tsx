@@ -7,6 +7,7 @@ import {
   Inter_500Medium,
   Inter_600SemiBold,
   Inter_700Bold,
+  Inter_800ExtraBold,
   useFonts,
 } from '@expo-google-fonts/inter';
 import { Stack } from 'expo-router';
@@ -24,6 +25,7 @@ export default function RootLayout() {
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
+    Inter_800ExtraBold,
     Figtree_400Regular,
     Figtree_700Bold,
   });
@@ -46,6 +48,7 @@ export default function RootLayout() {
           }}
         >
           <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="signin" options={{ animation: 'fade' }} />
           <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
           <Stack.Screen name="add-sheet" options={{ presentation: 'transparentModal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="plus" options={{ presentation: 'transparentModal', animation: 'slide_from_bottom' }} />

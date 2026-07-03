@@ -4,6 +4,7 @@ import React, { useEffect } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { Card, GButton, Hairline, Screen } from '@/components/greenr/UI';
+import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, light, type } from '@/constants/theme';
 import { gardenAverage, useGreenr } from '@/lib/store';
 
@@ -20,11 +21,21 @@ export default function Briefing() {
   const careMinutes = tasks.filter((t) => !t.done).reduce((a, t) => a + t.minutes, 0);
   const lowBattery = sensors.filter((s) => s.batteryPct < 20);
   const monstera = plants.find((p) => p.id === 'pl-monstera');
+  const dateLine = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
 
   return (
     <Screen mode="light">
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text style={[type.ritualTitle, { color: light.ink }]}>Sunday briefing</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <View>
+          <Text style={[type.micro, { color: light.inkMuted, letterSpacing: 1.2 }]}>
+            {dateLine.toUpperCase()}
+          </Text>
+          <Text style={[type.ritualTitle, { color: light.ink, marginTop: 4 }]}>Your briefing</Text>
+        </View>
         <Pressable onPress={() => router.back()} style={{ minWidth: 44, minHeight: 44, alignItems: 'flex-end', justifyContent: 'center' }}>
           <Ionicons name="close" size={24} color={light.inkMuted} />
         </Pressable>
@@ -39,11 +50,14 @@ export default function Briefing() {
       ) : (
         <>
           {/* garden headline */}
-          <Card mode="light" style={{ marginTop: 16 }}>
-            <Text style={[type.micro, { color: light.inkMuted }]}>GARDEN</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-              <Text style={[type.numBold as any, { fontSize: 40, color: light.ink }]}>{avg}</Text>
-              <Text style={[type.body, { color: accent.verdant }]}>up 3 from last week</Text>
+          <Card mode="light" style={{ marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+            <VitalityRing score={avg} size={72} trackColor={light.hairline} />
+            <View style={{ flex: 1 }}>
+              <Text style={[type.micro, { color: light.inkMuted }]}>GARDEN AVERAGE</Text>
+              <Text style={[type.body, { color: light.ink, marginTop: 4, lineHeight: 21 }]}>
+                <Text style={{ color: accent.verdant }}>Up 3 from last week.</Text>{' '}
+                {plants.filter((p) => p.score >= 85).length} of {plants.length} thriving.
+              </Text>
             </View>
           </Card>
 

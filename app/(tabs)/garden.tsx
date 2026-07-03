@@ -3,9 +3,11 @@ import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
+import Breathing from '@/components/greenr/Breathing';
 import { Card, GButton, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
+import { primaryAction } from '@/lib/advice';
 import { activePlants, useGreenr } from '@/lib/store';
 import { Plant } from '@/lib/types';
 
@@ -42,8 +44,7 @@ export default function GardenTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plants, sort]);
 
-  const statusLine = (p: Plant) =>
-    p.score >= 85 ? 'Thriving' : p.forecast.action;
+  const statusLine = (p: Plant) => (p.score >= 85 ? 'Thriving' : primaryAction(p));
 
   return (
     <Screen>
@@ -104,36 +105,39 @@ export default function GardenTab() {
               onPress={() => router.push(`/plant/${p.id}`)}
               style={{ alignItems: grid ? 'center' : 'flex-start', width: '100%' }}
             >
-              <View style={{ flexDirection: grid ? 'column' : 'row', alignItems: 'center', gap: grid ? 8 : 14, width: '100%' }}>
-                <VitalityRing score={p.score} size={72} estimate={p.estimate} estimateBand={p.estimateBand} showLabel={false}>
-                  <Text style={{ fontSize: 26 }}>{p.emoji}</Text>
-                </VitalityRing>
+              <View style={{ flexDirection: grid ? 'column' : 'row', alignItems: 'center', gap: grid ? 10 : 14, width: '100%' }}>
+                <Breathing enabled={p.score >= 85}>
+                  <VitalityRing score={p.score} size={84} estimate={p.estimate} estimateBand={p.estimateBand} showLabel={false}>
+                    <Text style={{ fontSize: 30 }}>{p.emoji}</Text>
+                  </VitalityRing>
+                </Breathing>
                 <View style={{ alignItems: grid ? 'center' : 'flex-start', flex: grid ? undefined : 1 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                    <Text style={[type.cardTitle, { color: dark.ink }]} numberOfLines={1}>
+                    <Text style={[type.cardTitle, { color: dark.ink, fontSize: 18 }]} numberOfLines={1}>
                       {p.name}
                     </Text>
                     {p.sensorId && <Ionicons name="hardware-chip-outline" size={12} color={dark.inkMuted} />}
                     {p.watchMode && <Ionicons name="pulse-outline" size={12} color={accent.sunbeam} />}
                   </View>
-                  <Text style={[type.caption, { color: dark.inkMuted }]} numberOfLines={1}>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1 }]} numberOfLines={1}>
                     {spotName(p.spotId)}
+                  </Text>
+                  <Text style={[type.numHero as any, { fontSize: 22, color: dark.ink, marginTop: 6 }]}>
+                    {p.score}
+                    {p.estimate && <Text style={[type.micro, { color: dark.inkMuted }]}> ±{p.estimateBand}</Text>}
                   </Text>
                   <Text
                     style={[
                       type.caption,
                       {
                         marginTop: 4,
+                        textAlign: grid ? 'center' : 'left',
                         color: p.score >= 85 ? accent.sage : p.forecast.criticalInDays != null ? accent.sunbeam : dark.inkMuted,
                       },
                     ]}
-                    numberOfLines={1}
+                    numberOfLines={2}
                   >
                     {statusLine(p)}
-                  </Text>
-                  <Text style={[type.numBold as any, { fontSize: 15, color: dark.ink, marginTop: 2 }]}>
-                    {p.score}
-                    {p.estimate && <Text style={[type.micro, { color: dark.inkMuted }]}> ±{p.estimateBand}</Text>}
                   </Text>
                 </View>
               </View>

@@ -2,29 +2,33 @@ import { accent, dark, type } from '@/constants/theme';
 import { MoisturePoint } from '@/lib/types';
 import React, { useMemo, useState } from 'react';
 import { LayoutChangeEvent, Pressable, Text, View } from 'react-native';
-import Svg, { Circle, Line, Path, Rect } from 'react-native-svg';
+import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
 
 /**
- * The Range Ribbon (§1.4) — CGM-style moisture chart. Comfort band renders
- * as a translucent Sage ribbon, the over-wet zone above tints translucent
- * Clay, the trace weaves through in 2pt Ink, watering events are Verdant dots.
+ * The Range Ribbon (§1.4) — CGM-style soil-moisture chart, v2.
+ * Everything is labeled: the comfort band, the over-wet zone, the axis, and
+ * a legend. Estimated (no-sensor) charts say so plainly.
  */
 
 const PERIODS = [7, 14, 30, 90] as const;
-const H = 160;
-const PAD_TOP = 8;
-const PAD_BOTTOM = 18;
+const H = 170;
+const PAD_TOP = 10;
+const PAD_BOTTOM = 20;
+const GUTTER = 34; // left axis labels
 
 export default function RangeRibbon({
   history,
   band,
   timeInRangePct,
+  estimate,
   lockedBeyond7d,
   onLockedPress,
 }: {
   history: MoisturePoint[];
   band: [number, number];
   timeInRangePct: number;
+  /** modeled, not measured — renders the honesty line */
+  estimate?: boolean;
   /** free tier: history beyond 7 d is Plus (§10) */
   lockedBeyond7d?: boolean;
   onLockedPress?: () => void;
@@ -33,9 +37,10 @@ export default function RangeRibbon({
   const [w, setW] = useState(0);
   const onLayout = (e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width);
 
+  const plotW = Math.max(0, w - GUTTER);
   const plotH = H - PAD_TOP - PAD_BOTTOM;
   const y = (m: number) => PAD_TOP + plotH * (1 - m / 100);
-  const x = (daysAgo: number) => w - (daysAgo / period) * w;
+  const x = (daysAgo: number) => GUTTER + plotW - (daysAgo / period) * plotW;
 
   const pts = useMemo(
     () =>
@@ -45,13 +50,12 @@ export default function RangeRibbon({
     [history, period],
   );
 
-  const { solidPath, gapPath, waterDots, outsideAnnotation } = useMemo(() => {
+  const { solidPath, gapPath, waterDots } = useMemo(() => {
     let solid = '';
     let gaps = '';
     let pen = false;
     let gapPen = false;
     const dots: { cx: number; cy: number }[] = [];
-    let daysOverWet = 0;
     for (const p of pts) {
       const px = x(p.daysAgo);
       const py = y(p.moisture);
@@ -65,59 +69,94 @@ export default function RangeRibbon({
         gapPen = false;
       }
       if (p.watered) dots.push({ cx: px, cy: py });
-      if (p.moisture > band[1]) daysOverWet += 0.5;
     }
-    return {
-      solidPath: solid,
-      gapPath: gaps,
-      waterDots: dots,
-      outsideAnnotation:
-        daysOverWet >= 3 ? `${Math.round(daysOverWet)} days over-wet in this window` : null,
-    };
+    return { solidPath: solid, gapPath: gaps, waterDots: dots };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pts, w, period]);
 
+  const overWetTall = y(band[1]) - PAD_TOP > 26;
+
   return (
     <View>
-      <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <Text style={[type.body, { color: dark.ink }]}>
-          Time in range:{' '}
-          <Text style={[type.numBold as any, { fontSize: 15, color: dark.ink }]}>
-            {timeInRangePct}%
-          </Text>
-          <Text style={{ color: dark.inkMuted }}> ({period} d)</Text>
+      <Text style={[type.body, { color: dark.ink }]}>
+        Time in the comfort band:{' '}
+        <Text style={[type.numBold as any, { fontSize: 15, color: timeInRangePct >= 75 ? accent.sage : accent.sunbeam }]}>
+          {timeInRangePct}%
         </Text>
-      </View>
+        <Text style={{ color: dark.inkMuted }}> · last {period} days</Text>
+      </Text>
 
       <View onLayout={onLayout} style={{ height: H, marginTop: 12 }}>
         {w > 0 && (
           <Svg width={w} height={H}>
             {/* over-wet zone */}
-            <Rect x={0} y={PAD_TOP} width={w} height={Math.max(0, y(band[1]) - PAD_TOP)} fill={accent.clay} opacity={0.13} />
+            <Rect x={GUTTER} y={PAD_TOP} width={plotW} height={Math.max(0, y(band[1]) - PAD_TOP)} fill={accent.clay} opacity={0.12} />
+            {overWetTall && (
+              <SvgText x={GUTTER + 8} y={PAD_TOP + 16} fill={accent.clay} opacity={0.85} fontSize={10} fontFamily="Inter_500Medium">
+                too wet — root-rot risk
+              </SvgText>
+            )}
             {/* comfort ribbon */}
-            <Rect x={0} y={y(band[1])} width={w} height={y(band[0]) - y(band[1])} fill={accent.sage} opacity={0.18} />
-            <Line x1={0} x2={w} y1={y(band[1])} y2={y(band[1])} stroke={accent.sage} opacity={0.35} strokeWidth={1} />
-            <Line x1={0} x2={w} y1={y(band[0])} y2={y(band[0])} stroke={accent.sage} opacity={0.35} strokeWidth={1} />
+            <Rect x={GUTTER} y={y(band[1])} width={plotW} height={y(band[0]) - y(band[1])} fill={accent.sage} opacity={0.16} />
+            <SvgText x={GUTTER + 8} y={y(band[1]) + 15} fill={accent.sage} fontSize={10} fontFamily="Inter_500Medium">
+              comfort band
+            </SvgText>
+            <Line x1={GUTTER} x2={w} y1={y(band[1])} y2={y(band[1])} stroke={accent.sage} opacity={0.35} strokeWidth={1} />
+            <Line x1={GUTTER} x2={w} y1={y(band[0])} y2={y(band[0])} stroke={accent.sage} opacity={0.35} strokeWidth={1} />
+            {/* axis labels: band bounds + 0 */}
+            <SvgText x={GUTTER - 6} y={y(band[1]) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="Inter_500Medium">
+              {band[1]}%
+            </SvgText>
+            <SvgText x={GUTTER - 6} y={y(band[0]) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="Inter_500Medium">
+              {band[0]}%
+            </SvgText>
+            <SvgText x={GUTTER - 6} y={y(0) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="Inter_500Medium">
+              dry
+            </SvgText>
             {/* trace */}
             {!!gapPath && (
               <Path d={gapPath} stroke={dark.inkMuted} strokeWidth={2} fill="none" strokeDasharray={[3, 5]} />
             )}
-            {!!solidPath && <Path d={solidPath} stroke={dark.ink} strokeWidth={2} fill="none" />}
+            {!!solidPath && (
+              <Path
+                d={solidPath}
+                stroke={dark.ink}
+                strokeWidth={2}
+                fill="none"
+                strokeDasharray={estimate ? [6, 4] : undefined}
+              />
+            )}
             {waterDots.map((d, i) => (
-              <Circle key={i} cx={d.cx} cy={d.cy} r={3.5} fill={accent.verdant} stroke={dark.surface1} strokeWidth={1.5} />
+              <Circle key={i} cx={d.cx} cy={d.cy} r={4} fill={accent.verdant} stroke={dark.surface1} strokeWidth={1.5} />
             ))}
           </Svg>
         )}
         {/* x labels */}
-        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between' }}>
-          <Text style={[type.micro, { color: dark.inkMuted }]}>{period} d ago</Text>
-          <Text style={[type.micro, { color: dark.inkMuted }]}>now</Text>
+        <View style={{ position: 'absolute', bottom: 0, left: GUTTER, right: 0, flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Text style={[type.micro, { color: dark.inkMuted }]}>{period} days ago</Text>
+          <Text style={[type.micro, { color: dark.inkMuted }]}>today</Text>
         </View>
       </View>
 
-      {outsideAnnotation && (
-        <Text style={[type.caption, { color: accent.sunbeamText, marginTop: 6 }]}>
-          {outsideAnnotation}
+      {/* legend */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+          <View style={{ width: 14, height: 2, backgroundColor: dark.ink, borderRadius: 1 }} />
+          <Text style={[type.micro, { color: dark.inkMuted }]}>soil moisture</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: accent.verdant }} />
+          <Text style={[type.micro, { color: dark.inkMuted }]}>watering</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+          <View style={{ width: 14, height: 8, backgroundColor: accent.sage, opacity: 0.4, borderRadius: 2 }} />
+          <Text style={[type.micro, { color: dark.inkMuted }]}>happy zone</Text>
+        </View>
+      </View>
+
+      {estimate && (
+        <Text style={[type.micro, { color: accent.sunbeamText, marginTop: 8, lineHeight: 15 }]}>
+          Modeled estimate, not a measurement — the real curve needs a Greenr Sensor in the soil.
         </Text>
       )}
 

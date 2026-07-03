@@ -20,7 +20,7 @@ const QUIET: [string, string][] = [
 export default function SettingsScreen() {
   const router = useRouter();
   const greenr = useGreenr();
-  const { settings, setSettings, demo, loadDemoGarden, resetApp } = greenr;
+  const { settings, setSettings, demo, loadDemoGarden, resetApp, profile, signOut } = greenr;
 
   const cycle = <T,>(list: readonly T[], current: T): T =>
     list[(list.findIndex((v) => JSON.stringify(v) === JSON.stringify(current)) + 1) % list.length];
@@ -143,6 +143,43 @@ export default function SettingsScreen() {
         />
       </Card>
 
+      <SectionHeader>Account</SectionHeader>
+      <Card>
+        <Row
+          title={profile?.name ?? 'Guest'}
+          value={
+            profile?.method === 'email'
+              ? profile.email ?? ''
+              : profile
+                ? `via ${profile.method[0].toUpperCase()}${profile.method.slice(1)}`
+                : ''
+          }
+        />
+        {profile && (
+          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>
+            {profile.experience} gardening · {profile.plantCount} plants · {profile.where.toLowerCase()} ·
+            struggles with {profile.struggle.toLowerCase()}
+          </Text>
+        )}
+        <Row
+          title="Sign out"
+          danger
+          onPress={() =>
+            Alert.alert('Sign out?', 'Your garden stays on this device; you can sign back in anytime.', [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Sign out',
+                style: 'destructive',
+                onPress: () => {
+                  signOut();
+                  router.replace('/(tabs)'); // the gate bounces to sign-in
+                },
+              },
+            ])
+          }
+        />
+      </Card>
+
       <SectionHeader>Testing</SectionHeader>
       <Card>
         <Row
@@ -163,7 +200,7 @@ export default function SettingsScreen() {
                 style: 'destructive',
                 onPress: () => {
                   resetApp();
-                  router.dismissAll();
+                  router.replace('/(tabs)'); // fresh install → sign-in gate
                 },
               },
             ])

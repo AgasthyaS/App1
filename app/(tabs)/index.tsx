@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
@@ -8,10 +9,11 @@ import Sparkline from '@/components/greenr/Sparkline';
 import { Card, GButton } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, layout, type } from '@/constants/theme';
+import { adviceFor, primaryAction } from '@/lib/advice';
 import { BUILD_STAMP } from '@/lib/build';
 import { clockNow } from '@/lib/format';
 import { activePlants, gardenAverage, useGreenr } from '@/lib/store';
-import { Plant } from '@/lib/types';
+import { Plant, Spot } from '@/lib/types';
 
 function urgency(p: Plant): number {
   if (p.forecast.criticalInDays != null) return p.forecast.criticalInDays;
@@ -19,10 +21,14 @@ function urgency(p: Plant): number {
   return 1000 + (100 - p.score);
 }
 
-function PlantRow({ plant, onPress }: { plant: Plant; onPress: () => void }) {
+function PlantRow({ plant, spot, onPress }: { plant: Plant; spot?: Spot; onPress: () => void }) {
   const critical48 = plant.forecast.criticalInDays != null && plant.forecast.criticalInDays <= 2;
   const declining =
     plant.scoreTrend14[plant.scoreTrend14.length - 1] < plant.scoreTrend14[0] - 3;
+  // one environment flag beyond watering, when there is one
+  const envFlag = adviceFor(plant, spot).find(
+    (a) => a.severity !== 'good' && !a.icon.startsWith('water'),
+  );
   return (
     <Card onPress={onPress} accentBorder={critical48 ? accent.clay : undefined} style={{ marginBottom: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -47,11 +53,17 @@ function PlantRow({ plant, onPress }: { plant: Plant; onPress: () => void }) {
       <View style={{ marginTop: 12 }}>
         <ForecastBar forecast={plant.forecast} estimate={plant.estimate} />
       </View>
-      <Text style={[type.caption, { color: critical48 ? accent.clay : dark.inkMuted, marginTop: 8 }]}>
-        {plant.estimate && plant.forecast.action.startsWith('Check')
-          ? plant.forecast.action.replace('Check', 'check')
-          : plant.forecast.action}
+      <Text style={[type.caption, { color: critical48 ? accent.clay : dark.ink, marginTop: 8 }]}>
+        {primaryAction(plant)}
       </Text>
+      {envFlag && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+          <Ionicons name={envFlag.icon as any} size={12} color={accent.sunbeam} />
+          <Text style={[type.micro, { color: dark.inkMuted, flex: 1 }]} numberOfLines={1}>
+            {envFlag.text.split('—')[0].trim()}
+          </Text>
+        </View>
+      )}
     </Card>
   );
 }
@@ -59,7 +71,7 @@ function PlantRow({ plant, onPress }: { plant: Plant; onPress: () => void }) {
 export default function ForecastTab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants: allPlants, tasks, briefingOpened } = useGreenr();
+  const { plants: allPlants, spots, tasks, briefingOpened } = useGreenr();
   const [refreshing, setRefreshing] = useState(false);
   const [asOf, setAsOf] = useState(clockNow());
 
@@ -141,7 +153,12 @@ export default function ForecastTab() {
           </Card>
         ) : (
           sorted.map((p) => (
-            <PlantRow key={p.id} plant={p} onPress={() => router.push(`/plant/${p.id}`)} />
+            <PlantRow
+              key={p.id}
+              plant={p}
+              spot={spots.find((s) => s.id === p.spotId)}
+              onPress={() => router.push(`/plant/${p.id}`)}
+            />
           ))
         )}
       </View>

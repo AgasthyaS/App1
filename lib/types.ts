@@ -129,6 +129,18 @@ export interface AccuracyEntry {
   missReason?: string;
 }
 
+export interface Profile {
+  name: string;
+  email: string | null;
+  method: 'apple' | 'google' | 'email' | 'guest';
+  /** survey answers */
+  experience: string; // how long gardening
+  plantCount: string;
+  where: string; // indoors / outdoors / both
+  struggle: string; // what kills plants most often
+  joined: string; // e.g. "Jul 2026"
+}
+
 export interface Settings {
   briefingDay: string;
   briefingTime: string;

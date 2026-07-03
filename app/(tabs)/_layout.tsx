@@ -84,7 +84,8 @@ function GreenrTabBar({ state, navigation }: BottomTabBarProps) {
 }
 
 export default function TabsLayout() {
-  const { onboarded, hydrated } = useGreenr();
+  const { onboarded, profile, hydrated } = useGreenr();
+  if (hydrated && !profile) return <Redirect href="/signin" />;
   if (hydrated && !onboarded) return <Redirect href="/onboarding" />;
 
   return (
