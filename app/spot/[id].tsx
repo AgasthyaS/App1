@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 
@@ -31,21 +31,8 @@ function fitScore(dli: number, min: number, max: number): number {
 export default function SpotDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { spots, plants, remeasureSpot } = useGreenr();
+  const { spots, plants } = useGreenr();
   const spot = spots.find((s) => s.id === id);
-  const [measuring, setMeasuring] = useState(false);
-  const [measured, setMeasured] = useState(false);
-
-  useEffect(() => {
-    if (!measuring) return;
-    const t = setTimeout(() => {
-      if (spot) remeasureSpot(spot.id);
-      setMeasuring(false);
-      setMeasured(true);
-    }, 3000);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [measuring]);
 
   const occupants = useMemo(
     () => plants.filter((p) => p.spotId === id && !p.archived),
@@ -104,7 +91,7 @@ export default function SpotDetail() {
             {
               value: `${spot.dli.toFixed(1)} DLI`,
               label: dliWord(spot.dli),
-              src: spot.measuredBySensor ? 'from sensor' : 'phone audit',
+              src: spot.measuredBySensor ? 'from sensor' : 'estimated',
             },
             {
               value: `${spot.tempRange[0]}–${spot.tempRange[1]}°`,
@@ -189,23 +176,24 @@ export default function SpotDetail() {
         ))}
       </Card>
 
-      <GButton
-        title={measuring ? 'Metering…' : measured ? 'Re-measured ✓' : 'Re-measure'}
-        kind="secondary"
-        disabled={measuring}
-        onPress={() => {
-          setMeasured(false);
-          setMeasuring(true);
-        }}
-        style={{ marginTop: 20 }}
-      />
-      <Text style={[type.micro, { color: dark.inkMuted, textAlign: 'center', marginTop: 8 }]}>
-        {measuring
-          ? 'Place your phone where the plant sits, screen up.'
-          : measured
-            ? `Confirmed ~${spot.dli.toFixed(1)} DLI.`
-            : 'Re-runs the 10-second phone audit.'}
-      </Text>
+      {spot.measuredBySensor ? (
+        <Text style={[type.micro, { color: dark.inkMuted, textAlign: 'center', marginTop: 20 }]}>
+          Light here is measured by a Greenr Sensor.
+        </Text>
+      ) : (
+        <>
+          <GButton
+            title="Measure this spot exactly"
+            kind="secondary"
+            onPress={() => router.push('/pair-sensor')}
+            style={{ marginTop: 20 }}
+          />
+          <Text style={[type.micro, { color: dark.inkMuted, textAlign: 'center', marginTop: 8 }]}>
+            This spot&apos;s light is an estimate from your description. A Greenr Sensor reads it
+            exactly.
+          </Text>
+        </>
+      )}
     </Screen>
   );
 }

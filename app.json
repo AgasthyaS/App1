@@ -34,6 +34,25 @@
           "resizeMode": "contain",
           "backgroundColor": "#0B120E"
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Greenr uses your location once to read your area's climate and suggest plants that thrive nearby. It isn't stored or shared."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Greenr uses your photos so a picture of your plant becomes its picture in the app.",
+          "cameraPermission": "Greenr uses the camera so you can photograph your plant and it becomes its picture."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Greenr uses the camera so you can photograph your plant and it becomes its picture."
+        }
       ]
     ],
     "experiments": {

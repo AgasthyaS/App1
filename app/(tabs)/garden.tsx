@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import Breathing from '@/components/greenr/Breathing';
+import PlantAvatar from '@/components/greenr/PlantAvatar';
 import { Card, GButton, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
@@ -108,7 +109,7 @@ export default function GardenTab() {
               <View style={{ flexDirection: grid ? 'column' : 'row', alignItems: 'center', gap: grid ? 10 : 14, width: '100%' }}>
                 <Breathing enabled={p.score >= 85}>
                   <VitalityRing score={p.score} size={84} estimate={p.estimate} estimateBand={p.estimateBand} showLabel={false}>
-                    <Text style={{ fontSize: 30 }}>{p.emoji}</Text>
+                    <PlantAvatar photoUri={p.photoUri} emoji={p.emoji} size={58} />
                   </VitalityRing>
                 </Breathing>
                 <View style={{ alignItems: grid ? 'center' : 'flex-start', flex: grid ? undefined : 1 }}>

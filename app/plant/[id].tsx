@@ -7,7 +7,9 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import Breathing from '@/components/greenr/Breathing';
+import CameraCapture from '@/components/greenr/CameraCapture';
 import ForecastBar from '@/components/greenr/ForecastBar';
+import PlantAvatar from '@/components/greenr/PlantAvatar';
 import RangeRibbon from '@/components/greenr/RangeRibbon';
 import { Card, Chip, GButton, Hairline, SectionHeader } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
@@ -87,7 +89,7 @@ export default function PlantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, spots, sensors, settings, logWater, archivePlant, addPhoto, renamePlant } = useGreenr();
+  const { plants, spots, sensors, settings, logWater, archivePlant, setPlantPhoto, renamePlant } = useGreenr();
   const plant = plants.find((p) => p.id === id);
   const [expanded, setExpanded] = useState<keyof ScoreComponents | null>(null);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
@@ -98,6 +100,7 @@ export default function PlantDetail() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameText, setRenameText] = useState('');
   const [photoAdded, setPhotoAdded] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
 
   const spot = useMemo(() => spots.find((s) => s.id === plant?.spotId), [spots, plant]);
   const sensor = useMemo(() => sensors.find((s) => s.id === plant?.sensorId), [sensors, plant]);
@@ -119,6 +122,21 @@ export default function PlantDetail() {
     if (filter === 'Care') return e.kind === 'care';
     return e.kind === 'insight' || e.kind === 'diagnosis' || e.kind === 'band-change';
   });
+
+  if (showCamera) {
+    return (
+      <CameraCapture
+        caption={`A new photo for ${plant.name}.`}
+        onCapture={(uri) => {
+          setPlantPhoto(plant.id, uri);
+          setShowCamera(false);
+          setPhotoAdded(true);
+          setTimeout(() => setPhotoAdded(false), 2000);
+        }}
+        onCancel={() => setShowCamera(false)}
+      />
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: dark.bg }}>
@@ -187,15 +205,34 @@ export default function PlantDetail() {
 
             <View style={{ alignItems: 'center', marginTop: 6 }}>
               <Breathing enabled={plant.score >= 85}>
-                <VitalityRing
-                  score={displayScore}
-                  size={132}
-                  estimate={plant.estimate}
-                  estimateBand={plant.estimateBand}
-                  subLabel={plant.estimate ? `${band.word} · estimate` : band.word}
-                  trackColor={dark.hairline}
-                />
+                {plant.photoUri ? (
+                  <VitalityRing
+                    score={displayScore}
+                    size={132}
+                    estimate={plant.estimate}
+                    estimateBand={plant.estimateBand}
+                    showLabel={false}
+                    trackColor={dark.hairline}
+                  >
+                    <PlantAvatar photoUri={plant.photoUri} emoji={plant.emoji} size={96} />
+                  </VitalityRing>
+                ) : (
+                  <VitalityRing
+                    score={displayScore}
+                    size={132}
+                    estimate={plant.estimate}
+                    estimateBand={plant.estimateBand}
+                    subLabel={plant.estimate ? `${band.word} · estimate` : band.word}
+                    trackColor={dark.hairline}
+                  />
+                )}
               </Breathing>
+              {plant.photoUri && (
+                <Text style={[type.num as any, { fontSize: 15, color: band.color, marginTop: 10 }]}>
+                  {displayScore}
+                  {plant.estimate ? ` ±${plant.estimateBand}` : ''} · {band.word}
+                </Text>
+              )}
               <Text style={[type.screenTitle, { color: dark.ink, marginTop: 14 }]}>{plant.name}</Text>
               <Text style={[type.caption, { color: dark.inkMuted, marginTop: 3 }]}>
                 {plant.latin} · {spot?.name ?? '—'}
@@ -446,15 +483,10 @@ export default function PlantDetail() {
           }}
         />
         <GButton
-          title={photoAdded ? 'Photo ✓' : 'Photo'}
+          title={photoAdded ? 'Photo ✓' : plant.photoUri ? 'Change' : 'Photo'}
           kind="secondary"
           style={{ flex: 1, paddingHorizontal: 6 }}
-          onPress={() => {
-            if (photoAdded) return;
-            addPhoto(plant.id);
-            setPhotoAdded(true);
-            setTimeout(() => setPhotoAdded(false), 2000);
-          }}
+          onPress={() => setShowCamera(true)}
         />
         <GButton
           title="Diagnose"

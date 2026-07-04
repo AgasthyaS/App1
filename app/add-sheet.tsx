@@ -25,6 +25,15 @@ export default function AddSheet() {
       },
     },
     {
+      icon: 'sparkles-outline',
+      title: 'Suggest a plant',
+      sub: 'Not sure what to grow? Pick by your climate',
+      go: () => {
+        router.back();
+        router.push('/suggest');
+      },
+    },
+    {
       icon: 'hardware-chip-outline',
       title: 'Add sensor',
       sub: 'Connect, calibrate, assign — about two minutes',

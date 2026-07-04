@@ -2,11 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useRef, useState } from 'react';
-import { Pressable, Share, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
+import PlantAvatar from '@/components/greenr/PlantAvatar';
 import { Card, GButton, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, light, type } from '@/constants/theme';
+import { shareContent } from '@/lib/platform';
 import { gardenAverage, useGreenr } from '@/lib/store';
 
 /**
@@ -88,9 +90,10 @@ export default function CareMode() {
           kind="secondary"
           mode="light"
           onPress={() =>
-            Share.share({
+            shareContent({
+              title: 'My Greenr week',
               message: `Garden vitality ${gardenAverage(plants)} — ${doneCount} of ${session.length || 0} care tasks done this week, ${verifiedCount} verified by sensor. 🌿 greenr`,
-            }).catch(() => {})
+            })
           }
           style={{ marginTop: 20 }}
         />
@@ -130,7 +133,7 @@ export default function CareMode() {
         <View style={{ alignItems: 'center' }}>
           {plant && (
             <VitalityRing score={plant.score} size={120} estimate={plant.estimate} estimateBand={plant.estimateBand} showLabel={false} trackColor={light.hairline}>
-              <Text style={{ fontSize: 44 }}>{plant.emoji}</Text>
+              <PlantAvatar photoUri={plant.photoUri} emoji={plant.emoji} size={84} />
             </VitalityRing>
           )}
         </View>

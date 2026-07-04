@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Alert, Pressable, Share, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
 import { Card, Row, Screen, SectionHeader } from '@/components/greenr/UI';
 import { dark, type } from '@/constants/theme';
 import { BUILD_STAMP } from '@/lib/build';
+import { confirmAction, notify, shareContent } from '@/lib/platform';
 import { useGreenr } from '@/lib/store';
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -33,7 +34,7 @@ export default function SettingsScreen() {
       sensors: greenr.sensors,
       settings: greenr.settings,
     };
-    Share.share({ message: JSON.stringify(payload, null, 2), title: 'Greenr export' }).catch(() => {});
+    shareContent({ message: JSON.stringify(payload, null, 2), title: 'Greenr export', filename: 'greenr-export.json' });
   };
 
   return (
@@ -135,10 +136,13 @@ export default function SettingsScreen() {
           title="Delete account"
           danger
           onPress={() =>
-            Alert.alert('Delete account', 'Full and immediate. This cannot be undone.', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Delete', style: 'destructive', onPress: resetApp },
-            ])
+            confirmAction({
+              title: 'Delete account',
+              message: 'Full and immediate. This cannot be undone.',
+              confirmLabel: 'Delete',
+              destructive: true,
+              onConfirm: resetApp,
+            })
           }
         />
       </Card>
@@ -165,17 +169,16 @@ export default function SettingsScreen() {
           title="Sign out"
           danger
           onPress={() =>
-            Alert.alert('Sign out?', 'Your garden stays on this device; you can sign back in anytime.', [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Sign out',
-                style: 'destructive',
-                onPress: () => {
-                  signOut();
-                  router.replace('/(tabs)'); // the gate bounces to sign-in
-                },
+            confirmAction({
+              title: 'Sign out?',
+              message: 'Your garden stays on this device; you can sign back in anytime.',
+              confirmLabel: 'Sign out',
+              destructive: true,
+              onConfirm: () => {
+                signOut();
+                router.replace('/(tabs)'); // the gate bounces to sign-in
               },
-            ])
+            })
           }
         />
       </Card>
@@ -193,17 +196,16 @@ export default function SettingsScreen() {
           title="Reset app (fresh install)"
           danger
           onPress={() =>
-            Alert.alert('Reset app', 'Clears all plants, spots, sensors, and settings.', [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Reset',
-                style: 'destructive',
-                onPress: () => {
-                  resetApp();
-                  router.replace('/(tabs)'); // fresh install → sign-in gate
-                },
+            confirmAction({
+              title: 'Reset app',
+              message: 'Clears all plants, spots, sensors, and settings.',
+              confirmLabel: 'Reset',
+              destructive: true,
+              onConfirm: () => {
+                resetApp();
+                router.replace('/(tabs)'); // fresh install → sign-in gate
               },
-            ])
+            })
           }
         />
         <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4 }]}>
@@ -219,7 +221,7 @@ export default function SettingsScreen() {
           title="Privacy policy"
           value="→"
           onPress={() =>
-            Alert.alert(
+            notify(
               'Privacy',
               'Your readings stay on this device in this build. The anonymized-research toggle controls whether outcomes would be shared, stripped of identity, in a release build.',
             )
@@ -228,7 +230,7 @@ export default function SettingsScreen() {
         <Row
           title="Terms"
           value="→"
-          onPress={() => Alert.alert('Terms', 'Prototype build — terms ship with the release version.')}
+          onPress={() => notify('Terms', 'Prototype build — terms ship with the release version.')}
         />
       </Card>
     </Screen>

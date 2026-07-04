@@ -53,7 +53,8 @@ export interface Plant {
   name: string;
   species: string; // common name
   latin: string;
-  emoji: string; // stands in for the photo in this build
+  emoji: string; // shown when there's no photo
+  photoUri?: string; // the user's photo (data URI); emoji is the fallback
   spotId: string;
   potSize: PotSize;
   potMaterial: PotMaterial;

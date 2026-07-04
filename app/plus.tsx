@@ -1,10 +1,10 @@
-import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GButton, Hairline } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
+import { closeModal } from '@/lib/nav';
 import { useGreenr } from '@/lib/store';
 
 /**
@@ -12,7 +12,6 @@ import { useGreenr } from '@/lib/store';
  * dismiss. No countdown timers, no fake discounts.
  */
 export default function PlusSheet() {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { settings, setPlus } = useGreenr();
   const [yearly, setYearly] = useState(true);
@@ -27,7 +26,7 @@ export default function PlusSheet() {
   ];
 
   return (
-    <Pressable style={{ flex: 1, backgroundColor: '#00000088' }} onPress={() => router.back()}>
+    <Pressable style={{ flex: 1, backgroundColor: '#00000088' }} onPress={closeModal}>
       <View style={{ flex: 1 }} />
       <Pressable
         onPress={(e) => e.stopPropagation()}
@@ -48,7 +47,7 @@ export default function PlusSheet() {
             <Text style={[type.body, { color: dark.ink, marginTop: 12 }]}>
               Plus is active on this account.
             </Text>
-            <GButton title="Done" onPress={() => router.back()} style={{ marginTop: 20 }} />
+            <GButton title="Done" onPress={closeModal} style={{ marginTop: 20 }} />
           </>
         ) : (
           <>
@@ -89,12 +88,12 @@ export default function PlusSheet() {
               title="Continue"
               onPress={() => {
                 setPlus(true);
-                router.back();
+                closeModal();
               }}
               style={{ marginTop: 14 }}
             />
-            <Pressable onPress={() => router.back()} style={{ minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: 6 }}>
-              <Text style={[type.caption, { color: dark.inkMuted }]}>Restore purchases</Text>
+            <Pressable onPress={closeModal} style={{ minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: 6 }}>
+              <Text style={[type.caption, { color: dark.inkMuted }]}>Not now</Text>
             </Pressable>
           </>
         )}

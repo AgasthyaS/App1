@@ -93,6 +93,7 @@ interface GreenrApi extends GreenrState {
   addDiagnosis: (plantId: string, text: string) => void;
   addTasks: (tasks: CareTask[]) => void;
   addPhoto: (plantId: string) => void;
+  setPlantPhoto: (plantId: string, uri: string) => void;
   renamePlant: (plantId: string, name: string) => void;
   readNow: (sensorId: string) => void;
   reassignSensor: (sensorId: string, plantId: string) => void;
@@ -392,6 +393,24 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
+  const setPlantPhoto = useCallback((plantId: string, uri: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) =>
+        p.id === plantId
+          ? {
+              ...p,
+              photoUri: uri,
+              timeline: [
+                { id: `tl-${Date.now()}`, daysAgo: 0, kind: 'photo' as const, text: 'Photo added.' },
+                ...p.timeline,
+              ],
+            }
+          : p,
+      ),
+    }));
+  }, []);
+
   const renamePlant = useCallback((plantId: string, name: string) => {
     setState((s) => ({
       ...s,
@@ -562,6 +581,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       addDiagnosis,
       addTasks,
       addPhoto,
+      setPlantPhoto,
       renamePlant,
       readNow,
       reassignSensor,
@@ -572,7 +592,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

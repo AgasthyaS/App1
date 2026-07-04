@@ -2,11 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, Pressable, Share, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
 import { Card, Chip, GButton, Hairline, Screen, SectionHeader, StatusDot } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
 import { relTime, signalWord } from '@/lib/format';
+import { confirmAction, shareContent } from '@/lib/platform';
 import { activePlants, useGreenr } from '@/lib/store';
 
 /** Sensor Detail (§5.2) — every reading traceable, every control live. */
@@ -78,7 +79,11 @@ export default function SensorDetail() {
     }
     const header = 'time,soil_pct,dli,temp_f,rh_pct,battery_pct';
     const rows = log.map((r) => `${r.time},${r.soil},${r.dli},${r.temp},${r.rh},${r.batt}`);
-    Share.share({ message: [header, ...rows].join('\n'), title: `${sensor.name} readings` }).catch(() => {});
+    shareContent({
+      message: [header, ...rows].join('\n'),
+      title: `${sensor.name} readings`,
+      filename: `${sensor.name}-readings.csv`,
+    });
   };
 
   return (
@@ -316,21 +321,16 @@ export default function SensorDetail() {
           title="Forget this sensor"
           kind="destructive"
           onPress={() =>
-            Alert.alert(
-              'Forget this sensor?',
-              `${sensor.name} will be removed. History stays with ${plant?.name ?? 'the plant'}; its scores continue as estimates.`,
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Forget',
-                  style: 'destructive',
-                  onPress: () => {
-                    forgetSensor(sensor.id);
-                    router.back();
-                  },
-                },
-              ],
-            )
+            confirmAction({
+              title: 'Forget this sensor?',
+              message: `${sensor.name} will be removed. History stays with ${plant?.name ?? 'the plant'}; its scores continue as estimates.`,
+              confirmLabel: 'Forget',
+              destructive: true,
+              onConfirm: () => {
+                forgetSensor(sensor.id);
+                router.back();
+              },
+            })
           }
         />
         <Text style={[type.micro, { color: dark.inkMuted, textAlign: 'center' }]}>

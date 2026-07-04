@@ -1,3 +1,4 @@
+import { getSpecies } from './plants';
 import { Plant, Spot } from './types';
 
 /**
@@ -12,22 +13,11 @@ export interface Advice {
   text: string;
 }
 
-/** Species comfort references (DLI band, RH floor). */
-const SPECIES_ENV: Record<string, { dli: [number, number]; rhFloor: number }> = {
-  Calathea: { dli: [1.5, 4], rhFloor: 55 },
-  'Boston fern': { dli: [1, 3.5], rhFloor: 60 },
-  Monstera: { dli: [2.5, 7], rhFloor: 40 },
-  'Golden pothos': { dli: [1, 5], rhFloor: 30 },
-  'Snake plant': { dli: [0.5, 6], rhFloor: 20 },
-  'Fiddle-leaf fig': { dli: [4, 8], rhFloor: 35 },
-  'Cherry tomato': { dli: [8, 30], rhFloor: 30 },
-  Lavender: { dli: [6, 30], rhFloor: 20 },
-  'Moth orchid': { dli: [1.5, 5], rhFloor: 50 },
-  'ZZ plant': { dli: [0.5, 6], rhFloor: 20 },
-};
-
-function envFor(species: string) {
-  return SPECIES_ENV[species] ?? { dli: [1.5, 6], rhFloor: 35 };
+/** Species light/humidity references — from the plant database. */
+function envFor(species: string): { dli: [number, number]; rhFloor: number } {
+  const s = getSpecies(species);
+  if (s) return { dli: s.dli, rhFloor: s.rhFloor };
+  return { dli: [1.5, 6], rhFloor: 35 };
 }
 
 /** Exact watering volume from pot size + material (terracotta breathes). */

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, Text, View } from 'react-native';
 
 import { Card, GButton, Hairline, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
@@ -91,6 +91,8 @@ export default function Diagnose() {
             backgroundColor: dark.surface2,
             alignItems: 'center',
             justifyContent: 'center',
+            // web: cap the 3:4 frame so the shutter stays on screen
+            ...(Platform.OS === 'web' ? { width: '100%', maxWidth: 300, alignSelf: 'center' } : null),
           }}
         >
           <Text style={{ fontSize: 84 }}>{plant.emoji}</Text>
