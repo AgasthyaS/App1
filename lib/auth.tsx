@@ -24,6 +24,8 @@ interface AuthApi {
   /** opens Google and completes sign-in on web or native */
   signInWithGoogle: () => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
+  /** permanently deletes the account: cloud garden + the login itself */
+  deleteAccount: () => Promise<{ error: string | null }>;
 }
 
 const Ctx = createContext<AuthApi | null>(null);
@@ -106,6 +108,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
   };
 
+  const deleteAccount = async () => {
+    if (!supabase) return { error: 'Login is not configured yet.' };
+    const uid = session?.user?.id;
+    // 1) Remove the cloud garden (RLS lets a user delete their own row).
+    if (uid) await supabase.from('gardens').delete().eq('user_id', uid);
+    // 2) Remove the login itself. Needs the delete_user() SQL function; if it
+    //    isn't installed yet the data is still gone and we still sign out, so
+    //    the practical "start fresh" result holds either way.
+    const { error } = await supabase.rpc('delete_user');
+    await supabase.auth.signOut();
+    setSession(null);
+    return { error: error?.message ?? null };
+  };
+
   const api = useMemo<AuthApi>(
     () => ({
       user: session?.user ?? null,
@@ -115,6 +131,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       sendMagicLink,
       signInWithGoogle,
       signOut,
+      deleteAccount,
     }),
     [session, initializing],
   );

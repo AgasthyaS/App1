@@ -9,6 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "deploy:web": "node ./scripts/deploy-web.mjs",
+    "provision": "node ./scripts/provision-device.mjs",
     "lint": "expo lint"
   },
   "dependencies": {
@@ -52,9 +53,11 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~19.0.10",
+    "dotenv": "^17.4.2",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~9.2.0",
     "playwright": "^1.61.1",
+    "qrcode": "^1.5.4",
     "typescript": "~5.8.3"
   },
   "private": true

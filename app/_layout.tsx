@@ -56,6 +56,7 @@ export default function RootLayout() {
           <Stack.Screen name="plus" options={{ presentation: 'transparentModal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="add-plant" options={{ presentation: 'modal' }} />
           <Stack.Screen name="pair-sensor" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="pair-device" options={{ presentation: 'modal' }} />
           <Stack.Screen name="care-mode" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="diagnose/[id]" options={{ presentation: 'modal' }} />
           <Stack.Screen name="autopsy/[id]" options={{ presentation: 'modal' }} />

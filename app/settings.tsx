@@ -23,7 +23,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const greenr = useGreenr();
   const { settings, setSettings, demo, loadDemoGarden, resetApp, profile, signOut } = greenr;
-  const { signOut: authSignOut, enabled: authEnabled } = useAuth();
+  const { signOut: authSignOut, enabled: authEnabled, deleteAccount } = useAuth();
 
   const cycle = <T,>(list: readonly T[], current: T): T =>
     list[(list.findIndex((v) => JSON.stringify(v) === JSON.stringify(current)) + 1) % list.length];
@@ -186,6 +186,28 @@ export default function SettingsScreen() {
             })
           }
         />
+        {authEnabled && profile && (
+          <Row
+            title="Delete account"
+            danger
+            onPress={() =>
+              confirmAction({
+                title: 'Delete account?',
+                message:
+                  'This permanently erases your account and your whole garden — plants, spots, sensors, everything, on every device. This cannot be undone. You can sign up fresh afterward.',
+                confirmLabel: 'Delete forever',
+                destructive: true,
+                onConfirm: async () => {
+                  const { error } = await deleteAccount(); // cloud data + login
+                  resetApp(); // wipe this device
+                  if (error) notify('Account data cleared. Sign up again anytime.');
+                  else notify('Account deleted.');
+                  router.replace('/(tabs)'); // gate → fresh sign-in
+                },
+              })
+            }
+          />
+        )}
       </Card>
 
       <SectionHeader>Testing</SectionHeader>

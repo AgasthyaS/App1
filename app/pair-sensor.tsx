@@ -124,6 +124,13 @@ export default function PairSensor() {
           </Text>
         </View>
         <GButton title="Begin" onPress={() => setStep('wake')} style={{ marginTop: 32 }} />
+        <GButton
+          title="Scan a QR code instead"
+          kind="secondary"
+          mode="light"
+          onPress={() => { router.dismiss(); router.push('/pair-device' as any); }}
+          style={{ marginTop: 10 }}
+        />
         <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', marginTop: 12, minHeight: 44, justifyContent: 'center' }}>
           <Text style={[type.body, { color: light.inkMuted }]}>Cancel</Text>
         </Pressable>
