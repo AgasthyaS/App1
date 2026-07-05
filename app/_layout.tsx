@@ -17,6 +17,7 @@ import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { dark } from '@/constants/theme';
+import { AuthProvider } from '@/lib/auth';
 import { GreenrProvider } from '@/lib/store';
 
 export default function RootLayout() {
@@ -37,7 +38,8 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <GreenrProvider>
+      <AuthProvider>
+        <GreenrProvider>
         <StatusBar style="light" />
         <Stack
           screenOptions={{
@@ -61,7 +63,8 @@ export default function RootLayout() {
           <Stack.Screen name="scan" options={{ presentation: 'modal' }} />
           <Stack.Screen name="suggest" options={{ presentation: 'modal' }} />
         </Stack>
-      </GreenrProvider>
+        </GreenrProvider>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }

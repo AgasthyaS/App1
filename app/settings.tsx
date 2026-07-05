@@ -5,6 +5,7 @@ import { Pressable, Text, View } from 'react-native';
 
 import { Card, Row, Screen, SectionHeader } from '@/components/greenr/UI';
 import { dark, type } from '@/constants/theme';
+import { useAuth } from '@/lib/auth';
 import { BUILD_STAMP } from '@/lib/build';
 import { confirmAction, notify, shareContent } from '@/lib/platform';
 import { useGreenr } from '@/lib/store';
@@ -22,6 +23,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const greenr = useGreenr();
   const { settings, setSettings, demo, loadDemoGarden, resetApp, profile, signOut } = greenr;
+  const { signOut: authSignOut, enabled: authEnabled } = useAuth();
 
   const cycle = <T,>(list: readonly T[], current: T): T =>
     list[(list.findIndex((v) => JSON.stringify(v) === JSON.stringify(current)) + 1) % list.length];
@@ -171,11 +173,14 @@ export default function SettingsScreen() {
           onPress={() =>
             confirmAction({
               title: 'Sign out?',
-              message: 'Your garden stays on this device; you can sign back in anytime.',
+              message: authEnabled
+                ? 'Your garden is saved to your account — sign back in on any device to pick up where you left off.'
+                : 'Your garden stays on this device; you can sign back in anytime.',
               confirmLabel: 'Sign out',
               destructive: true,
               onConfirm: () => {
-                signOut();
+                authSignOut(); // end the Supabase session
+                signOut(); // clear this device
                 router.replace('/(tabs)'); // the gate bounces to sign-in
               },
             })

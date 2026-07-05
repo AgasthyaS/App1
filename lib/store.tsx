@@ -5,8 +5,11 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
+import { useAuth } from './auth';
+import { pullGarden, pushGarden } from './cloud';
 import { SEED_ACCURACY, SEED_PLANTS, SEED_SENSORS, SEED_SPOTS, SEED_TASKS } from './seed';
 import {
   AccuracyEntry,
@@ -73,6 +76,38 @@ function demoData() {
   };
 }
 
+/**
+ * The slice of state that persists — locally to AsyncStorage and (when signed
+ * in) to the cloud. Demo data is deliberately excluded so testing never
+ * pollutes a real account; it always re-seeds from code.
+ */
+function persistedSlice(s: GreenrState): Partial<GreenrState> {
+  const base: Partial<GreenrState> = {
+    onboarded: s.onboarded,
+    profile: s.profile,
+    demo: s.demo,
+    settings: s.settings,
+    briefingOpened: s.briefingOpened,
+  };
+  if (!s.demo) {
+    base.plants = s.plants;
+    base.spots = s.spots;
+    base.sensors = s.sensors;
+    base.tasks = s.tasks;
+  }
+  return base;
+}
+
+/** Merge a saved (local or cloud) slice onto current state. */
+function applySaved(s: GreenrState, saved: Partial<GreenrState>): GreenrState {
+  const base: GreenrState = {
+    ...s,
+    ...saved,
+    settings: { ...s.settings, ...saved.settings },
+  };
+  return saved.demo ? { ...base, ...demoData() } : base;
+}
+
 interface GreenrApi extends GreenrState {
   hydrated: boolean;
   setProfile: (p: Profile) => void;
@@ -112,44 +147,67 @@ const Ctx = createContext<GreenrApi | null>(null);
 export function GreenrProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<GreenrState>(emptyState);
   const [hydrated, setHydrated] = useState(false);
+  const { user } = useAuth();
+
+  // Latest state, readable inside async callbacks without re-subscribing.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  // The account we've *started* pulling for (dedupes the pull effect).
+  const pullStartedFor = useRef<string | null>(null);
+  // The account whose initial pull has *finished* — pushes wait for this so we
+  // never overwrite the cloud with local data before we've read it.
+  const pullDoneFor = useRef<string | null>(null);
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
       .then((raw) => {
         if (!raw) return;
         const saved = JSON.parse(raw) as Partial<GreenrState>;
-        setState((s) => {
-          const base: GreenrState = {
-            ...s,
-            ...saved,
-            settings: { ...s.settings, ...saved.settings },
-          };
-          // demo garden always re-seeds from code so it stays fresh
-          return saved.demo ? { ...base, ...demoData() } : base;
-        });
+        setState((s) => applySaved(s, saved));
       })
       .catch(() => {})
       .finally(() => setHydrated(true));
   }, []);
 
+  // Local persistence (offline cache + guest users).
   useEffect(() => {
     if (!hydrated) return;
-    const toSave: Partial<GreenrState> = {
-      onboarded: state.onboarded,
-      profile: state.profile,
-      demo: state.demo,
-      settings: state.settings,
-      briefingOpened: state.briefingOpened,
-    };
-    if (!state.demo) {
-      // the user's real garden persists; demo data never does
-      toSave.plants = state.plants;
-      toSave.spots = state.spots;
-      toSave.sensors = state.sensors;
-      toSave.tasks = state.tasks;
-    }
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(toSave)).catch(() => {});
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(persistedSlice(state))).catch(() => {});
   }, [hydrated, state]);
+
+  // On sign-in, pull the account's cloud garden. If the account has one, it
+  // wins (this device now mirrors it). If it's a brand-new account, seed the
+  // cloud with whatever is on this device so guest progress carries over.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (!user) {
+      pullStartedFor.current = null;
+      pullDoneFor.current = null;
+      return;
+    }
+    if (pullStartedFor.current === user.id) return;
+    pullStartedFor.current = user.id;
+    (async () => {
+      const cloud = await pullGarden(user.id);
+      if (cloud) {
+        setState((s) => applySaved(s, cloud as Partial<GreenrState>));
+      } else {
+        await pushGarden(user.id, persistedSlice(stateRef.current));
+      }
+      pullDoneFor.current = user.id;
+    })();
+  }, [hydrated, user]);
+
+  // While signed in, mirror changes up to the cloud (debounced). Waits for the
+  // initial pull to finish so we don't clobber the cloud with local data.
+  useEffect(() => {
+    if (!hydrated || !user || state.demo) return;
+    if (pullDoneFor.current !== user.id) return;
+    const t = setTimeout(() => {
+      pushGarden(user.id, persistedSlice(state)).catch(() => {});
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [hydrated, user, state]);
 
   const completeOnboarding = useCallback(
     () => setState((s) => ({ ...s, onboarded: true })),
@@ -161,11 +219,14 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  const signOut = useCallback(
-    // account leaves; the garden stays on this device
-    () => setState((s) => ({ ...s, profile: null, onboarded: false })),
-    [],
-  );
+  const signOut = useCallback(() => {
+    // The garden is safe in the cloud now, so signing out fully clears this
+    // device — otherwise the next account to sign in here could inherit it.
+    pullStartedFor.current = null;
+    pullDoneFor.current = null;
+    AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
+    setState(emptyState());
+  }, []);
 
   const addPlant = useCallback(
     (p: Plant) => setState((s) => ({ ...s, plants: [...s.plants, p] })),
