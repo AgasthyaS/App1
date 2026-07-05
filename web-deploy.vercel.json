@@ -1,0 +1,12 @@
+{
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/plant/:id", "destination": "/plant/[id]" },
+    { "source": "/diagnose/:id", "destination": "/diagnose/[id]" },
+    { "source": "/autopsy/:id", "destination": "/autopsy/[id]" },
+    { "source": "/move/:id", "destination": "/move/[id]" },
+    { "source": "/spot/:id", "destination": "/spot/[id]" },
+    { "source": "/sensor/:id", "destination": "/sensor/[id]" }
+  ]
+}

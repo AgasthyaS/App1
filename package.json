@@ -8,6 +8,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "deploy:web": "node ./scripts/deploy-web.mjs",
     "lint": "expo lint"
   },
   "dependencies": {
