@@ -12,8 +12,15 @@ import { accent, dark, layout, type } from '@/constants/theme';
 import { adviceFor, primaryAction } from '@/lib/advice';
 import { BUILD_STAMP } from '@/lib/build';
 import { clockNow } from '@/lib/format';
+import { alertsFor } from '@/lib/alerts';
+import type { Reading } from '@/lib/devices';
+import { idealsFor, lightStatus, soilStatus, tempStatus, type Tone } from '@/lib/plantStatus';
 import { activePlants, gardenAverage, useGreenr } from '@/lib/store';
+import { useAllLiveReadings } from '@/lib/useLiveReading';
 import { Plant, Spot } from '@/lib/types';
+
+const toneColor = (t: Tone) =>
+  t === 'good' ? accent.sage : t === 'warn' ? accent.sunbeam : t === 'bad' ? accent.clay : dark.inkMuted;
 
 function urgency(p: Plant): number {
   if (p.forecast.criticalInDays != null) return p.forecast.criticalInDays;
@@ -21,7 +28,49 @@ function urgency(p: Plant): number {
   return 1000 + (100 - p.score);
 }
 
-function PlantRow({ plant, spot, onPress }: { plant: Plant; spot?: Spot; onPress: () => void }) {
+function PlantRow({
+  plant,
+  spot,
+  hasSensor,
+  reading,
+  onPress,
+}: {
+  plant: Plant;
+  spot?: Spot;
+  hasSensor?: boolean;
+  reading?: Reading | null;
+  onPress: () => void;
+}) {
+  // Sensored plants show real, plant-specific status (N/A until first reading);
+  // no fake score, sparkline, or forecast.
+  if (hasSensor) {
+    const ideal = idealsFor(plant.species, plant.comfortBand);
+    const soil = soilStatus(reading?.soil_pct, ideal.band);
+    const light = lightStatus(reading?.light_lux, ideal.dli);
+    const temp = tempStatus(reading?.temp_c, ideal.temp);
+    return (
+      <Card onPress={onPress} style={{ marginBottom: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: accent.sage }} />
+          <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]} numberOfLines={1}>
+            {plant.name}
+          </Text>
+          <Text style={[type.cardTitle, { color: toneColor(soil.tone), fontSize: 15 }]} numberOfLines={1}>
+            {reading ? soil.label : 'N/A'}
+          </Text>
+        </View>
+        <Text style={[type.micro, { color: accent.sage, marginTop: 6, letterSpacing: 0.5 }]}>
+          SENSOR CONNECTED
+        </Text>
+        <Text style={[type.caption, { color: dark.inkMuted, marginTop: 6 }]} numberOfLines={1}>
+          {reading
+            ? `Soil ${soil.label} · Light ${light.label} · ${temp.label}`
+            : 'Waiting for the first reading — values show N/A'}
+        </Text>
+      </Card>
+    );
+  }
+
   const critical48 = plant.forecast.criticalInDays != null && plant.forecast.criticalInDays <= 2;
   const declining =
     plant.scoreTrend14[plant.scoreTrend14.length - 1] < plant.scoreTrend14[0] - 3;
@@ -72,7 +121,20 @@ export default function ForecastTab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { plants: allPlants, spots, tasks, briefingOpened } = useGreenr();
+  const liveReadings = useAllLiveReadings(); // plantId → latest reading (or null); auto-refreshes
   const [refreshing, setRefreshing] = useState(false);
+
+  // Personalized alerts across sensored plants (only the ones needing attention).
+  const alerts = useMemo(() => {
+    const items: { plantId: string; level: 'warn' | 'bad'; text: string }[] = [];
+    activePlants(allPlants).forEach((p) => {
+      if (!liveReadings.has(p.id)) return;
+      alertsFor(p.name, p.species, p.comfortBand, liveReadings.get(p.id) ?? null).forEach((a) => {
+        if (a.level !== 'good') items.push({ plantId: p.id, level: a.level, text: a.text });
+      });
+    });
+    return items.sort((a, b) => (a.level === 'bad' ? -1 : 1) - (b.level === 'bad' ? -1 : 1));
+  }, [allPlants, liveReadings]);
   const [asOf, setAsOf] = useState(clockNow());
 
   const plants = useMemo(() => activePlants(allPlants), [allPlants]);
@@ -132,12 +194,25 @@ export default function ForecastTab() {
         </Card>
       )}
 
-      {/* Weather strip — only when it matters (§4) */}
-      {plants.length > 0 && (
-        <Card style={{ marginTop: 10, paddingVertical: 12 }} accentBorder={accent.sunbeam}>
-          <Text style={[type.caption, { color: dark.ink }]}>
-            Heat advisory Fri–Sun (94°) — drying accelerated ~2 days garden-wide.
+      {/* Real alerts — personalized from each plant's live reading vs its ideals */}
+      {alerts.length > 0 && (
+        <Card
+          style={{ marginTop: 10 }}
+          accentBorder={alerts.some((a) => a.level === 'bad') ? accent.clay : accent.sunbeam}
+        >
+          <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.5, marginBottom: 8 }]}>
+            NEEDS ATTENTION
           </Text>
+          {alerts.slice(0, 5).map((a, i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 26 }}>
+              <View
+                style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: a.level === 'bad' ? accent.clay : accent.sunbeam }}
+              />
+              <Text style={[type.caption, { color: dark.ink, flex: 1 }]} numberOfLines={1}>
+                {a.text}
+              </Text>
+            </View>
+          ))}
         </Card>
       )}
 
@@ -157,6 +232,8 @@ export default function ForecastTab() {
               key={p.id}
               plant={p}
               spot={spots.find((s) => s.id === p.spotId)}
+              hasSensor={liveReadings.has(p.id)}
+              reading={liveReadings.get(p.id)}
               onPress={() => router.push(`/plant/${p.id}`)}
             />
           ))

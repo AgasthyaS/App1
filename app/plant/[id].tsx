@@ -26,6 +26,10 @@ import {
   tempStatus,
   type Tone,
 } from '@/lib/plantStatus';
+import { plantsForEnvironment } from '@/lib/compatibility';
+import { insightsFor } from '@/lib/insights';
+import { careFor } from '@/lib/plantCare';
+import { wateringAdvice } from '@/lib/watering';
 import { COMPONENT_MAX, ScoreComponents } from '@/lib/types';
 
 const COMPONENT_LABELS: Record<keyof ScoreComponents, string> = {
@@ -103,6 +107,7 @@ export default function PlantDetail() {
   const [expanded, setExpanded] = useState<keyof ScoreComponents | null>(null);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [careOpen, setCareOpen] = useState(false);
   const [filter, setFilter] = useState<TimelineFilter>('All');
   const [pokeAnswered, setPokeAnswered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -131,6 +136,16 @@ export default function PlantDetail() {
   const ideal = idealsFor(plant.species, plant.comfortBand);
   const toneColor = (t: Tone) =>
     t === 'good' ? accent.sage : t === 'warn' ? accent.sunbeam : t === 'bad' ? accent.clay : dark.inkMuted;
+  const watering = liveDeviceId ? wateringAdvice(liveHistory, ideal.band, plant.species) : null;
+  const insights = liveDeviceId ? insightsFor(liveHistory, plant.species, ideal.band) : [];
+  const care = careFor(plant.species);
+  // Which species would thrive in THIS spot, from the sensor's real environment.
+  const spotMatches =
+    liveReading != null
+      ? plantsForEnvironment(liveReading.light_lux, liveReading.temp_c, liveReading.humidity_pct, 5).filter(
+          (m) => m.species.common !== plant.species,
+        )
+      : [];
   const events = plant.timeline.filter((e) => {
     if (filter === 'All') return true;
     if (filter === 'Photos') return e.kind === 'photo';
@@ -295,12 +310,58 @@ export default function PlantDetail() {
                     ? `Measured ${new Date(liveReading.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · judged against ${plant.species}'s ideal range`
                     : 'Waiting for the first reading — every metric shows N/A until your sensor reports.'}
                 </Text>
+                <Pressable
+                  onPress={() => router.push(`/dashboard/${plant.id}` as any)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12, minHeight: 32 }}
+                >
+                  <Ionicons name="stats-chart" size={14} color={accent.verdant} />
+                  <Text style={[type.caption, { color: accent.verdant }]}>View full analytics</Text>
+                </Pressable>
               </Card>
             </>
           )}
 
-          {/* ── What it needs now ── */}
-          <SectionHeader>What it needs now</SectionHeader>
+          {/* ── Watering: direct call from the sensor (replaces generic advice) ── */}
+          {watering && (
+            <>
+              <SectionHeader>Watering</SectionHeader>
+              <Card accentBorder={watering.tone === 'bad' ? accent.clay : undefined}>
+                <Text style={[type.ritualTitle, { color: toneColor(watering.tone), fontSize: 22 }]}>
+                  {watering.verdict}
+                </Text>
+                <Text style={[type.body, { color: dark.inkMuted, marginTop: 6, lineHeight: 21 }]}>
+                  {watering.detail}
+                </Text>
+                {watering.confidence === 'low' && (
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                    Still gathering history — accuracy climbs with every reading.
+                  </Text>
+                )}
+              </Card>
+            </>
+          )}
+
+          {/* ── What Greenr has learned (from history) ── */}
+          {insights.length > 0 && (
+            <>
+              <SectionHeader>What Greenr has learned</SectionHeader>
+              <Card>
+                {insights.map((ins, i) => (
+                  <View key={i}>
+                    {i > 0 && <Hairline style={{ marginVertical: 12 }} />}
+                    <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+                      <Ionicons name={ins.icon as any} size={18} color={accent.verdant} style={{ marginTop: 1 }} />
+                      <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{ins.text}</Text>
+                    </View>
+                  </View>
+                ))}
+              </Card>
+            </>
+          )}
+
+          {/* ── What it needs now (estimate path — only without a sensor) ── */}
+          {!watering && (
+          <><SectionHeader>What it needs now</SectionHeader>
           <Card>
             {advice.map((a, i) => (
               <View key={i}>
@@ -322,7 +383,8 @@ export default function PlantDetail() {
                 </View>
               </View>
             ))}
-          </Card>
+          </Card></>
+          )}
 
           {/* ── Soil moisture (real sensor history) ── */}
           <SectionHeader>Soil moisture</SectionHeader>
@@ -396,6 +458,82 @@ export default function PlantDetail() {
                     Collecting light readings — this fills in as your sensor reports.
                   </Text>
                 )}
+              </Card>
+            </>
+          )}
+
+          {/* ── Care guide (from the knowledge base) ── */}
+          {care && (
+            <Card style={{ marginTop: 10 }}>
+              <Pressable
+                onPress={() => setCareOpen(!careOpen)}
+                style={{ flexDirection: 'row', alignItems: 'center', minHeight: 36 }}
+              >
+                <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]}>
+                  {plant.species} care guide
+                </Text>
+                <Ionicons name={careOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark.inkMuted} />
+              </Pressable>
+              {careOpen && (
+                <View style={{ marginTop: 8 }}>
+                  {(
+                    [
+                      ['💧', 'Signs of overwatering', care.overwatering],
+                      ['🏜️', 'Signs of underwatering', care.underwatering],
+                      ['☀️', 'Too much light', care.tooMuchLight],
+                      ['🌑', 'Too little light', care.tooLittleLight],
+                      ['🌱', 'Growth', care.growth],
+                      ['🧪', 'Fertilizer', care.fertilizer],
+                      ['😴', 'Dormancy', care.dormancy],
+                      ['🐛', 'Common pests', care.pests],
+                      ['🪴', 'Potting', care.potting],
+                    ] as [string, string, string][]
+                  ).map(([emoji, label, text], i) => (
+                    <View key={label}>
+                      {i > 0 && <Hairline style={{ marginVertical: 10 }} />}
+                      <Text style={[type.caption, { color: dark.inkMuted }]}>
+                        {emoji} {label}
+                      </Text>
+                      <Text style={[type.body, { color: dark.ink, marginTop: 3, lineHeight: 21 }]}>{text}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </Card>
+          )}
+
+          {/* ── What thrives in this spot (compatibility from the sensor) ── */}
+          {spotMatches.length > 0 && (
+            <>
+              <SectionHeader>Thrives in this spot</SectionHeader>
+              <Card>
+                <Text style={[type.micro, { color: dark.inkMuted, marginBottom: 10, lineHeight: 15 }]}>
+                  Scored from this spot&apos;s live light, temperature, and humidity.
+                </Text>
+                {spotMatches.map((m, i) => (
+                  <View key={m.species.common}>
+                    {i > 0 && <Hairline style={{ marginVertical: 10 }} />}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Text style={{ fontSize: 22 }}>{m.species.emoji}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]} numberOfLines={1}>
+                          {m.species.common}
+                        </Text>
+                        <Text style={[type.micro, { color: dark.inkMuted }]} numberOfLines={1}>
+                          {m.why}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          type.numBold as any,
+                          { fontSize: 16, color: m.score >= 80 ? accent.sage : m.score >= 55 ? accent.sunbeam : accent.clay },
+                        ]}
+                      >
+                        {m.score}%
+                      </Text>
+                    </View>
+                  </View>
+                ))}
               </Card>
             </>
           )}

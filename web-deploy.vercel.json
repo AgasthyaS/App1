@@ -3,6 +3,7 @@
   "trailingSlash": false,
   "rewrites": [
     { "source": "/plant/:id", "destination": "/plant/[id]" },
+    { "source": "/dashboard/:id", "destination": "/dashboard/[id]" },
     { "source": "/diagnose/:id", "destination": "/diagnose/[id]" },
     { "source": "/autopsy/:id", "destination": "/autopsy/[id]" },
     { "source": "/move/:id", "destination": "/move/[id]" },

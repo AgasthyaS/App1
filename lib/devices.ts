@@ -65,6 +65,26 @@ export async function getReadingHistory(deviceId: string, limit = 48): Promise<R
   return ((data as Reading[]) ?? []).slice().reverse();
 }
 
+/** All readings since a given time (for the analytics dashboard windows). */
+export async function getReadingsSince(deviceId: string, sinceMs: number): Promise<Reading[]> {
+  if (!supabase) return [];
+  const { data } = await supabase
+    .from('readings')
+    .select('device_id,light_lux,dli,soil_pct,temp_c,humidity_pct,battery_pct,created_at')
+    .eq('device_id', deviceId)
+    .gte('created_at', new Date(sinceMs).toISOString())
+    .order('created_at', { ascending: true })
+    .limit(2000);
+  return (data as Reading[]) ?? [];
+}
+
+/** The device paired to a plant, if any. */
+export async function getDeviceIdForPlant(plantKey: string): Promise<string | null> {
+  if (!supabase) return null;
+  const { data } = await supabase.from('devices').select('id').eq('plant_key', plantKey).limit(1);
+  return (data?.[0]?.id as string) ?? null;
+}
+
 /** Newest reading for a device, or null if none yet. */
 export async function getLatestReading(deviceId: string): Promise<Reading | null> {
   if (!supabase) return null;
