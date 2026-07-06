@@ -17,6 +17,15 @@ import { accent, bandFor, dark, layout, type } from '@/constants/theme';
 import { adviceFor } from '@/lib/advice';
 import { daysAgoLabel } from '@/lib/format';
 import { useGreenr } from '@/lib/store';
+import { useLiveReading } from '@/lib/useLiveReading';
+import {
+  humidityStatus,
+  idealsFor,
+  lightStatus,
+  soilStatus,
+  tempStatus,
+  type Tone,
+} from '@/lib/plantStatus';
 import { COMPONENT_MAX, ScoreComponents } from '@/lib/types';
 
 const COMPONENT_LABELS: Record<keyof ScoreComponents, string> = {
@@ -105,6 +114,9 @@ export default function PlantDetail() {
   const spot = useMemo(() => spots.find((s) => s.id === plant?.spotId), [spots, plant]);
   const sensor = useMemo(() => sensors.find((s) => s.id === plant?.sensorId), [sensors, plant]);
   const displayScore = useLiquidScore(plant?.score ?? 0);
+  const { reading: liveReading, history: liveHistory, deviceId: liveDeviceId } = useLiveReading(
+    typeof id === 'string' ? id : undefined,
+  );
 
   if (!plant) {
     return (
@@ -116,6 +128,9 @@ export default function PlantDetail() {
 
   const band = bandFor(plant.score);
   const advice = adviceFor(plant, spot);
+  const ideal = idealsFor(plant.species, plant.comfortBand);
+  const toneColor = (t: Tone) =>
+    t === 'good' ? accent.sage : t === 'warn' ? accent.sunbeam : t === 'bad' ? accent.clay : dark.inkMuted;
   const events = plant.timeline.filter((e) => {
     if (filter === 'All') return true;
     if (filter === 'Photos') return e.kind === 'photo';
@@ -251,6 +266,39 @@ export default function PlantDetail() {
         </View>
 
         <View style={{ paddingHorizontal: layout.margin }}>
+          {/* ── Live sensor: plant-specific meaning, N/A until first reading ── */}
+          {liveDeviceId && (
+            <>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 20, marginBottom: 8 }}>
+                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: accent.sage }} />
+                <Text style={[type.micro, { color: accent.sage, letterSpacing: 0.5 }]}>SENSOR CONNECTED</Text>
+              </View>
+              <Card>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: 16 }}>
+                  {[
+                    { label: 'Soil', s: soilStatus(liveReading?.soil_pct, ideal.band) },
+                    { label: 'Light', s: lightStatus(liveReading?.light_lux, ideal.dli) },
+                    { label: 'Temperature', s: tempStatus(liveReading?.temp_c, ideal.temp) },
+                    { label: 'Humidity', s: humidityStatus(liveReading?.humidity_pct, ideal.rhFloor) },
+                  ].map(({ label, s }) => (
+                    <View key={label} style={{ width: '50%', paddingRight: 8 }}>
+                      <Text style={[type.cardTitle, { color: toneColor(s.tone), fontSize: 18 }]}>{s.label}</Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>
+                        {label}
+                        {s.raw ? ` · ${s.raw}` : ''}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 14, lineHeight: 15 }]}>
+                  {liveReading
+                    ? `Measured ${new Date(liveReading.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · judged against ${plant.species}'s ideal range`
+                    : 'Waiting for the first reading — every metric shows N/A until your sensor reports.'}
+                </Text>
+              </Card>
+            </>
+          )}
+
           {/* ── What it needs now ── */}
           <SectionHeader>What it needs now</SectionHeader>
           <Card>
@@ -276,117 +324,81 @@ export default function PlantDetail() {
             ))}
           </Card>
 
-          {/* ── 10-day forecast ── */}
-          <SectionHeader>10-day forecast</SectionHeader>
+          {/* ── Soil moisture (real sensor history) ── */}
+          <SectionHeader>Soil moisture</SectionHeader>
           <Card>
-            <ForecastBar forecast={plant.forecast} estimate={plant.estimate} height={30} />
-            {!settings.plus && (
-              <Pressable onPress={() => router.push('/plus')} style={{ marginTop: 10 }}>
-                <View style={{ opacity: 0.35 }}>
-                  <ForecastBar
-                    forecast={{ ...plant.forecast, criticalInDays: null, warnInDays: 6, confidenceDays: 2, action: '' }}
-                    estimate
-                    height={22}
-                    showLabel={false}
-                  />
-                </View>
-                <Text style={[type.caption, { color: accent.verdant, marginTop: 6 }]}>
-                  See 10 days ahead — Greenr+
+            {liveDeviceId ? (
+              liveHistory.length >= 2 ? (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 84, gap: 3 }}>
+                    {liveHistory.map((r, i) => (
+                      <View
+                        key={i}
+                        style={{
+                          flex: 1,
+                          height: `${Math.max(4, Math.min(100, r.soil_pct ?? 0))}%`,
+                          backgroundColor: accent.verdant,
+                          borderRadius: 2,
+                          opacity: 0.45 + 0.55 * (i / Math.max(1, liveHistory.length - 1)),
+                        }}
+                      />
+                    ))}
+                  </View>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                    Last {liveHistory.length} readings · now {liveReading?.soil_pct ?? '—'}%. History keeps
+                    filling in as your sensor reports.
+                  </Text>
+                </>
+              ) : (
+                <Text style={[type.body, { color: dark.inkMuted, lineHeight: 21 }]}>
+                  Collecting readings — your soil history builds here as the sensor reports (about every
+                  30 minutes).
                 </Text>
+              )
+            ) : (
+              <Pressable onPress={() => router.push('/pair-device' as any)}>
+                <Text style={[type.body, { color: dark.inkMuted, lineHeight: 21 }]}>
+                  No sensor yet — pair a Greenr sensor to track real soil moisture for {plant.name}.
+                </Text>
+                <Text style={[type.caption, { color: accent.verdant, marginTop: 8 }]}>Pair a sensor →</Text>
               </Pressable>
             )}
           </Card>
 
-          {/* ── Soil moisture ── */}
-          <SectionHeader>Soil moisture</SectionHeader>
-          <Card>
-            <RangeRibbon
-              history={plant.moistureHistory}
-              band={plant.comfortBand}
-              timeInRangePct={plant.timeInRangePct}
-              estimate={plant.estimate}
-              lockedBeyond7d={!settings.plus}
-              onLockedPress={() => router.push('/plus')}
-            />
-          </Card>
-
-          {/* ── Why this score (accordion) ── */}
-          <Card style={{ marginTop: 20 }}>
-            <Pressable
-              onPress={() => setBreakdownOpen(!breakdownOpen)}
-              style={{ flexDirection: 'row', alignItems: 'center', minHeight: 36 }}
-            >
-              <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]}>
-                Why {plant.score}
-                {plant.estimate ? ` ±${plant.estimateBand}` : ''}?
-              </Text>
-              <Ionicons name={breakdownOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark.inkMuted} />
-            </Pressable>
-            {breakdownOpen && (
-              <View style={{ marginTop: 6 }}>
-                {(Object.keys(COMPONENT_LABELS) as (keyof ScoreComponents)[]).map((key, i) => {
-                  const val = plant.components[key];
-                  const max = COMPONENT_MAX[key];
-                  const open = expanded === key;
-                  return (
-                    <View key={key}>
-                      {i > 0 && <Hairline style={{ marginVertical: 10 }} />}
-                      <Pressable
-                        onPress={() => setExpanded(open ? null : key)}
-                        style={{ flexDirection: 'row', alignItems: 'center', minHeight: 32 }}
-                      >
-                        <Text style={[type.body, { color: dark.ink, width: 104 }]}>
-                          {COMPONENT_LABELS[key]}
-                        </Text>
-                        <View style={{ flex: 1, height: 5, borderRadius: 3, backgroundColor: dark.hairline, marginHorizontal: 10 }}>
-                          <View
-                            style={{
-                              width: `${Math.max(0, (val / max) * 100)}%`,
-                              height: 5,
-                              borderRadius: 3,
-                              backgroundColor: val / max >= 0.75 ? accent.sage : val / max >= 0.5 ? accent.sunbeam : accent.clay,
-                            }}
-                          />
-                        </View>
-                        <Text style={[type.num as any, { fontSize: 14, color: dark.ink }]}>
-                          {key === 'trend' && val > 0 ? '+' : ''}
-                          {val}/{max}
-                        </Text>
-                        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={14} color={dark.inkMuted} style={{ marginLeft: 6 }} />
-                      </Pressable>
-                      {open && (
-                        <Text style={[type.caption, { color: dark.inkMuted, marginTop: 8, lineHeight: 18 }]}>
-                          {evidenceFor(key, plant.name, !!plant.sensorId)}
-                        </Text>
-                      )}
-                      {key === 'hydration' && plant.estimate && (
-                        <View style={{ marginTop: 8 }}>
-                          {pokeAnswered ? (
-                            <Text style={[type.caption, { color: accent.sage }]}>
-                              Noted — the ± tightens on the next model pass.
-                            </Text>
-                          ) : (
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                              <Text style={[type.caption, { color: dark.inkMuted, flex: 1 }]}>
-                                Quick check — is the top inch dry?
-                              </Text>
-                              <GButton title="Dry" kind="secondary" style={{ minHeight: 36, paddingHorizontal: 12 }} onPress={() => setPokeAnswered(true)} />
-                              <GButton title="Damp" kind="secondary" style={{ minHeight: 36, paddingHorizontal: 12 }} onPress={() => setPokeAnswered(true)} />
-                            </View>
-                          )}
-                        </View>
-                      )}
+          {/* ── Light (real sensor history) ── */}
+          {liveDeviceId && (
+            <>
+              <SectionHeader>Light</SectionHeader>
+              <Card>
+                {liveHistory.length >= 2 ? (
+                  <>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 84, gap: 3 }}>
+                      {liveHistory.map((r, i) => (
+                        <View
+                          key={i}
+                          style={{
+                            flex: 1,
+                            height: `${Math.max(4, Math.min(100, r.light_lux ?? 0))}%`,
+                            backgroundColor: accent.sunbeam,
+                            borderRadius: 2,
+                            opacity: 0.45 + 0.55 * (i / Math.max(1, liveHistory.length - 1)),
+                          }}
+                        />
+                      ))}
                     </View>
-                  );
-                })}
-                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 12, lineHeight: 15 }]}>
-                  {plant.estimate
-                    ? 'These are model estimates, not measurements — treat them as a good guess. A Greenr Sensor turns them into readings.'
-                    : 'Measured by your Greenr Sensor with your calibration.'}
-                </Text>
-              </View>
-            )}
-          </Card>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                      Relative light (0–100) from your sensor · now {liveReading?.light_lux ?? '—'}. Taller
+                      bar = brighter at that reading.
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={[type.body, { color: dark.inkMuted, lineHeight: 21 }]}>
+                    Collecting light readings — this fills in as your sensor reports.
+                  </Text>
+                )}
+              </Card>
+            </>
+          )}
 
           {/* ── History (accordion) ── */}
           <Card style={{ marginTop: 10 }}>

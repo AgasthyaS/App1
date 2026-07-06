@@ -22,7 +22,7 @@ const QUIET: [string, string][] = [
 export default function SettingsScreen() {
   const router = useRouter();
   const greenr = useGreenr();
-  const { settings, setSettings, demo, loadDemoGarden, resetApp, profile, signOut } = greenr;
+  const { settings, setSettings, resetApp, profile, signOut } = greenr;
   const { signOut: authSignOut, enabled: authEnabled, deleteAccount } = useAuth();
 
   const cycle = <T,>(list: readonly T[], current: T): T =>
@@ -210,22 +210,15 @@ export default function SettingsScreen() {
         )}
       </Card>
 
-      <SectionHeader>Testing</SectionHeader>
+      <SectionHeader>Data</SectionHeader>
       <Card>
-        <Row
-          title={demo ? 'Demo garden loaded' : 'Load demo garden'}
-          value={demo ? 'On' : ''}
-          onPress={() => {
-            if (!demo) loadDemoGarden();
-          }}
-        />
         <Row
           title="Reset app (fresh install)"
           danger
           onPress={() =>
             confirmAction({
               title: 'Reset app',
-              message: 'Clears all plants, spots, sensors, and settings.',
+              message: 'Clears all plants, spots, sensors, and settings on this device.',
               confirmLabel: 'Reset',
               destructive: true,
               onConfirm: () => {
@@ -236,7 +229,7 @@ export default function SettingsScreen() {
           }
         />
         <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4 }]}>
-          The demo garden never persists — turn it off with a reset. A fresh install starts empty.
+          A fresh install starts empty. Your account&apos;s garden stays saved in the cloud.
         </Text>
       </Card>
 

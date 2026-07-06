@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 
+import { QRScanner } from '@/components/greenr/QRScanner';
 import { Card, GButton, Screen } from '@/components/greenr/UI';
 import { accent, light, type } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
@@ -36,14 +36,13 @@ export default function PairDevice() {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [plantId, setPlantId] = useState<string | null>(null);
   const [reading, setReading] = useState<Reading | null>(null);
-  const [permission, requestPermission] = useCameraPermissions();
-
-  const useCamera = Platform.OS !== 'web';
+  const [scanning, setScanning] = useState(false);
 
   const claim = async (raw: string) => {
     setError(null);
     const parsed = parsePairing(raw);
     if (!parsed) { setError("That doesn't look like a Greenr sensor code."); return; }
+    setScanning(false);
     setStep('linking');
     const { error } = await registerDevice(parsed.id, parsed.key);
     if (error) { setError(error); setStep('scan'); return; }
@@ -87,25 +86,19 @@ export default function PairDevice() {
           It's on the device (or its box). This links the sensor to your account.
         </Text>
 
-        {useCamera && (
-          <View style={{ height: 260, borderRadius: 20, overflow: 'hidden', marginTop: 22, backgroundColor: '#000' }}>
-            {permission?.granted ? (
-              <CameraView
-                style={{ flex: 1 }}
-                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                onBarcodeScanned={({ data }) => { if (step === 'scan') claim(data); }}
-              />
-            ) : (
-              <Pressable onPress={requestPermission} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="camera-outline" size={40} color="#fff" />
-                <Text style={{ color: '#fff', marginTop: 8 }}>Tap to enable the camera</Text>
-              </Pressable>
-            )}
-          </View>
-        )}
+        <View style={{ height: 260, borderRadius: 20, overflow: 'hidden', marginTop: 22, backgroundColor: '#000' }}>
+          {scanning ? (
+            <QRScanner onScan={(data) => { if (step === 'scan') claim(data); }} />
+          ) : (
+            <Pressable onPress={() => setScanning(true)} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <Ionicons name="qr-code-outline" size={44} color="#fff" />
+              <Text style={{ color: '#fff', marginTop: 10 }}>Tap to scan the QR code</Text>
+            </Pressable>
+          )}
+        </View>
 
         <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 18 }]}>
-          {useCamera ? 'Or enter the code underneath the QR:' : 'Enter the code printed under the QR:'}
+          Or enter the code printed under the QR:
         </Text>
         <TextInput
           value={manual}
@@ -174,11 +167,12 @@ export default function PairDevice() {
 
   // --- done: waiting for / showing first reading ---
   const V = ({ label, value }: { label: string; value: string }) => (
-    <Card mode="light" style={{ flex: 1, alignItems: 'center' }}>
-      <Text style={[type.numBold as any, { fontSize: 26, color: light.ink }]}>{value}</Text>
+    <Card mode="light" style={{ width: '47%', alignItems: 'center' }}>
+      <Text style={[type.numBold as any, { fontSize: 24, color: light.ink }]}>{value}</Text>
       <Text style={[type.micro, { color: light.inkMuted, marginTop: 2 }]}>{label}</Text>
     </Card>
   );
+  const num = (v: number | null) => (v != null ? String(v) : '—');
   return (
     <Screen mode="light" scroll={false} style={{ justifyContent: 'center' }}>
       <View style={{ alignItems: 'center' }}>
@@ -188,17 +182,31 @@ export default function PairDevice() {
         </Text>
       </View>
       {reading ? (
-        <View style={{ flexDirection: 'row', gap: 10, marginTop: 24 }}>
-          <V label="light" value={reading.light_lux != null ? String(reading.light_lux) : '—'} />
-          <V label="soil %" value={reading.soil_pct != null ? String(reading.soil_pct) : '—'} />
-          <V label="temp °C" value={reading.temp_c != null ? String(reading.temp_c) : '—'} />
-        </View>
+        <>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 20, justifyContent: 'center' }}>
+            <V label="soil moisture" value={`${num(reading.soil_pct)}%`} />
+            <V label="light" value={num(reading.light_lux)} />
+            <V label="temp" value={`${num(reading.temp_c)}°C`} />
+            <V label="humidity" value={`${num(reading.humidity_pct)}%`} />
+          </View>
+          <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 12 }]}>
+            Soil at 0% means the probe is reading dry (e.g. in the air). Put it in
+            moist soil or water and it climbs.
+          </Text>
+        </>
       ) : (
         <Text style={[type.body, { color: light.inkMuted, textAlign: 'center', marginTop: 24 }]}>
           Waiting for the first reading… it lands within a few minutes of the sensor waking.
         </Text>
       )}
-      <GButton title="Done" onPress={() => router.dismiss()} style={{ marginTop: 28 }} />
+      <GButton
+        title="Done"
+        onPress={() => {
+          try { if (router.canDismiss()) { router.dismiss(); return; } } catch {}
+          router.replace('/(tabs)');
+        }}
+        style={{ marginTop: 24 }}
+      />
     </Screen>
   );
 }

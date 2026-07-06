@@ -53,6 +53,18 @@ export async function getMyDevices(): Promise<Device[]> {
   return (data as Device[]) ?? [];
 }
 
+/** Recent readings for a device, oldest→newest, for history charts. */
+export async function getReadingHistory(deviceId: string, limit = 48): Promise<Reading[]> {
+  if (!supabase) return [];
+  const { data } = await supabase
+    .from('readings')
+    .select('device_id,light_lux,dli,soil_pct,temp_c,humidity_pct,battery_pct,created_at')
+    .eq('device_id', deviceId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  return ((data as Reading[]) ?? []).slice().reverse();
+}
+
 /** Newest reading for a device, or null if none yet. */
 export async function getLatestReading(deviceId: string): Promise<Reading | null> {
   if (!supabase) return null;
@@ -78,4 +90,14 @@ export async function requestReadNow(deviceId?: string): Promise<void> {
   let q = supabase.from('devices').update({ read_now: true });
   q = deviceId ? q.eq('id', deviceId) : q.not('id', 'is', null);
   await q;
+}
+
+/** Fast "live" cadence while the app is open on a sensor; slow cadence when away. */
+export const LIVE_WAKE_SECONDS = 10;
+export const IDLE_WAKE_SECONDS = 1800; // 30 min deep-sleep between reads when idle
+
+/** Set how often the device wakes to read (server-controlled; no reflash). */
+export async function setWakeInterval(deviceId: string, seconds: number): Promise<void> {
+  if (!supabase) return;
+  await supabase.from('devices').update({ wake_seconds: seconds }).eq('id', deviceId);
 }

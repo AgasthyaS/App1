@@ -7,7 +7,7 @@
  *  Reads light (LDR), soil (capacitive), temp/humidity (DHT11), keeps a running
  *  Daily Light Integral, uploads to Supabase, deep-sleeps. The server controls
  *  the sleep interval and can request an immediate reading (app "read now").
- *
+ *okay
  *  LIBRARIES (Arduino IDE → Library Manager):
  *    - "WiFiManager" by tzapu
  *    - "DHT sensor library" by Adafruit (+ "Adafruit Unified Sensor")
@@ -35,7 +35,9 @@
 // ----------------------------------------------------------------------
 
 // Soil / light calibration (adjust after watching Serial Monitor):
-int SOIL_AIR = 3000, SOIL_WATER = 1300;
+// SOIL_AIR = raw value when DRY (must be a bit ABOVE your dry reading so dry
+// lands near 0%). SOIL_WATER = raw value when the probe sits in water.
+int SOIL_AIR = 3150, SOIL_WATER = 1400;
 int LIGHT_DARK = 200, LIGHT_BRIGHT = 3200;
 
 const char* SUPABASE_URL =
@@ -52,13 +54,13 @@ const char* SUPABASE_ANON =
   #define DHT_PIN    3
   #define SENSOR_PWR 10
 #else
-  // Original ESP32 dev kit (GPIO34/35 = analog-in; avoid flash pins 6–11)
-  #define LDR_PIN    34
-  #define SOIL_PIN   35
-  #define DHT_PIN    4
-  #define SENSOR_PWR 25
+  // Original ESP32 dev kit — matches the soldered wiring:
+  #define LDR_PIN    34   // light sensor AO   (light VCC on 3V3)
+  #define SOIL_PIN   39   // soil AOUT (the "VN" pin = GPIO39)
+  #define DHT_PIN    18   // DHT22 Out         (DHT VCC on 3V3)
+  #define SENSOR_PWR 19   // soil VCC -> GPIO19: code powers the soil sensor here
 #endif
-#define DHTTYPE DHT11
+#define DHTTYPE DHT22
 
 DHT dht(DHT_PIN, DHTTYPE);
 
@@ -75,23 +77,9 @@ void goToSleep(int s){
   esp_deep_sleep_start();
 }
 
-void setup(){
-  Serial.begin(115200); delay(50);
-
-  // --- WiFi via captive portal ---------------------------------------------
-  // First boot with no saved WiFi: opens the "greenr-setup" hotspot for the
-  // user to pick their network. Later boots reconnect automatically.
-  WiFiManager wm;
-  wm.setConfigPortalTimeout(180);          // give up after 3 min, sleep, retry
-  if (!wm.autoConnect("greenr-setup")) {
-    Serial.println("No WiFi configured yet — sleeping, will reopen setup.");
-    goToSleep(300);                        // retry setup in 5 min
-  }
-
-  // --- power + read sensors ------------------------------------------------
-  if (SENSOR_PWR >= 0){ pinMode(SENSOR_PWR, OUTPUT); digitalWrite(SENSOR_PWR, HIGH); }
-  dht.begin(); delay(1200);
-
+// Read all sensors once and upload. Updates wakeSeconds from the server reply
+// (the app sets it small for live mode, large for idle/deep-sleep).
+void readAndUpload(){
   int rawLight = analogRead(LDR_PIN);
   int rawSoil  = analogRead(SOIL_PIN);
   float tempC  = dht.readTemperature();
@@ -105,12 +93,9 @@ void setup(){
   if (lightFrac < 0) lightFrac = 0; if (lightFrac > 1) lightFrac = 1;
   int lightIdx = (int)(lightFrac * 100);
   dliAccum += (lightFrac * 2000.0) * (float)wakeSeconds / 1000000.0;  // rough DLI
-  int batteryPct = -1;
 
-  // --- upload --------------------------------------------------------------
-  configTime(0,0,"pool.ntp.org");
   struct tm ti;
-  if (getLocalTime(&ti, 3000)){ if (ti.tm_yday != dayOfYear){ dayOfYear = ti.tm_yday; dliAccum = 0; } }
+  if (getLocalTime(&ti, 1500)){ if (ti.tm_yday != dayOfYear){ dayOfYear = ti.tm_yday; dliAccum = 0; } }
 
   String body = "{";
   body += "\"p_device\":\"" DEVICE_ID "\",";
@@ -120,7 +105,7 @@ void setup(){
   body += "\"p_soil\":" + String(soilPct) + ",";
   body += "\"p_temp\":" + String(tempC,1) + ",";
   body += "\"p_humidity\":" + String(hum,1) + ",";
-  body += "\"p_battery\":" + String(batteryPct) + "}";
+  body += "\"p_battery\":-1}";
 
   WiFiClientSecure client; client.setInsecure();
   HTTPClient https;
@@ -132,11 +117,41 @@ void setup(){
     String resp = https.getString();
     Serial.printf("POST %d: %s\n", code, resp.c_str());
     int wi = resp.indexOf("wake_seconds");
-    if (wi >= 0){ int c = resp.indexOf(':', wi); wakeSeconds = resp.substring(c+1).toInt(); if (wakeSeconds < 60) wakeSeconds = 1800; }
+    if (wi >= 0){ int c = resp.indexOf(':', wi); wakeSeconds = resp.substring(c + 1).toInt(); }
+    if (wakeSeconds < 5 || wakeSeconds > 86400) wakeSeconds = 1800;  // sane bounds
     https.end();
   }
+}
 
-  goToSleep(wakeSeconds);
+void setup(){
+  Serial.begin(115200); delay(50);
+
+  // WiFi via captive portal (see header). No WiFi yet → nap, reopen setup.
+  WiFiManager wm;
+  wm.setConfigPortalTimeout(180);
+  if (!wm.autoConnect("greenr-setup")) {
+    Serial.println("No WiFi yet — sleeping, will reopen setup.");
+    goToSleep(300);
+  }
+
+  // Power the sensors and sync the clock once, then let them warm up.
+  if (SENSOR_PWR >= 0){ pinMode(SENSOR_PWR, OUTPUT); digitalWrite(SENSOR_PWR, HIGH); }
+  dht.begin();
+  configTime(0, 0, "pool.ntp.org");
+  delay(1200);
+
+  // Live mode: while the app wants fast reads (small wake_seconds), stay awake
+  // with WiFi up and read on that cadence. When the app leaves (wake_seconds
+  // goes large) or a 10-minute safety cap hits, fall through to deep sleep.
+  unsigned long liveStart = millis();
+  while (true) {
+    readAndUpload();
+    if (wakeSeconds > 30) break;                    // app idle → deep sleep
+    if (millis() - liveStart > 600000UL) break;     // 10-min live safety cap
+    delay((unsigned long)wakeSeconds * 1000UL);     // wait between fast reads
+  }
+
+  goToSleep(wakeSeconds > 30 ? wakeSeconds : 300);  // deep sleep (resync if capped)
 }
 
 void loop(){}

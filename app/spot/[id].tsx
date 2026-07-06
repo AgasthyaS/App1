@@ -39,21 +39,6 @@ export default function SpotDetail() {
     [plants, id],
   );
 
-  const lightHistory = useMemo(() => {
-    if (!spot) return '';
-    // 30-day light mini-chart: gentle seasonal drift + daily noise
-    const w = 300;
-    const h = 48;
-    let d = '';
-    for (let i = 0; i <= 30; i++) {
-      const x = (i / 30) * w;
-      const v = spot.dli * (0.82 + 0.18 * Math.sin(i / 5) + ((i * 7919) % 13) / 90);
-      const y = h - Math.min(1, v / (spot.dli * 1.3)) * h;
-      d += `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)} `;
-    }
-    return d;
-  }, [spot]);
-
   if (!spot) {
     return (
       <Screen scroll={false} style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -127,12 +112,16 @@ export default function SpotDetail() {
         )}
       </Card>
 
-      {/* 30-day light history */}
-      <SectionHeader>Light · 30 days</SectionHeader>
+      {/* Light — honest estimate, no faked history */}
+      <SectionHeader>Light</SectionHeader>
       <Card>
-        <Svg width="100%" height={48} viewBox="0 0 300 48" preserveAspectRatio="none">
-          <Path d={lightHistory} stroke={accent.sage} strokeWidth={2} fill="none" />
-        </Svg>
+        <Text style={[type.cardTitle, { color: dark.ink }]}>
+          {spot.dli.toFixed(1)} DLI · {dliWord(spot.dli)}
+        </Text>
+        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 15 }]}>
+          Estimated from this spot&apos;s description. Pair a sensor with a plant here and its light history
+          builds from real readings.
+        </Text>
       </Card>
 
       {/* occupants */}
