@@ -30,8 +30,8 @@
 
 // ---------- PER-DEVICE IDENTITY (from the provisioning tool) ----------
 // (Defaults below are your first test device so you can try it immediately.)
-#define DEVICE_ID   "2b56a6e1-9d4f-4ed0-87fc-b304ae8dcf6d"
-#define DEVICE_KEY  "98e818906a47d8b0901c7a4864f061be"
+#define DEVICE_ID   "ae2da43d-781a-40f7-a3ca-45e5570f5d81"
+#define DEVICE_KEY  "b7b1da534f47fef89ebd1f182fef646c"
 // ----------------------------------------------------------------------
 
 // Soil / light calibration (adjust after watching Serial Monitor):
@@ -43,10 +43,21 @@ const char* SUPABASE_URL =
 const char* SUPABASE_ANON =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtueXltd3ZycWl0cHRmemNreXZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMjU5NDMsImV4cCI6MjA5ODgwMTk0M30.yPwANlvW6i_F8fnSuAfaCyGccXIJo2Pny83I7tRYtf0";
 
-#define LDR_PIN 0
-#define SOIL_PIN 1
-#define DHT_PIN 3
-#define SENSOR_PWR 10        // set to -1 if powering sensors from 3V3
+// Pins differ by board. The right set is picked automatically from the board
+// you select in Arduino IDE (Tools → Board).
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  // ESP32-C3 Super Mini
+  #define LDR_PIN    0
+  #define SOIL_PIN   1
+  #define DHT_PIN    3
+  #define SENSOR_PWR 10
+#else
+  // Original ESP32 dev kit (GPIO34/35 = analog-in; avoid flash pins 6–11)
+  #define LDR_PIN    34
+  #define SOIL_PIN   35
+  #define DHT_PIN    4
+  #define SENSOR_PWR 25
+#endif
 #define DHTTYPE DHT11
 
 DHT dht(DHT_PIN, DHTTYPE);
