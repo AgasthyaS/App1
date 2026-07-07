@@ -40,3 +40,6 @@ app-example
 
 # local secrets
 .env
+
+# device QR codes contain secrets
+provisioned/
