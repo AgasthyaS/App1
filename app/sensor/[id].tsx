@@ -6,6 +6,7 @@ import { Pressable, Text, View } from 'react-native';
 
 import { Card, Chip, GButton, Hairline, Screen, SectionHeader, StatusDot } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
+import { isCalibrated } from '@/lib/calibration';
 import { relTime, signalWord } from '@/lib/format';
 import { confirmAction, shareContent } from '@/lib/platform';
 import { activePlants, useGreenr } from '@/lib/store';
@@ -19,9 +20,9 @@ export default function SensorDetail() {
     plants,
     spots,
     settings,
+    calibrations,
     readNow,
     reassignSensor,
-    recalibrateSensor,
     installFirmware,
     forgetSensor,
   } = useGreenr();
@@ -29,10 +30,10 @@ export default function SensorDetail() {
   const [reassignOpen, setReassignOpen] = useState(false);
   const [troubleshootOpen, setTroubleshootOpen] = useState(false);
   const [readRequested, setReadRequested] = useState(false);
-  const [recalibrated, setRecalibrated] = useState(false);
   const [installing, setInstalling] = useState(false);
 
   const sensor = sensors.find((s) => s.id === id);
+  const calibrated = isCalibrated(calibrations[id ?? '']);
   const plant = plants.find((p) => p.id === sensor?.plantId);
   const spot = spots.find((s) => s.id === plant?.spotId);
 
@@ -226,22 +227,19 @@ export default function SensorDetail() {
       <Card style={{ flexDirection: 'row', alignItems: 'center' }}>
         <View style={{ flex: 1 }}>
           <Text style={[type.body, { color: dark.ink }]}>
-            Calibrated {sensor.calibratedOn} · dry {sensor.calDry} / wet {sensor.calWet}
+            {calibrated
+              ? 'Calibrated — offsets applied to every reading'
+              : 'Moisture, temperature, humidity & light'}
           </Text>
           <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>
-            Repotted into different soil? Recalibrate — soil changes the curve.
+            Repotted or a reading looks off? Recalibrate — it corrects the curve.
           </Text>
         </View>
         <Pressable
-          onPress={() => {
-            recalibrateSensor(sensor.id);
-            setRecalibrated(true);
-          }}
+          onPress={() => router.push(`/calibrate/${sensor.id}` as any)}
           style={{ minHeight: 44, justifyContent: 'center' }}
         >
-          <Text style={[type.body, { color: recalibrated ? accent.sage : accent.verdant }]}>
-            {recalibrated ? 'Done ✓' : 'Recalibrate'}
-          </Text>
+          <Text style={[type.body, { color: accent.verdant }]}>Calibrate</Text>
         </Pressable>
       </Card>
 

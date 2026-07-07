@@ -1,3 +1,4 @@
+import { relTime } from './format';
 import { supabase } from './supabase';
 
 /**
@@ -24,6 +25,28 @@ export interface Device {
   wake_seconds: number;
   battery_pct: number | null;
   last_seen: string | null;
+}
+
+export interface DeviceConnection {
+  status: 'online' | 'idle' | 'offline';
+  quality: 'Good' | 'Fair' | 'Weak' | 'Unknown';
+  /** e.g. "12 min ago" / "never reported" */
+  sinceLabel: string;
+}
+
+/**
+ * Connection quality from how recently the device last reported. Sensors
+ * deep-sleep (~30 min idle), so "online" allows a generous window before a
+ * device is considered idle/offline. Honest: derived from real last_seen, not a
+ * fabricated RSSI (the firmware doesn't report Wi-Fi signal strength).
+ */
+export function connectionFrom(lastSeen: string | null): DeviceConnection {
+  if (!lastSeen) return { status: 'offline', quality: 'Unknown', sinceLabel: 'never reported' };
+  const mins = (Date.now() - new Date(lastSeen).getTime()) / 60000;
+  const sinceLabel = mins < 1 ? 'just now' : relTime(mins);
+  if (mins < 45) return { status: 'online', quality: 'Good', sinceLabel };
+  if (mins < 180) return { status: 'idle', quality: 'Fair', sinceLabel };
+  return { status: 'offline', quality: 'Weak', sinceLabel };
 }
 
 /** Parse a scanned QR / pasted code: greenr://pair?d=<id>&k=<key> (or "id:key"). */
@@ -102,6 +125,33 @@ export async function getLatestReading(deviceId: string): Promise<Reading | null
 export async function assignDeviceToPlant(deviceId: string, plantKey: string): Promise<void> {
   if (!supabase) return;
   await supabase.from('devices').update({ plant_key: plantKey }).eq('id', deviceId);
+}
+
+/** Unassign a device from its plant (keeps it on the account). */
+export async function unassignDevice(deviceId: string): Promise<void> {
+  if (!supabase) return;
+  await supabase.from('devices').update({ plant_key: null }).eq('id', deviceId);
+}
+
+/** Give a device a custom name. */
+export async function renameDevice(deviceId: string, label: string): Promise<void> {
+  if (!supabase) return;
+  await supabase.from('devices').update({ label }).eq('id', deviceId);
+}
+
+/**
+ * Remove a device from the account (release the claim). Needs the
+ * `release_device` RPC (see supabase-device-manager.sql); if it isn't installed
+ * we at least unassign the plant so the app state is consistent.
+ */
+export async function releaseDevice(deviceId: string): Promise<{ error: string | null }> {
+  if (!supabase) return { error: 'Not configured.' };
+  const { error } = await supabase.rpc('release_device', { p_device: deviceId });
+  if (error) {
+    await unassignDevice(deviceId);
+    return { error: error.message };
+  }
+  return { error: null };
 }
 
 /** Ask the device to take a fresh reading on its next wake (app open / pull). */

@@ -9,6 +9,7 @@ import React, {
   useState,
 } from 'react';
 import { useAuth } from './auth';
+import { type CalMetricKey, type SensorCalibration, emptyCalibration, withCalibration } from './calibration';
 import { pullGarden, pushGarden } from './cloud';
 import { SEED_ACCURACY, SEED_PLANTS, SEED_SENSORS, SEED_SPOTS, SEED_TASKS } from './seed';
 import {
@@ -36,6 +37,8 @@ interface GreenrState {
   accuracy: AccuracyEntry[];
   settings: Settings;
   briefingOpened: boolean;
+  /** sensor/device calibration, keyed by sensor or device id (§8) */
+  calibrations: Record<string, SensorCalibration>;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -63,6 +66,7 @@ function emptyState(): GreenrState {
     accuracy: [],
     settings: DEFAULT_SETTINGS,
     briefingOpened: false,
+    calibrations: {},
   };
 }
 
@@ -88,6 +92,9 @@ function persistedSlice(s: GreenrState): Partial<GreenrState> {
     demo: s.demo,
     settings: s.settings,
     briefingOpened: s.briefingOpened,
+    // Calibration persists for everyone — it's tied to physical hardware, not
+    // the demo garden, so it survives restarts and syncs across devices (§7/§8).
+    calibrations: s.calibrations,
   };
   if (!s.demo) {
     base.plants = s.plants;
@@ -133,6 +140,8 @@ interface GreenrApi extends GreenrState {
   readNow: (sensorId: string) => void;
   reassignSensor: (sensorId: string, plantId: string) => void;
   recalibrateSensor: (sensorId: string) => void;
+  /** §8: record a per-metric calibration (offset = reference − measured) */
+  calibrateMetric: (sensorKey: string, key: CalMetricKey, reference: number, measured: number) => void;
   installFirmware: (sensorId: string) => void;
   forgetSensor: (sensorId: string) => void;
   remeasureSpot: (spotId: string) => void;
@@ -546,6 +555,22 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
+  const calibrateMetric = useCallback(
+    (sensorKey: string, key: CalMetricKey, reference: number, measured: number) => {
+      setState((s) => {
+        const current = s.calibrations[sensorKey] ?? emptyCalibration();
+        return {
+          ...s,
+          calibrations: {
+            ...s.calibrations,
+            [sensorKey]: withCalibration(current, key, reference, measured),
+          },
+        };
+      });
+    },
+    [],
+  );
+
   const installFirmware = useCallback((sensorId: string) => {
     setState((s) => ({
       ...s,
@@ -647,13 +672,14 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       readNow,
       reassignSensor,
       recalibrateSensor,
+      calibrateMetric,
       installFirmware,
       forgetSensor,
       remeasureSpot,
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, calibrateMetric, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

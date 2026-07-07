@@ -8,12 +8,16 @@ import ForecastBar from '@/components/greenr/ForecastBar';
 import Sparkline from '@/components/greenr/Sparkline';
 import { Card, GButton } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
-import { accent, dark, layout, type } from '@/constants/theme';
+import WeatherCard from '@/components/greenr/WeatherCard';
+import { useWeather } from '@/lib/useWeather';
+import { accent, bandFor, dark, layout, type } from '@/constants/theme';
 import { adviceFor, primaryAction } from '@/lib/advice';
 import { BUILD_STAMP } from '@/lib/build';
 import { clockNow } from '@/lib/format';
-import { alertsFor } from '@/lib/alerts';
+import { notificationsFor, type AlertLevel } from '@/lib/alerts';
 import type { Reading } from '@/lib/devices';
+import { applyCalibration, type SensorCalibration } from '@/lib/calibration';
+import { computeHealth } from '@/lib/health';
 import { idealsFor, lightStatus, soilStatus, tempStatus, type Tone } from '@/lib/plantStatus';
 import { activePlants, gardenAverage, useGreenr } from '@/lib/store';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
@@ -33,34 +37,48 @@ function PlantRow({
   spot,
   hasSensor,
   reading,
+  calibration,
   onPress,
 }: {
   plant: Plant;
   spot?: Spot;
   hasSensor?: boolean;
   reading?: Reading | null;
+  calibration?: SensorCalibration | null;
   onPress: () => void;
 }) {
-  // Sensored plants show real, plant-specific status (N/A until first reading);
-  // no fake score, sparkline, or forecast.
+  // Sensored plants show real, live-computed health (§3/§9) — never a seeded
+  // score. N/A until the first reading; no fabricated numbers.
   if (hasSensor) {
+    const r = reading ? applyCalibration(reading, calibration) : reading;
     const ideal = idealsFor(plant.species, plant.comfortBand);
-    const soil = soilStatus(reading?.soil_pct, ideal.band);
-    const light = lightStatus(reading?.light_lux, ideal.dli);
-    const temp = tempStatus(reading?.temp_c, ideal.temp);
+    const soil = soilStatus(r?.soil_pct, ideal.band);
+    const light = lightStatus(r?.light_lux, ideal.dli);
+    const temp = tempStatus(r?.temp_c, ideal.temp);
+    const health = computeHealth(plant.species, plant.comfortBand, reading ?? null, [], true, calibration);
+    const hColor = health.measured ? bandFor(health.total).color : dark.inkMuted;
     return (
       <Card onPress={onPress} style={{ marginBottom: 10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: accent.sage }} />
+          {health.measured ? (
+            <VitalityRing score={health.total} size={28} showLabel={false} trackColor={dark.hairline} />
+          ) : (
+            <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: accent.sage }} />
+          )}
           <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]} numberOfLines={1}>
             {plant.name}
           </Text>
-          <Text style={[type.cardTitle, { color: toneColor(soil.tone), fontSize: 15 }]} numberOfLines={1}>
-            {reading ? soil.label : 'N/A'}
-          </Text>
+          {health.measured ? (
+            <Text style={[type.numBold as any, { color: hColor, fontSize: 17 }]} numberOfLines={1}>
+              {health.total}
+              <Text style={[type.caption, { color: dark.inkMuted }]}> · {health.word}</Text>
+            </Text>
+          ) : (
+            <Text style={[type.cardTitle, { color: dark.inkMuted, fontSize: 15 }]}>N/A</Text>
+          )}
         </View>
         <Text style={[type.micro, { color: accent.sage, marginTop: 6, letterSpacing: 0.5 }]}>
-          SENSOR CONNECTED
+          SENSOR CONNECTED · LIVE HEALTH
         </Text>
         <Text style={[type.caption, { color: dark.inkMuted, marginTop: 6 }]} numberOfLines={1}>
           {reading
@@ -120,21 +138,29 @@ function PlantRow({
 export default function ForecastTab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants: allPlants, spots, tasks, briefingOpened } = useGreenr();
+  const { plants: allPlants, spots, tasks, briefingOpened, settings, calibrations } = useGreenr();
   const liveReadings = useAllLiveReadings(); // plantId → latest reading (or null); auto-refreshes
+  const weather = useWeather(); // live local weather; auto-refreshes, honest empty states
   const [refreshing, setRefreshing] = useState(false);
 
   // Personalized alerts across sensored plants (only the ones needing attention).
   const alerts = useMemo(() => {
-    const items: { plantId: string; level: 'warn' | 'bad'; text: string }[] = [];
+    const items: { plantId: string; level: AlertLevel; text: string }[] = [];
     activePlants(allPlants).forEach((p) => {
       if (!liveReadings.has(p.id)) return;
-      alertsFor(p.name, p.species, p.comfortBand, liveReadings.get(p.id) ?? null).forEach((a) => {
-        if (a.level !== 'good') items.push({ plantId: p.id, level: a.level, text: a.text });
-      });
+      const outdoor = !!spots.find((s) => s.id === p.spotId)?.outdoor;
+      notificationsFor({
+        plantName: p.name,
+        species: p.species,
+        band: p.comfortBand,
+        reading: liveReadings.get(p.id) ?? null,
+        outdoor,
+        weather: weather.weather,
+      }).forEach((a) => items.push({ plantId: p.id, level: a.level, text: a.text }));
     });
-    return items.sort((a, b) => (a.level === 'bad' ? -1 : 1) - (b.level === 'bad' ? -1 : 1));
-  }, [allPlants, liveReadings]);
+    const order: Record<AlertLevel, number> = { bad: 0, warn: 1, info: 2 };
+    return items.sort((a, b) => order[a.level] - order[b.level]);
+  }, [allPlants, liveReadings, spots, weather.weather]);
   const [asOf, setAsOf] = useState(clockNow());
 
   const plants = useMemo(() => activePlants(allPlants), [allPlants]);
@@ -149,11 +175,12 @@ export default function ForecastTab() {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
+    weather.refresh();
     setTimeout(() => {
       setAsOf(clockNow());
       setRefreshing(false);
     }, 700);
-  }, []);
+  }, [weather]);
 
   return (
     <ScrollView
@@ -178,6 +205,9 @@ export default function ForecastTab() {
       <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>
         Readings as of {asOf} · {BUILD_STAMP}
       </Text>
+
+      {/* Live local weather — real Open-Meteo data (§10) */}
+      <WeatherCard w={weather} unitsF={settings.unitsF} />
 
       {/* Briefing card (contextual, §4) */}
       {plants.length === 0 ? null : showFullBriefing ? (
@@ -206,7 +236,12 @@ export default function ForecastTab() {
           {alerts.slice(0, 5).map((a, i) => (
             <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 26 }}>
               <View
-                style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: a.level === 'bad' ? accent.clay : accent.sunbeam }}
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 3,
+                  backgroundColor: a.level === 'bad' ? accent.clay : a.level === 'warn' ? accent.sunbeam : accent.verdant,
+                }}
               />
               <Text style={[type.caption, { color: dark.ink, flex: 1 }]} numberOfLines={1}>
                 {a.text}
@@ -234,6 +269,7 @@ export default function ForecastTab() {
               spot={spots.find((s) => s.id === p.spotId)}
               hasSensor={liveReadings.has(p.id)}
               reading={liveReadings.get(p.id)}
+              calibration={p.sensorId ? calibrations[p.sensorId] : null}
               onPress={() => router.push(`/plant/${p.id}`)}
             />
           ))

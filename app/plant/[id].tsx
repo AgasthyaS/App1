@@ -28,9 +28,86 @@ import {
 } from '@/lib/plantStatus';
 import { plantsForEnvironment } from '@/lib/compatibility';
 import { insightsFor } from '@/lib/insights';
-import { careFor } from '@/lib/plantCare';
+import { careProfileFor } from '@/lib/plantCare';
+import { computeHealth, type HealthComponent } from '@/lib/health';
+import { applyCalibration } from '@/lib/calibration';
+import type { Toxicity } from '@/lib/plants';
+import { computeSchedule, wateringIcs } from '@/lib/schedule';
+import { useWeather } from '@/lib/useWeather';
+import { weatherWateringImpact } from '@/lib/weather';
+import { shareContent } from '@/lib/platform';
 import { wateringAdvice } from '@/lib/watering';
 import { COMPONENT_MAX, ScoreComponents } from '@/lib/types';
+
+/** A labelled fact chip for the care guide (difficulty, size, zones, …). */
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <View
+      style={{
+        backgroundColor: dark.surface2,
+        borderRadius: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        minWidth: '30%',
+        flexGrow: 1,
+      }}
+    >
+      <Text style={[type.micro, { color: dark.inkMuted }]}>{label.toUpperCase()}</Text>
+      <Text style={[type.caption, { color: dark.ink, marginTop: 2 }]}>{value}</Text>
+    </View>
+  );
+}
+
+/** One measurable care line: icon · label · sentence. */
+function CareLine({ emoji, label, text }: { emoji: string; label: string; text: string }) {
+  return (
+    <View style={{ marginTop: 12 }}>
+      <Text style={[type.micro, { color: dark.inkMuted }]}>
+        {emoji} {label.toUpperCase()}
+      </Text>
+      <Text style={[type.body, { color: dark.ink, marginTop: 3, lineHeight: 21 }]}>{text}</Text>
+    </View>
+  );
+}
+
+/** Distills the ASPCA toxicity record into a single honest banner. */
+function toxSummary(t: Toxicity): { text: string; color: string; icon: 'warning' | 'checkmark-circle' | 'help-circle' } {
+  const anyToxic = t.cats === 'toxic' || t.dogs === 'toxic';
+  const bothSafe = t.cats === 'nonToxic' && t.dogs === 'nonToxic';
+  if (anyToxic) return { text: `Toxic to pets — ${t.note}`, color: accent.clay, icon: 'warning' };
+  if (bothSafe) return { text: `Pet-safe — ${t.note}`, color: accent.sage, icon: 'checkmark-circle' };
+  return { text: t.note, color: dark.inkMuted, icon: 'help-circle' };
+}
+
+const healthTone = (t: HealthComponent['tone']) =>
+  t === 'good' ? accent.sage : t === 'warn' ? accent.sunbeam : t === 'bad' ? accent.clay : dark.inkMuted;
+
+/** One row of the transparent health breakdown: earned/max, reason, action (§9/§2). */
+function HealthRow({ c }: { c: HealthComponent }) {
+  const color = healthTone(c.tone);
+  return (
+    <View style={{ marginTop: 14 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[type.caption, { color: dark.ink, flex: 1 }]}>
+          {c.label}
+          {c.estimate ? ' · est.' : ''}
+        </Text>
+        <Text style={[type.num as any, { color: dark.inkMuted, fontSize: 12 }]}>{c.value}</Text>
+        <Text style={[type.numBold as any, { color, fontSize: 14, minWidth: 46, textAlign: 'right' }]}>
+          {c.earned}/{c.max}
+        </Text>
+      </View>
+      {/* proportional bar */}
+      <View style={{ height: 5, borderRadius: 3, backgroundColor: dark.hairline, marginTop: 6, overflow: 'hidden' }}>
+        <View style={{ width: `${Math.round((c.earned / c.max) * 100)}%`, height: 5, backgroundColor: color }} />
+      </View>
+      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 5, lineHeight: 15 }]}>{c.reason}</Text>
+      {c.recommendation ? (
+        <Text style={[type.micro, { color: accent.verdant, marginTop: 2, lineHeight: 15 }]}>→ {c.recommendation}</Text>
+      ) : null}
+    </View>
+  );
+}
 
 const COMPONENT_LABELS: Record<keyof ScoreComponents, string> = {
   hydration: 'Hydration',
@@ -102,7 +179,8 @@ export default function PlantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, spots, sensors, settings, logWater, archivePlant, setPlantPhoto, renamePlant } = useGreenr();
+  const { plants, spots, sensors, settings, calibrations, logWater, archivePlant, setPlantPhoto, renamePlant } =
+    useGreenr();
   const plant = plants.find((p) => p.id === id);
   const [expanded, setExpanded] = useState<keyof ScoreComponents | null>(null);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
@@ -118,10 +196,32 @@ export default function PlantDetail() {
 
   const spot = useMemo(() => spots.find((s) => s.id === plant?.spotId), [spots, plant]);
   const sensor = useMemo(() => sensors.find((s) => s.id === plant?.sensorId), [sensors, plant]);
-  const displayScore = useLiquidScore(plant?.score ?? 0);
   const { reading: liveReading, history: liveHistory, deviceId: liveDeviceId } = useLiveReading(
     typeof id === 'string' ? id : undefined,
   );
+  const weather = useWeather(); // shares the cached location/weather; no extra prompt
+  // Apply this sensor's calibration offsets so the whole screen — health,
+  // status, watering, charts — uses corrected values consistently (§8/§6).
+  const cal = calibrations[sensor?.id ?? liveDeviceId ?? ''] ?? null;
+  const calReading = useMemo(
+    () => (liveReading ? applyCalibration(liveReading, cal) : liveReading),
+    [liveReading, cal],
+  );
+  const calHistory = useMemo(
+    () => (cal ? liveHistory.map((r) => applyCalibration(r, cal)) : liveHistory),
+    [liveHistory, cal],
+  );
+  // Live health, computed from the sensor vs this species' ideals (§9). When
+  // measured, it — not the seeded estimate — drives the hero ring (§3).
+  const health = useMemo(
+    () =>
+      plant && liveDeviceId
+        ? computeHealth(plant.species, plant.comfortBand, liveReading, liveHistory, settings.unitsF, cal)
+        : null,
+    [plant, liveDeviceId, liveReading, liveHistory, settings.unitsF, cal],
+  );
+  const effectiveScore = health?.measured ? health.total : plant?.score ?? 0;
+  const displayScore = useLiquidScore(effectiveScore);
 
   if (!plant) {
     return (
@@ -131,18 +231,25 @@ export default function PlantDetail() {
     );
   }
 
-  const band = bandFor(plant.score);
+  const band = bandFor(effectiveScore);
   const advice = adviceFor(plant, spot);
   const ideal = idealsFor(plant.species, plant.comfortBand);
   const toneColor = (t: Tone) =>
     t === 'good' ? accent.sage : t === 'warn' ? accent.sunbeam : t === 'bad' ? accent.clay : dark.inkMuted;
-  const watering = liveDeviceId ? wateringAdvice(liveHistory, ideal.band, plant.species) : null;
-  const insights = liveDeviceId ? insightsFor(liveHistory, plant.species, ideal.band) : [];
-  const care = careFor(plant.species);
+  const watering = liveDeviceId ? wateringAdvice(calHistory, ideal.band, plant.species) : null;
+  // Outdoor plants fold the forecast into the watering call (rain → hold off;
+  // heat → sooner). The sensor's drying trend stays the ground truth.
+  const outdoor = !!spot?.outdoor;
+  const schedule = liveDeviceId
+    ? computeSchedule(calHistory, ideal.band, plant.species, { weather: weather.weather, outdoor })
+    : null;
+  const wImpact = weatherWateringImpact(weather.weather, outdoor);
+  const insights = liveDeviceId ? insightsFor(calHistory, plant.species, ideal.band) : [];
+  const careProfile = careProfileFor(plant.species);
   // Which species would thrive in THIS spot, from the sensor's real environment.
   const spotMatches =
-    liveReading != null
-      ? plantsForEnvironment(liveReading.light_lux, liveReading.temp_c, liveReading.humidity_pct, 5).filter(
+    calReading != null
+      ? plantsForEnvironment(calReading.light_lux, calReading.temp_c, calReading.humidity_pct, 5).filter(
           (m) => m.species.common !== plant.species,
         )
       : [];
@@ -291,10 +398,10 @@ export default function PlantDetail() {
               <Card>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: 16 }}>
                   {[
-                    { label: 'Soil', s: soilStatus(liveReading?.soil_pct, ideal.band) },
-                    { label: 'Light', s: lightStatus(liveReading?.light_lux, ideal.dli) },
-                    { label: 'Temperature', s: tempStatus(liveReading?.temp_c, ideal.temp) },
-                    { label: 'Humidity', s: humidityStatus(liveReading?.humidity_pct, ideal.rhFloor) },
+                    { label: 'Soil', s: soilStatus(calReading?.soil_pct, ideal.band) },
+                    { label: 'Light', s: lightStatus(calReading?.light_lux, ideal.dli) },
+                    { label: 'Temperature', s: tempStatus(calReading?.temp_c, ideal.temp) },
+                    { label: 'Humidity', s: humidityStatus(calReading?.humidity_pct, ideal.rhFloor) },
                   ].map(({ label, s }) => (
                     <View key={label} style={{ width: '50%', paddingRight: 8 }}>
                       <Text style={[type.cardTitle, { color: toneColor(s.tone), fontSize: 18 }]}>{s.label}</Text>
@@ -321,6 +428,34 @@ export default function PlantDetail() {
             </>
           )}
 
+          {/* ── Plant health: transparent, live-computed breakdown (§9) ── */}
+          {health?.measured && (
+            <>
+              <SectionHeader>Plant health</SectionHeader>
+              <Card>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+                  <VitalityRing score={health.total} size={58} showLabel={false} trackColor={dark.hairline} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[type.ritualTitle, { color: bandFor(health.total).color, fontSize: 26 }]}>
+                      {health.total}%
+                    </Text>
+                    <Text style={[type.caption, { color: dark.inkMuted, marginTop: 1, lineHeight: 17 }]}>
+                      {health.word} · {health.summary}
+                    </Text>
+                  </View>
+                </View>
+                <Hairline style={{ marginTop: 14 }} />
+                {health.components.map((c) => (
+                  <HealthRow key={c.key} c={c} />
+                ))}
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 16, lineHeight: 15 }]}>
+                  Score = sum of the five components (max 100), each judged against {plant.species}&apos;s ideal
+                  ranges. Light is a relative index, so it&apos;s a coarser estimate than the measured metrics.
+                </Text>
+              </Card>
+            </>
+          )}
+
           {/* ── Watering: direct call from the sensor (replaces generic advice) ── */}
           {watering && (
             <>
@@ -336,6 +471,65 @@ export default function PlantDetail() {
                   <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
                     Still gathering history — accuracy climbs with every reading.
                   </Text>
+                )}
+
+                {/* Scheduled next watering — an exact date/time, not "check Friday" (§5) */}
+                {schedule && (
+                  <>
+                    <Hairline style={{ marginVertical: 14 }} />
+                    <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
+                      NEXT WATERING
+                    </Text>
+                    <Text
+                      style={[
+                        type.cardTitle,
+                        { color: schedule.status === 'overdue' ? accent.clay : dark.ink, marginTop: 4 },
+                      ]}
+                    >
+                      {schedule.whenLabel}
+                    </Text>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, lineHeight: 15 }]}>
+                      {schedule.basis}
+                      {schedule.confidence === 'low' ? ' (early estimate)' : ''}
+                    </Text>
+                    {wImpact.applies && (
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          gap: 7,
+                          marginTop: 10,
+                          padding: 9,
+                          borderRadius: 10,
+                          backgroundColor: `${wImpact.effect === 'delay' ? accent.verdant : accent.sunbeam}18`,
+                        }}
+                      >
+                        <Ionicons
+                          name={wImpact.effect === 'delay' ? 'rainy-outline' : 'flame-outline'}
+                          size={14}
+                          color={wImpact.effect === 'delay' ? accent.verdant : accent.sunbeam}
+                          style={{ marginTop: 1 }}
+                        />
+                        <Text style={[type.micro, { color: dark.ink, flex: 1, lineHeight: 15 }]}>
+                          {wImpact.note}
+                        </Text>
+                      </View>
+                    )}
+                    {schedule.checkAt && schedule.status === 'scheduled' && (
+                      <Pressable
+                        onPress={() =>
+                          shareContent({
+                            message: wateringIcs(plant.name, schedule.checkAt as Date),
+                            title: `Water ${plant.name}`,
+                            filename: `water-${plant.name.replace(/\s+/g, '-').toLowerCase()}.ics`,
+                          })
+                        }
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, minHeight: 36 }}
+                      >
+                        <Ionicons name="calendar-outline" size={15} color={accent.verdant} />
+                        <Text style={[type.caption, { color: accent.verdant }]}>Add to calendar</Text>
+                      </Pressable>
+                    )}
+                  </>
                 )}
               </Card>
             </>
@@ -390,10 +584,10 @@ export default function PlantDetail() {
           <SectionHeader>Soil moisture</SectionHeader>
           <Card>
             {liveDeviceId ? (
-              liveHistory.length >= 2 ? (
+              calHistory.length >= 2 ? (
                 <>
                   <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 84, gap: 3 }}>
-                    {liveHistory.map((r, i) => (
+                    {calHistory.map((r, i) => (
                       <View
                         key={i}
                         style={{
@@ -401,13 +595,13 @@ export default function PlantDetail() {
                           height: `${Math.max(4, Math.min(100, r.soil_pct ?? 0))}%`,
                           backgroundColor: accent.verdant,
                           borderRadius: 2,
-                          opacity: 0.45 + 0.55 * (i / Math.max(1, liveHistory.length - 1)),
+                          opacity: 0.45 + 0.55 * (i / Math.max(1, calHistory.length - 1)),
                         }}
                       />
                     ))}
                   </View>
                   <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
-                    Last {liveHistory.length} readings · now {liveReading?.soil_pct ?? '—'}%. History keeps
+                    Last {calHistory.length} readings · now {calReading?.soil_pct ?? '—'}%. History keeps
                     filling in as your sensor reports.
                   </Text>
                 </>
@@ -432,10 +626,10 @@ export default function PlantDetail() {
             <>
               <SectionHeader>Light</SectionHeader>
               <Card>
-                {liveHistory.length >= 2 ? (
+                {calHistory.length >= 2 ? (
                   <>
                     <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 84, gap: 3 }}>
-                      {liveHistory.map((r, i) => (
+                      {calHistory.map((r, i) => (
                         <View
                           key={i}
                           style={{
@@ -443,13 +637,13 @@ export default function PlantDetail() {
                             height: `${Math.max(4, Math.min(100, r.light_lux ?? 0))}%`,
                             backgroundColor: accent.sunbeam,
                             borderRadius: 2,
-                            opacity: 0.45 + 0.55 * (i / Math.max(1, liveHistory.length - 1)),
+                            opacity: 0.45 + 0.55 * (i / Math.max(1, calHistory.length - 1)),
                           }}
                         />
                       ))}
                     </View>
                     <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
-                      Relative light (0–100) from your sensor · now {liveReading?.light_lux ?? '—'}. Taller
+                      Relative light (0–100) from your sensor · now {calReading?.light_lux ?? '—'}. Taller
                       bar = brighter at that reading.
                     </Text>
                   </>
@@ -462,44 +656,107 @@ export default function PlantDetail() {
             </>
           )}
 
-          {/* ── Care guide (from the knowledge base) ── */}
-          {care && (
-            <Card style={{ marginTop: 10 }}>
-              <Pressable
-                onPress={() => setCareOpen(!careOpen)}
-                style={{ flexDirection: 'row', alignItems: 'center', minHeight: 36 }}
-              >
-                <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]}>
-                  {plant.species} care guide
-                </Text>
-                <Ionicons name={careOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark.inkMuted} />
-              </Pressable>
-              {careOpen && (
-                <View style={{ marginTop: 8 }}>
-                  {(
-                    [
-                      ['💧', 'Signs of overwatering', care.overwatering],
-                      ['🏜️', 'Signs of underwatering', care.underwatering],
-                      ['☀️', 'Too much light', care.tooMuchLight],
-                      ['🌑', 'Too little light', care.tooLittleLight],
-                      ['🌱', 'Growth', care.growth],
-                      ['🧪', 'Fertilizer', care.fertilizer],
-                      ['😴', 'Dormancy', care.dormancy],
-                      ['🐛', 'Common pests', care.pests],
-                      ['🪴', 'Potting', care.potting],
-                    ] as [string, string, string][]
-                  ).map(([emoji, label, text], i) => (
-                    <View key={label}>
-                      {i > 0 && <Hairline style={{ marginVertical: 10 }} />}
-                      <Text style={[type.caption, { color: dark.inkMuted }]}>
-                        {emoji} {label}
-                      </Text>
-                      <Text style={[type.body, { color: dark.ink, marginTop: 3, lineHeight: 21 }]}>{text}</Text>
-                    </View>
-                  ))}
+          {/* ── Care guide (measurable, from the plant database) ── */}
+          {careProfile && (
+            <>
+              <SectionHeader>Care guide</SectionHeader>
+              <Card>
+                {/* header: species + verified/estimate honesty badge */}
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[type.cardTitle, { color: dark.ink }]}>{plant.species}</Text>
+                    <Text style={[type.micro, { color: dark.inkMuted, fontStyle: 'italic', marginTop: 1 }]}>
+                      {plant.latin}
+                    </Text>
+                  </View>
+                  <Chip
+                    label={careProfile.verified ? '✓ Verified' : 'Category estimate'}
+                    color={careProfile.verified ? accent.sage : accent.sunbeamText}
+                  />
                 </View>
-              )}
-            </Card>
+
+                {/* fact chips */}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+                  <Fact label="Difficulty" value={careProfile.difficulty} />
+                  <Fact label="Growth rate" value={careProfile.growthRate} />
+                  <Fact label="Mature size" value={careProfile.matureSize} />
+                  <Fact label="Hardiness" value={careProfile.hardinessZones} />
+                  <Fact label="Placement" value={careProfile.placement} />
+                </View>
+
+                {/* pet toxicity — safety-forward, always visible */}
+                {(() => {
+                  const t = toxSummary(careProfile.toxicity);
+                  return (
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        gap: 8,
+                        marginTop: 12,
+                        padding: 10,
+                        borderRadius: 12,
+                        backgroundColor: `${t.color}18`,
+                      }}
+                    >
+                      <Ionicons name={t.icon} size={16} color={t.color} style={{ marginTop: 1 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[type.micro, { color: t.color, letterSpacing: 0.3 }]}>
+                          PET TOXICITY · {careProfile.toxicity.source}
+                        </Text>
+                        <Text style={[type.caption, { color: dark.ink, marginTop: 2, lineHeight: 18 }]}>
+                          {t.text}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })()}
+
+                {/* measurable, always-visible care lines */}
+                <CareLine emoji="💧" label="Water" text={careProfile.moisture.note} />
+                <CareLine emoji="☀️" label="Light" text={careProfile.light.note} />
+                <CareLine emoji="🌡️" label="Temperature" text={careProfile.temperature.note} />
+                <CareLine emoji="💨" label="Humidity" text={careProfile.humidity.note} />
+                <CareLine
+                  emoji="🪴"
+                  label="Soil & drainage"
+                  text={`${careProfile.soil.type}. Drainage: ${careProfile.soil.drainage.toLowerCase()}. ${careProfile.soil.potting}`}
+                />
+                <CareLine emoji="🧪" label="Fertilizer" text={careProfile.fertilizer} />
+
+                {/* expandable: seasonal, dormancy, diseases, pests, warning signs */}
+                <Pressable
+                  onPress={() => setCareOpen(!careOpen)}
+                  style={{ flexDirection: 'row', alignItems: 'center', minHeight: 40, marginTop: 8 }}
+                >
+                  <Text style={[type.caption, { color: accent.verdant, flex: 1 }]}>
+                    {careOpen ? 'Less detail' : 'Seasonal care, pests & warning signs'}
+                  </Text>
+                  <Ionicons name={careOpen ? 'chevron-up' : 'chevron-down'} size={16} color={accent.verdant} />
+                </Pressable>
+                {careOpen && (
+                  <View>
+                    <Hairline style={{ marginBottom: 4 }} />
+                    <CareLine emoji="🍂" label="Seasonal adjustments" text={careProfile.seasonal} />
+                    <CareLine emoji="😴" label="Dormancy" text={careProfile.dormancy} />
+                    <CareLine emoji="🌱" label="Growth expectations" text={careProfile.growthExpectations} />
+                    <CareLine emoji="🦠" label="Common diseases" text={careProfile.diseases} />
+                    <CareLine emoji="🐛" label="Common pests" text={careProfile.pests} />
+                    <CareLine emoji="💧" label="Signs of overwatering" text={careProfile.signs.overwatering} />
+                    <CareLine emoji="🏜️" label="Signs of underwatering" text={careProfile.signs.underwatering} />
+                    <CareLine emoji="🔆" label="Too much light" text={careProfile.signs.tooMuchLight} />
+                    <CareLine emoji="🌑" label="Too little light" text={careProfile.signs.tooLittleLight} />
+                  </View>
+                )}
+
+                {/* sources + honesty footer */}
+                <Hairline style={{ marginVertical: 12 }} />
+                <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 15 }]}>
+                  Sources: {careProfile.sources.join(' · ')}.
+                  {!careProfile.verified &&
+                    ' Values are typical for this plant’s category — accurate as a baseline, but not individually verified for this species.'}
+                </Text>
+              </Card>
+            </>
           )}
 
           {/* ── What thrives in this spot (compatibility from the sensor) ── */}
