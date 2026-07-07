@@ -5,7 +5,7 @@ import { Pressable, Text, View } from 'react-native';
 
 import { Card, GButton, Hairline, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
-import { accent, light, type } from '@/constants/theme';
+import { light, type } from '@/constants/theme';
 import { gardenAverage, useGreenr } from '@/lib/store';
 
 /** The Sunday briefing (§8.3) — a ritual, not an instrument. Light surface. */
@@ -21,6 +21,14 @@ export default function Briefing() {
   const careMinutes = tasks.filter((t) => !t.done).reduce((a, t) => a + t.minutes, 0);
   const lowBattery = sensors.filter((s) => s.batteryPct < 20);
   const monstera = plants.find((p) => p.id === 'pl-monstera');
+  // "What changed" is drawn from real logged events this week — never canned copy.
+  const changes = plants
+    .flatMap((p) =>
+      p.timeline
+        .filter((e) => e.daysAgo <= 7 && (e.kind === 'insight' || e.kind === 'diagnosis' || e.kind === 'band-change'))
+        .map((e) => ({ id: `${p.id}-${e.id}`, text: e.text })),
+    )
+    .slice(0, 3);
   const dateLine = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
@@ -55,23 +63,25 @@ export default function Briefing() {
             <View style={{ flex: 1 }}>
               <Text style={[type.micro, { color: light.inkMuted }]}>GARDEN AVERAGE</Text>
               <Text style={[type.body, { color: light.ink, marginTop: 4, lineHeight: 21 }]}>
-                <Text style={{ color: accent.verdant }}>Up 3 from last week.</Text>{' '}
                 {plants.filter((p) => p.score >= 85).length} of {plants.length} thriving.
               </Text>
             </View>
           </Card>
 
-          {/* what changed — 2–3 evidence sentences max */}
-          <Card mode="light" style={{ marginTop: 10 }}>
-            <Text style={[type.micro, { color: light.inkMuted }]}>WHAT CHANGED</Text>
-            <Text style={[type.body, { color: light.ink, marginTop: 6, lineHeight: 22 }]}>
-              Humidity recovered after you moved the humidifier — Fern +11.
-            </Text>
-            <Text style={[type.body, { color: light.ink, marginTop: 6, lineHeight: 22 }]}>
-              Calathea: RH at Desk corner averaged 44% vs its 55% floor — the main driver of its
-              slide to 61.
-            </Text>
-          </Card>
+          {/* what changed — from this week's real logged events */}
+          {changes.length > 0 && (
+            <Card mode="light" style={{ marginTop: 10 }}>
+              <Text style={[type.micro, { color: light.inkMuted }]}>WHAT CHANGED</Text>
+              {changes.map((c, i) => (
+                <Text
+                  key={c.id}
+                  style={[type.body, { color: light.ink, marginTop: i === 0 ? 6 : 6, lineHeight: 22 }]}
+                >
+                  {c.text}
+                </Text>
+              ))}
+            </Card>
+          )}
 
           {/* this week's care */}
           <Card mode="light" style={{ marginTop: 10 }}>

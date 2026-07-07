@@ -9,7 +9,9 @@ import { Card, GButton, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
 import { primaryAction } from '@/lib/advice';
+import { vitalityFor } from '@/lib/health';
 import { activePlants, useGreenr } from '@/lib/store';
+import { useAllLiveReadings } from '@/lib/useLiveReading';
 import { Plant } from '@/lib/types';
 
 type SortKey = 'Urgency' | 'Score' | 'Room' | 'Recent';
@@ -17,8 +19,11 @@ const SORTS: SortKey[] = ['Urgency', 'Score', 'Room', 'Recent'];
 
 export default function GardenTab() {
   const router = useRouter();
-  const { plants: allPlants, spots, logWater } = useGreenr();
+  const { plants: allPlants, spots, logWater, calibrations, settings } = useGreenr();
   const plants = activePlants(allPlants);
+  const liveReadings = useAllLiveReadings();
+  const vitality = (p: Plant) =>
+    vitalityFor(p, liveReadings.has(p.id), liveReadings.get(p.id) ?? null, p.sensorId ? calibrations[p.sensorId] : null, settings.unitsF);
   const [sort, setSort] = useState<SortKey>('Urgency');
   const [grid, setGrid] = useState(true);
   const [quickFor, setQuickFor] = useState<string | null>(null);
@@ -95,7 +100,9 @@ export default function GardenTab() {
           marginTop: 16,
         }}
       >
-        {sorted.map((p) => (
+        {sorted.map((p) => {
+          const v = vitality(p);
+          return (
           <Card
             key={p.id}
             onPress={() => router.push(`/plant/${p.id}`)}
@@ -107,8 +114,8 @@ export default function GardenTab() {
               style={{ alignItems: grid ? 'center' : 'flex-start', width: '100%' }}
             >
               <View style={{ flexDirection: grid ? 'column' : 'row', alignItems: 'center', gap: grid ? 10 : 14, width: '100%' }}>
-                <Breathing enabled={p.score >= 85}>
-                  <VitalityRing score={p.score} size={84} estimate={p.estimate} estimateBand={p.estimateBand} showLabel={false}>
+                <Breathing enabled={!v.awaiting && v.score >= 85}>
+                  <VitalityRing score={v.awaiting ? 0 : v.score} size={84} estimate={v.estimate} estimateBand={v.estimateBand} showLabel={false}>
                     <PlantAvatar photoUri={p.photoUri} emoji={p.emoji} size={58} />
                   </VitalityRing>
                 </Breathing>
@@ -117,15 +124,15 @@ export default function GardenTab() {
                     <Text style={[type.cardTitle, { color: dark.ink, fontSize: 18 }]} numberOfLines={1}>
                       {p.name}
                     </Text>
-                    {p.sensorId && <Ionicons name="hardware-chip-outline" size={12} color={dark.inkMuted} />}
+                    {(v.sensored || p.sensorId) && <Ionicons name="hardware-chip-outline" size={12} color={accent.sage} />}
                     {p.watchMode && <Ionicons name="pulse-outline" size={12} color={accent.sunbeam} />}
                   </View>
                   <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1 }]} numberOfLines={1}>
                     {spotName(p.spotId)}
                   </Text>
                   <Text style={[type.numHero as any, { fontSize: 22, color: dark.ink, marginTop: 6 }]}>
-                    {p.score}
-                    {p.estimate && <Text style={[type.micro, { color: dark.inkMuted }]}> ±{p.estimateBand}</Text>}
+                    {v.awaiting ? 'N/A' : v.score}
+                    {v.estimate && <Text style={[type.micro, { color: dark.inkMuted }]}> ±{v.estimateBand}</Text>}
                   </Text>
                   <Text
                     style={[
@@ -133,12 +140,18 @@ export default function GardenTab() {
                       {
                         marginTop: 4,
                         textAlign: grid ? 'center' : 'left',
-                        color: p.score >= 85 ? accent.sage : p.forecast.criticalInDays != null ? accent.sunbeam : dark.inkMuted,
+                        color: v.awaiting
+                          ? dark.inkMuted
+                          : v.score >= 85
+                            ? accent.sage
+                            : p.forecast.criticalInDays != null && !v.sensored
+                              ? accent.sunbeam
+                              : dark.inkMuted,
                       },
                     ]}
                     numberOfLines={2}
                   >
-                    {statusLine(p)}
+                    {v.awaiting ? 'Awaiting first reading' : v.sensored ? v.word : statusLine(p)}
                   </Text>
                 </View>
               </View>
@@ -167,7 +180,8 @@ export default function GardenTab() {
               </View>
             )}
           </Card>
-        ))}
+          );
+        })}
       </View>
     </Screen>
   );

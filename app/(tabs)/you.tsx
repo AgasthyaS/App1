@@ -1,22 +1,60 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 
-import Sparkline from '@/components/greenr/Sparkline';
 import { Card, Row, Screen, SectionHeader, StatusDot } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
-import { activePlants, gardenAverage, useGreenr } from '@/lib/store';
+import { connectionFrom } from '@/lib/devices';
+import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
+import { activePlants, useGreenr } from '@/lib/store';
+import type { SensorStatus } from '@/lib/types';
+import { useAllLiveReadings } from '@/lib/useLiveReading';
+import { useMyDevices } from '@/lib/useDevices';
 
 /** You tab (§11) — identity, the stats band, collection, devices, Plus, settings. */
 export default function YouTab() {
   const router = useRouter();
-  const { plants: allPlants, sensors, spots, accuracy, settings, profile } = useGreenr();
+  const { plants: allPlants, sensors, spots, accuracy, settings, profile, calibrations } = useGreenr();
   const plants = activePlants(allPlants);
-  const avg = gardenAverage(plants);
+  const liveReadings = useAllLiveReadings();
+  const { devices } = useMyDevices();
+  const deviceCount = sensors.length + devices.length;
+  const connToStatus = (s: 'online' | 'idle' | 'offline'): SensorStatus =>
+    s === 'online' ? 'online' : s === 'idle' ? 'late' : 'offline';
+  const avg = gardenVitalityAvg(
+    plants.map((p) => ({
+      plant: p,
+      hasSensor: liveReadings.has(p.id),
+      reading: liveReadings.get(p.id) ?? null,
+      calibration: p.sensorId ? calibrations[p.sensorId] : null,
+    })),
+    settings.unitsF,
+  );
+  // A plant with a live sensor is measured, not estimated — exclude it from the
+  // "estimated" stats language (§6).
+  const hasEstimated = plants.some((p) => p.estimate && !liveReadings.has(p.id));
   const hits = accuracy.filter((a) => a.hit).length;
   const accuracyPct = accuracy.length ? Math.round((hits / accuracy.length) * 100) : null;
   const name = profile?.name ?? 'Gardener';
+
+  // Real derived stats (§3 — no hardcoded demo numbers). Care events come from
+  // the plants' own logged timelines; vitality from live readings.
+  const careEvents = plants.flatMap((p) => p.timeline).filter((e) => e.kind === 'care');
+  const wateringsLogged = careEvents.length;
+  const verifiedCare = careEvents.filter((e) => e.verified).length;
+  const consistency = wateringsLogged ? Math.round((verifiedCare / wateringsLogged) * 100) : null;
+  const thrivingNow = plants.filter((p) => {
+    const v = vitalityFor(
+      p,
+      liveReadings.has(p.id),
+      liveReadings.get(p.id) ?? null,
+      p.sensorId ? calibrations[p.sensorId] : null,
+      settings.unitsF,
+    );
+    return !v.awaiting && v.score >= 85;
+  }).length;
+  const sensoredCount = plants.filter((p) => liveReadings.has(p.id)).length;
 
   return (
     <Screen>
@@ -57,13 +95,13 @@ export default function YouTab() {
           <Text style={[type.numHero as any, { fontSize: 32, color: dark.ink, marginTop: 6 }]}>
             {plants.length ? avg : '—'}
           </Text>
-          {plants.length > 0 && (
-            <View style={{ marginTop: 8 }}>
-              <Sparkline trend14={plants[0]?.scoreTrend14 ?? []} width={60} height={18} color={accent.sage} />
-            </View>
-          )}
-          {plants.some((p) => p.estimate) && (
-            <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 14 }]}>
+          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 14 }]}>
+            {plants.length
+              ? `${thrivingNow} of ${plants.length} thriving${sensoredCount ? ` · ${sensoredCount} sensored` : ''}`
+              : 'add a plant to begin'}
+          </Text>
+          {hasEstimated && (
+            <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 14 }]}>
               Partly estimated — a prediction, not a promise.
             </Text>
           )}
@@ -71,10 +109,12 @@ export default function YouTab() {
         <Card style={{ width: 180 }}>
           <Text style={[type.micro, { color: dark.inkMuted }]}>CARE CONSISTENCY</Text>
           <Text style={[type.numHero as any, { fontSize: 32, color: dark.ink, marginTop: 6 }]}>
-            {plants.length ? '92%' : '—'}
+            {consistency != null ? `${consistency}%` : '—'}
           </Text>
           <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6 }]}>
-            verified care within a day of forecast, 12 weeks
+            {consistency != null
+              ? `${verifiedCare} of ${wateringsLogged} waterings sensor-verified`
+              : 'builds as you log and verify care'}
           </Text>
         </Card>
         <Card style={{ width: 200 }} onPress={() => router.push('/accuracy')}>
@@ -89,18 +129,18 @@ export default function YouTab() {
           </Text>
         </Card>
         <Card style={{ width: 200 }}>
-          <Text style={[type.micro, { color: dark.inkMuted }]}>RECORDS</Text>
+          <Text style={[type.micro, { color: dark.inkMuted }]}>YOUR GARDEN</Text>
           {plants.length ? (
             <View style={{ marginTop: 6, gap: 4 }}>
-              <Text style={[type.caption, { color: dark.ink }]}>Longest thriving run: 60 d</Text>
-              <Text style={[type.caption, { color: dark.ink }]}>Plants rescued: 1</Text>
-              <Text style={[type.caption, { color: dark.ink }]}>Verified waterings: 48</Text>
+              <Text style={[type.caption, { color: dark.ink }]}>Plants: {plants.length}</Text>
+              <Text style={[type.caption, { color: dark.ink }]}>Thriving now: {thrivingNow}</Text>
+              <Text style={[type.caption, { color: dark.ink }]}>Waterings logged: {wateringsLogged}</Text>
             </View>
           ) : (
             <Text style={[type.caption, { color: dark.inkMuted, marginTop: 6 }]}>none yet</Text>
           )}
         </Card>
-        {plants.some((p) => p.estimate) && (
+        {hasEstimated && (
           <Card
             elevated
             style={{ width: 200, justifyContent: 'center' }}
@@ -116,7 +156,7 @@ export default function YouTab() {
           </Card>
         )}
       </ScrollView>
-      {plants.some((p) => p.estimate) && (
+      {hasEstimated && (
         <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 15 }]}>
           Stats on estimated plants are model predictions and can be off — Greenr says so rather
           than pretending. Sensors close the gap.
@@ -126,30 +166,45 @@ export default function YouTab() {
       {/* collection summary */}
       <SectionHeader>Collection</SectionHeader>
       <Card>
-        <Row title={`${plants.length} plants`} value="Garden →" onPress={() => router.push('/garden')} />
-        <Row title={`${sensors.length} sensors`} value="Devices →" onPress={() => router.push('/devices')} />
-        <Row title={`${spots.length} spots`} value="Home →" onPress={() => router.push('/home')} />
+        <Row title={`${plants.length} plant${plants.length === 1 ? '' : 's'}`} value="Garden →" onPress={() => router.push('/garden')} />
+        <Row title={`${deviceCount} sensor${deviceCount === 1 ? '' : 's'}`} value="Devices →" onPress={() => router.push('/devices')} />
+        <Row title={`${spots.length} spot${spots.length === 1 ? '' : 's'}`} value="Home →" onPress={() => router.push('/home')} />
       </Card>
 
       {/* devices */}
       <SectionHeader>Devices</SectionHeader>
       <Card>
-        {sensors.length === 0 && (
-          <Text style={[type.caption, { color: dark.inkMuted }]}>No sensors yet.</Text>
+        {deviceCount === 0 && (
+          <Text style={[type.caption, { color: dark.inkMuted }]}>No sensors paired yet.</Text>
         )}
-        {sensors.map((s) => (
-          <View key={s.id} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}>
-            <Text
-              style={[type.body, { color: dark.ink, flex: 1 }]}
-              onPress={() => router.push(`/sensor/${s.id}`)}
+        {devices.map((d) => {
+          const conn = connectionFrom(d.device.last_seen);
+          return (
+            <Pressable
+              key={d.device.id}
+              onPress={() => router.push('/devices')}
+              style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}
             >
-              {s.name}
-            </Text>
+              <Text style={[type.body, { color: dark.ink, flex: 1 }]} numberOfLines={1}>
+                {d.device.label?.trim() || 'Greenr sensor'}
+              </Text>
+              <Text style={[type.caption, { color: dark.inkMuted, marginRight: 10 }]}>{conn.sinceLabel}</Text>
+              <StatusDot status={connToStatus(conn.status)} />
+            </Pressable>
+          );
+        })}
+        {sensors.map((s) => (
+          <Pressable
+            key={s.id}
+            onPress={() => router.push(`/sensor/${s.id}`)}
+            style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}
+          >
+            <Text style={[type.body, { color: dark.ink, flex: 1 }]}>{s.name}</Text>
             <Text style={[type.caption, { color: dark.inkMuted, marginRight: 10 }]}>{s.batteryPct}%</Text>
             <StatusDot status={s.status} />
-          </View>
+          </Pressable>
         ))}
-        <Row title="Add sensor" onPress={() => router.push('/pair-sensor')} />
+        <Row title="Manage & pair sensors" value="→" onPress={() => router.push('/devices')} />
       </Card>
 
       {/* Greenr+ */}

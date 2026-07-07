@@ -12,6 +12,46 @@ import {
 import { supabase } from './supabase';
 
 /**
+ * Recent reading history for every sensored plant, keyed by plant id. Powers the
+ * Forecast tab, where projecting each plant's next-watering date needs the
+ * drying trend (not just the latest value). Refreshes every 60s.
+ */
+export function useAllReadingHistories(): Map<string, Reading[]> {
+  const [map, setMap] = useState<Map<string, Reading[]>>(new Map());
+
+  useEffect(() => {
+    if (!supabase) return;
+    let alive = true;
+
+    const load = async () => {
+      const { data: devs } = await supabase!
+        .from('devices')
+        .select('id,plant_key')
+        .not('plant_key', 'is', null);
+      if (!devs || !alive) return;
+      const next = new Map<string, Reading[]>();
+      await Promise.all(
+        devs.map(async (d: any) => {
+          if (!d.plant_key) return;
+          const h = await getReadingHistory(d.id, 48);
+          if (h.length) next.set(d.plant_key, h);
+        }),
+      );
+      if (alive) setMap(next);
+    };
+
+    load();
+    const iv = setInterval(load, 60000);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
+  }, []);
+
+  return map;
+}
+
+/**
  * Live sensor data for a given plant. Finds the device paired to that plant
  * (devices.plant_key), pulls its newest reading plus recent history, and
  * refreshes every 30s. Also nudges the device to report soon (read_now).

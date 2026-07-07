@@ -13,7 +13,7 @@ import { useGreenr } from '@/lib/store';
 const TABS: { name: string; label: string; icon: string; iconActive: string }[] = [
   { name: 'index', label: 'Forecast', icon: 'trending-up-outline', iconActive: 'trending-up' },
   { name: 'garden', label: 'Garden', icon: 'leaf-outline', iconActive: 'leaf' },
-  { name: 'home', label: 'Home', icon: 'grid-outline', iconActive: 'grid' },
+  { name: 'home', label: 'Home', icon: 'home-outline', iconActive: 'home' },
   { name: 'you', label: 'You', icon: 'person-circle-outline', iconActive: 'person-circle' },
 ];
 

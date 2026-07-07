@@ -220,7 +220,12 @@ export default function PlantDetail() {
         : null,
     [plant, liveDeviceId, liveReading, liveHistory, settings.unitsF, cal],
   );
-  const effectiveScore = health?.measured ? health.total : plant?.score ?? 0;
+  // A live sensor is authoritative: never show estimate visuals for it (§6).
+  const sensored = liveDeviceId != null;
+  const measured = !!health?.measured;
+  const awaiting = sensored && !measured; // paired but no reading yet
+  const showEstimate = !!plant?.estimate && !sensored;
+  const effectiveScore = measured ? health!.total : plant?.score ?? 0;
   const displayScore = useLiquidScore(effectiveScore);
 
   if (!plant) {
@@ -246,6 +251,9 @@ export default function PlantDetail() {
   const wImpact = weatherWateringImpact(weather.weather, outdoor);
   const insights = liveDeviceId ? insightsFor(calHistory, plant.species, ideal.band) : [];
   const careProfile = careProfileFor(plant.species);
+  // Charts plot only real readings — a missing metric is skipped, never drawn as 0.
+  const soilBars = calHistory.filter((r) => r.soil_pct != null);
+  const lightBars = calHistory.filter((r) => r.light_lux != null);
   // Which species would thrive in THIS spot, from the sensor's real environment.
   const spotMatches =
     calReading != null
@@ -341,13 +349,13 @@ export default function PlantDetail() {
             )}
 
             <View style={{ alignItems: 'center', marginTop: 6 }}>
-              <Breathing enabled={plant.score >= 85}>
+              <Breathing enabled={!awaiting && effectiveScore >= 85}>
                 {plant.photoUri ? (
                   <VitalityRing
-                    score={displayScore}
+                    score={awaiting ? 0 : displayScore}
                     size={132}
-                    estimate={plant.estimate}
-                    estimateBand={plant.estimateBand}
+                    estimate={showEstimate}
+                    estimateBand={showEstimate ? plant.estimateBand : 0}
                     showLabel={false}
                     trackColor={dark.hairline}
                   >
@@ -355,26 +363,34 @@ export default function PlantDetail() {
                   </VitalityRing>
                 ) : (
                   <VitalityRing
-                    score={displayScore}
+                    score={awaiting ? 0 : displayScore}
                     size={132}
-                    estimate={plant.estimate}
-                    estimateBand={plant.estimateBand}
-                    subLabel={plant.estimate ? `${band.word} · estimate` : band.word}
+                    estimate={showEstimate}
+                    estimateBand={showEstimate ? plant.estimateBand : 0}
+                    subLabel={awaiting ? 'Awaiting reading' : showEstimate ? `${band.word} · estimate` : band.word}
+                    showLabel={!awaiting}
                     trackColor={dark.hairline}
                   />
                 )}
               </Breathing>
-              {plant.photoUri && (
-                <Text style={[type.num as any, { fontSize: 15, color: band.color, marginTop: 10 }]}>
-                  {displayScore}
-                  {plant.estimate ? ` ±${plant.estimateBand}` : ''} · {band.word}
-                </Text>
-              )}
+              {plant.photoUri &&
+                (awaiting ? (
+                  <Text style={[type.caption, { color: dark.inkMuted, marginTop: 10 }]}>Awaiting first reading</Text>
+                ) : (
+                  <Text style={[type.num as any, { fontSize: 15, color: band.color, marginTop: 10 }]}>
+                    {displayScore}
+                    {showEstimate ? ` ±${plant.estimateBand}` : ''} · {band.word}
+                  </Text>
+                ))}
               <Text style={[type.screenTitle, { color: dark.ink, marginTop: 14 }]}>{plant.name}</Text>
               <Text style={[type.caption, { color: dark.inkMuted, marginTop: 3 }]}>
                 {plant.latin} · {spot?.name ?? '—'}
               </Text>
-              {sensor ? (
+              {sensored ? (
+                <Pressable onPress={() => router.push('/devices' as any)} style={{ marginTop: 10 }}>
+                  <Chip label={measured ? 'Sensor connected · live data' : 'Sensor connected · awaiting reading'} color={accent.sage} />
+                </Pressable>
+              ) : sensor ? (
                 <Pressable onPress={() => router.push(`/sensor/${sensor.id}`)} style={{ marginTop: 10 }}>
                   <Chip label={`${sensor.name} · soil ${sensor.latest.soilPct}%`} color={accent.verdant} />
                 </Pressable>
@@ -584,25 +600,44 @@ export default function PlantDetail() {
           <SectionHeader>Soil moisture</SectionHeader>
           <Card>
             {liveDeviceId ? (
-              calHistory.length >= 2 ? (
+              soilBars.length >= 2 ? (
                 <>
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 84, gap: 3 }}>
-                    {calHistory.map((r, i) => (
-                      <View
-                        key={i}
-                        style={{
-                          flex: 1,
-                          height: `${Math.max(4, Math.min(100, r.soil_pct ?? 0))}%`,
-                          backgroundColor: accent.verdant,
-                          borderRadius: 2,
-                          opacity: 0.45 + 0.55 * (i / Math.max(1, calHistory.length - 1)),
-                        }}
-                      />
-                    ))}
+                  <View style={{ height: 84 }}>
+                    {/* ideal comfort band shaded behind the bars */}
+                    <View
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        bottom: `${ideal.band[0]}%`,
+                        height: `${Math.max(0, ideal.band[1] - ideal.band[0])}%`,
+                        backgroundColor: `${accent.sage}22`,
+                        borderRadius: 3,
+                      }}
+                    />
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 84, gap: 3 }}>
+                      {soilBars.map((r, i) => {
+                        const v = Math.max(0, Math.min(100, r.soil_pct as number));
+                        const color =
+                          v < ideal.band[0] ? accent.clay : v > ideal.band[1] ? accent.sunbeam : accent.verdant;
+                        return (
+                          <View
+                            key={i}
+                            style={{
+                              flex: 1,
+                              height: `${Math.max(3, v)}%`,
+                              backgroundColor: color,
+                              borderRadius: 2,
+                              opacity: 0.5 + 0.5 * (i / Math.max(1, soilBars.length - 1)),
+                            }}
+                          />
+                        );
+                      })}
+                    </View>
                   </View>
                   <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
-                    Last {calHistory.length} readings · now {calReading?.soil_pct ?? '—'}%. History keeps
-                    filling in as your sensor reports.
+                    Ideal {ideal.band[0]}–{ideal.band[1]}% shaded · last {soilBars.length} readings · now{' '}
+                    {calReading?.soil_pct != null ? `${Math.round(calReading.soil_pct)}%` : '—'}.
                   </Text>
                 </>
               ) : (
@@ -626,25 +661,25 @@ export default function PlantDetail() {
             <>
               <SectionHeader>Light</SectionHeader>
               <Card>
-                {calHistory.length >= 2 ? (
+                {lightBars.length >= 2 ? (
                   <>
                     <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 84, gap: 3 }}>
-                      {calHistory.map((r, i) => (
+                      {lightBars.map((r, i) => (
                         <View
                           key={i}
                           style={{
                             flex: 1,
-                            height: `${Math.max(4, Math.min(100, r.light_lux ?? 0))}%`,
+                            height: `${Math.max(3, Math.min(100, r.light_lux as number))}%`,
                             backgroundColor: accent.sunbeam,
                             borderRadius: 2,
-                            opacity: 0.45 + 0.55 * (i / Math.max(1, calHistory.length - 1)),
+                            opacity: 0.5 + 0.5 * (i / Math.max(1, lightBars.length - 1)),
                           }}
                         />
                       ))}
                     </View>
                     <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
-                      Relative light (0–100) from your sensor · now {calReading?.light_lux ?? '—'}. Taller
-                      bar = brighter at that reading.
+                      Relative light (0–100) from your sensor · last {lightBars.length} readings · now{' '}
+                      {calReading?.light_lux != null ? Math.round(calReading.light_lux) : '—'}. Taller bar = brighter.
                     </Text>
                   </>
                 ) : (

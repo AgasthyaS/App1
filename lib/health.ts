@@ -241,3 +241,73 @@ export function computeHealth(
     summary,
   };
 }
+
+/**
+ * The single rule for "is this plant's vitality real or estimated?" (§6). A live
+ * sensor reading always wins over the plant's stored `estimate` flag — which is
+ * only the pre-sensor model and is never cleared when a sensor is later paired.
+ * Every surface (detail hero, garden cards, lists, stats) reads vitality from
+ * here so a sensored plant NEVER shows estimate visuals or "±" language.
+ */
+export interface Vitality {
+  /** a live device is paired to this plant */
+  sensored: boolean;
+  /** the sensor has actually reported */
+  measured: boolean;
+  /** sensored but no reading yet — show "awaiting", not a number or estimate */
+  awaiting: boolean;
+  /** the score to display (health when measured; the model score otherwise) */
+  score: number;
+  /** whether to draw estimate visuals (dashed ring, ± band) */
+  estimate: boolean;
+  estimateBand: number;
+  word: string;
+}
+
+export function vitalityFor(
+  plant: { species: string; comfortBand: [number, number]; score: number; estimate: boolean; estimateBand: number },
+  hasSensor: boolean,
+  reading: Reading | null,
+  calibration?: SensorCalibration | null,
+  unitsF = true,
+): Vitality {
+  if (hasSensor) {
+    const h = computeHealth(plant.species, plant.comfortBand, reading, [], unitsF, calibration);
+    return {
+      sensored: true,
+      measured: h.measured,
+      awaiting: !h.measured,
+      score: h.measured ? h.total : 0,
+      estimate: false,
+      estimateBand: 0,
+      word: h.measured ? h.word : 'Awaiting reading',
+    };
+  }
+  return {
+    sensored: false,
+    measured: false,
+    awaiting: false,
+    score: plant.score,
+    estimate: plant.estimate,
+    estimateBand: plant.estimateBand,
+    word: wordFor(plant.score),
+  };
+}
+
+/** Garden average that uses live health for sensored plants (§6). Skips plants awaiting a first reading. */
+export function gardenVitalityAvg(
+  items: {
+    plant: { species: string; comfortBand: [number, number]; score: number; estimate: boolean; estimateBand: number };
+    hasSensor: boolean;
+    reading: Reading | null;
+    calibration?: SensorCalibration | null;
+  }[],
+  unitsF = true,
+): number {
+  const scores = items
+    .map((i) => vitalityFor(i.plant, i.hasSensor, i.reading, i.calibration, unitsF))
+    .filter((v) => !v.awaiting)
+    .map((v) => v.score);
+  if (!scores.length) return 0;
+  return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+}
