@@ -1,5 +1,7 @@
 import type { Reading } from './devices';
 import { idealsFor } from './plantStatus';
+import type { PotMaterial, PotSize } from './types';
+import { mlNeeded } from './watering';
 import { weatherWateringImpact, type WeatherData } from './weather';
 
 /**
@@ -34,26 +36,33 @@ export interface NotifyContext {
   history?: Reading[];
   outdoor?: boolean;
   weather?: WeatherData | null;
+  /** pot info — lets the water alert say exactly how many ml to add */
+  pot?: { size: PotSize; material: PotMaterial };
 }
 
 const DAY = 86400000;
 const rank: Record<AlertLevel, number> = { bad: 0, warn: 1, info: 2 };
 
 export function notificationsFor(ctx: NotifyContext): Alert[] {
-  const { plantName, species, band, reading, history = [], outdoor = false, weather = null } = ctx;
+  const { plantName, species, band, reading, history = [], outdoor = false, weather = null, pot } = ctx;
   if (!reading) return [];
   const ideal = idealsFor(species, band);
   const [lo, hi] = band;
   const span = Math.max(8, hi - lo);
   const out: Alert[] = [];
 
-  // Soil moisture — below the recommended minimum.
+  // Soil moisture — below the recommended minimum. With pot info the alert says
+  // exactly how much to pour to land mid-band.
   if (reading.soil_pct != null && reading.soil_pct < lo) {
+    const target = Math.round((lo + hi) / 2);
+    const ml = pot ? mlNeeded(pot.size, pot.material, reading.soil_pct, target) : null;
     out.push({
       level: 'bad',
       key: 'soil-low',
       title: `Water ${plantName}`,
-      text: `Soil moisture has fallen to ${Math.round(reading.soil_pct)}%, below ${plantName}'s recommended minimum (${lo}%).`,
+      text: `Soil moisture has fallen to ${Math.round(reading.soil_pct)}%, below ${plantName}'s recommended minimum (${lo}%).${
+        ml ? ` Add about ${ml} ml to bring it back to ~${target}%.` : ''
+      }`,
     });
   } else if (reading.soil_pct != null && reading.soil_pct > hi + span * 0.4) {
     out.push({

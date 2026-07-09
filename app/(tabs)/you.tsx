@@ -52,7 +52,7 @@ export default function YouTab() {
       p.sensorId ? calibrations[p.sensorId] : null,
       settings.unitsF,
     );
-    return !v.awaiting && v.score >= 85;
+    return !v.awaiting && !v.pending && v.score >= 85;
   }).length;
   const sensoredCount = plants.filter((p) => liveReadings.has(p.id)).length;
 
@@ -84,7 +84,7 @@ export default function YouTab() {
               : 'Gardener'}
           </Text>
         </View>
-        {plants.length > 0 && <VitalityRing score={avg} size={56} />}
+        {avg != null && <VitalityRing score={avg} size={56} />}
       </View>
 
       {/* stats band */}
@@ -92,15 +92,17 @@ export default function YouTab() {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
         <Card style={{ width: 180 }}>
           <Text style={[type.micro, { color: dark.inkMuted }]}>GARDEN VITALITY</Text>
-          <Text style={[type.numHero as any, { fontSize: 32, color: dark.ink, marginTop: 6 }]}>
-            {plants.length ? avg : '—'}
+          <Text style={[type.numHero as any, { fontSize: 32, color: avg != null ? dark.ink : dark.inkMuted, marginTop: 6 }]}>
+            {avg != null ? avg : 'N/A'}
           </Text>
           <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 14 }]}>
-            {plants.length
-              ? `${thrivingNow} of ${plants.length} thriving${sensoredCount ? ` · ${sensoredCount} sensored` : ''}`
-              : 'add a plant to begin'}
+            {plants.length === 0
+              ? 'add a plant to begin'
+              : avg == null
+                ? 'appears once a sensor reports, or after ~10 days of tracking'
+                : `${thrivingNow} of ${plants.length} thriving${sensoredCount ? ` · ${sensoredCount} sensored` : ''}`}
           </Text>
-          {hasEstimated && (
+          {hasEstimated && avg != null && (
             <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 14 }]}>
               Partly estimated — a prediction, not a promise.
             </Text>

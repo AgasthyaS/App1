@@ -4,18 +4,17 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import ForecastBar from '@/components/greenr/ForecastBar';
 import { Card, GButton } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, layout, type } from '@/constants/theme';
-import { adviceFor, primaryAction } from '@/lib/advice';
-import { gardenVitalityAvg } from '@/lib/health';
+import { estimateWaterSchedule, type EstimateSchedule } from '@/lib/estimate';
+import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
 import { computeSchedule, type WaterSchedule } from '@/lib/schedule';
 import { activePlants, useGreenr } from '@/lib/store';
 import { useAllLiveReadings, useAllReadingHistories } from '@/lib/useLiveReading';
 import { useWeather } from '@/lib/useWeather';
 import { cToF } from '@/lib/weather';
-import { Plant, Spot } from '@/lib/types';
+import { Plant } from '@/lib/types';
 
 /**
  * Forecast (§4, Option B) — everything AHEAD: the days-ahead weather, each
@@ -23,20 +22,19 @@ import { Plant, Spot } from '@/lib/types';
  * readings, health and alerts live on Home, so nothing is duplicated.
  */
 
-function estimateUrgency(p: Plant): number {
-  if (p.forecast.criticalInDays != null) return p.forecast.criticalInDays;
-  if (p.forecast.warnInDays != null) return 100 + p.forecast.warnInDays;
-  return 1000 + (100 - p.score);
-}
-
 /** Sort key so the soonest-thirsty plants surface first, sensored or not. */
-function scheduleSort(p: Plant, s: WaterSchedule | undefined): number {
+function scheduleSort(s: WaterSchedule | undefined, est: EstimateSchedule | undefined): number {
   if (s) {
     if (s.status === 'overdue') return -1;
     if (s.nextWaterAt) return (s.nextWaterAt.getTime() - Date.now()) / 86400000;
     return 400;
   }
-  return estimateUrgency(p);
+  if (est) {
+    if (est.status === 'due') return 0;
+    if (est.dueAt) return (est.dueAt.getTime() - Date.now()) / 86400000 + 0.1;
+    return 500;
+  }
+  return 999;
 }
 
 function WeatherAhead({ w, unitsF }: { w: ReturnType<typeof useWeather>; unitsF: boolean }) {
@@ -72,15 +70,15 @@ function WeatherAhead({ w, unitsF }: { w: ReturnType<typeof useWeather>; unitsF:
 
 function ForecastRow({
   plant,
-  spot,
   hasSensor,
   schedule,
+  estimate,
   onPress,
 }: {
   plant: Plant;
-  spot?: Spot;
   hasSensor: boolean;
   schedule?: WaterSchedule;
+  estimate?: EstimateSchedule;
   onPress: () => void;
 }) {
   // Sensored plants project a real next-watering date from the drying trend (§5).
@@ -112,32 +110,24 @@ function ForecastRow({
     );
   }
 
-  // Estimate plants: the model forecast + next action.
-  const critical48 = plant.forecast.criticalInDays != null && plant.forecast.criticalInDays <= 2;
-  const envFlag = adviceFor(plant, spot).find((a) => a.severity !== 'good' && !a.icon.startsWith('water'));
+  // Sensorless plants: the honest watering cycle — last watered + the species'
+  // typical rhythm (learned from logs over time). No opaque bars, no fake scores.
+  const est = estimate ?? estimateWaterSchedule(plant);
+  const due = est.status === 'due';
   return (
-    <Card onPress={onPress} accentBorder={critical48 ? accent.clay : undefined} style={{ marginBottom: 10 }}>
+    <Card onPress={onPress} accentBorder={due ? accent.sunbeam : undefined} style={{ marginBottom: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <VitalityRing score={plant.score} size={24} estimate={plant.estimate} showLabel={false} />
+        <Ionicons name="water-outline" size={16} color={due ? accent.sunbeam : dark.inkMuted} />
         <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]} numberOfLines={1}>
           {plant.name}
         </Text>
-        <Text style={[type.micro, { color: dark.inkMuted }]}>estimate</Text>
+        <Text style={[type.cardTitle, { color: due ? accent.sunbeam : dark.ink, fontSize: 15 }]} numberOfLines={1}>
+          {est.whenLabel}
+        </Text>
       </View>
-      <View style={{ marginTop: 12 }}>
-        <ForecastBar forecast={plant.forecast} estimate={plant.estimate} />
-      </View>
-      <Text style={[type.caption, { color: critical48 ? accent.clay : dark.ink, marginTop: 8 }]}>
-        {primaryAction(plant)}
+      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 15 }]} numberOfLines={2}>
+        {est.detail}
       </Text>
-      {envFlag && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-          <Ionicons name={envFlag.icon as any} size={12} color={accent.sunbeam} />
-          <Text style={[type.micro, { color: dark.inkMuted, flex: 1 }]} numberOfLines={1}>
-            {envFlag.text.split('—')[0].trim()}
-          </Text>
-        </View>
-      )}
     </Card>
   );
 }
@@ -171,9 +161,23 @@ export default function ForecastTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plants, liveReadings, histories, spots, weather.weather]);
 
+  // Sensorless plants get the honest last-watered cycle instead of a model bar.
+  const estimates = useMemo(() => {
+    const m = new Map<string, EstimateSchedule>();
+    plants.forEach((p) => {
+      if (!liveReadings.has(p.id)) m.set(p.id, estimateWaterSchedule(p));
+    });
+    return m;
+  }, [plants, liveReadings]);
+
   const sorted = useMemo(
-    () => [...plants].sort((a, b) => scheduleSort(a, schedules.get(a.id)) - scheduleSort(b, schedules.get(b.id))),
-    [plants, schedules],
+    () =>
+      [...plants].sort(
+        (a, b) =>
+          scheduleSort(schedules.get(a.id), estimates.get(a.id)) -
+          scheduleSort(schedules.get(b.id), estimates.get(b.id)),
+      ),
+    [plants, schedules, estimates],
   );
 
   const avg = useMemo(
@@ -190,11 +194,31 @@ export default function ForecastTab() {
     [plants, liveReadings, calibrations, settings.unitsF],
   );
 
+  // Healthy = plants whose vitality is actually known and ≥70.
+  const healthy = useMemo(
+    () =>
+      plants.filter((p) => {
+        const v = vitalityFor(
+          p,
+          liveReadings.has(p.id),
+          liveReadings.get(p.id) ?? null,
+          p.sensorId ? calibrations[p.sensorId] : null,
+          settings.unitsF,
+        );
+        return !v.awaiting && !v.pending && v.score >= 70;
+      }).length,
+    [plants, liveReadings, calibrations, settings.unitsF],
+  );
+
   const dueSoon = sorted.filter((p) => {
     const s = schedules.get(p.id);
     if (s) return s.status === 'overdue' || (s.nextWaterAt != null && s.nextWaterAt.getTime() - Date.now() < 3 * 86400000);
-    return p.forecast.criticalInDays != null && p.forecast.criticalInDays <= 3;
+    const est = estimates.get(p.id);
+    return !!est && (est.status === 'due' || (est.dueAt != null && est.dueAt.getTime() - Date.now() < 2 * 86400000));
   }).length;
+
+  // Weather panels only matter when something actually lives outdoors.
+  const hasOutdoor = plants.some((p) => spots.find((s) => s.id === p.spotId)?.outdoor);
 
   const day = new Date().getDay();
   const showFullBriefing = day === 0 || day === 1 || (!briefingOpened && day <= 3);
@@ -212,23 +236,25 @@ export default function ForecastTab() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={accent.verdant} />}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
+      {/* Header — the state of the garden in one line */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Text style={[type.screenTitle, { color: dark.ink }]}>Forecast</Text>
-        <Pressable onPress={() => router.push('/you')} accessibilityLabel={`Garden average ${avg}`}>
-          <VitalityRing score={avg} size={28} showLabel={false} />
-        </Pressable>
+        {avg != null && (
+          <Pressable onPress={() => router.push('/you')} accessibilityLabel={`Garden average ${avg}`}>
+            <VitalityRing score={avg} size={28} showLabel={false} />
+          </Pressable>
+        )}
       </View>
-      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>
+      <Text style={[type.caption, { color: dark.inkMuted, marginTop: 3 }]}>
         {plants.length === 0
           ? 'The week ahead'
-          : dueSoon > 0
-            ? `${dueSoon} plant${dueSoon === 1 ? '' : 's'} need water in the next few days`
-            : 'Nothing needs water in the next few days'}
+          : `${avg != null ? `${healthy} of ${plants.length} healthy` : `${plants.length} plant${plants.length === 1 ? '' : 's'} · building baselines`} · ${
+              dueSoon > 0 ? `${dueSoon} need${dueSoon === 1 ? 's' : ''} water soon` : 'no watering due soon'
+            }`}
       </Text>
 
-      {/* Weather ahead */}
-      <WeatherAhead w={weather} unitsF={settings.unitsF} />
+      {/* Weather ahead — only when something lives outdoors */}
+      {hasOutdoor && <WeatherAhead w={weather} unitsF={settings.unitsF} />}
 
       {/* Briefing */}
       {plants.length === 0 ? null : showFullBriefing ? (
@@ -264,9 +290,9 @@ export default function ForecastTab() {
               <ForecastRow
                 key={p.id}
                 plant={p}
-                spot={spots.find((s) => s.id === p.spotId)}
                 hasSensor={liveReadings.has(p.id)}
                 schedule={schedules.get(p.id)}
+                estimate={estimates.get(p.id)}
                 onPress={() => router.push(`/plant/${p.id}`)}
               />
             ))}
@@ -274,9 +300,10 @@ export default function ForecastTab() {
         )}
       </View>
 
-      {plants.some((p) => p.estimate && !liveReadings.has(p.id)) && (
-        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4 }]}>
-          Estimated forecasts come from a drying model — a sensor makes the date exact.
+      {estimates.size > 0 && (
+        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, lineHeight: 15 }]}>
+          Sensorless dates are timed from your logged waterings and each species&apos; typical rhythm —
+          a sensor makes them exact.
         </Text>
       )}
     </ScrollView>

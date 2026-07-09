@@ -3,7 +3,6 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { Card, GButton, Screen } from '@/components/greenr/UI';
-import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, light, type } from '@/constants/theme';
 import { genPlantId } from '@/lib/ids';
 import { dliWord } from '@/lib/format';
@@ -29,7 +28,18 @@ const LIGHT_LEVELS: { key: string; label: string; hint: string; dli: number; emo
   { key: 'direct', label: 'Direct sun', hint: 'Hours of direct sun, or outdoors', dli: 16, emoji: '☀️' },
 ];
 
-type Step = 'camera' | 'identify' | 'details' | 'spot' | 'score';
+type Step = 'camera' | 'identify' | 'details' | 'spot' | 'water' | 'score';
+
+/** "When did you last water it?" — seeds the watering cycle so the first
+ *  reminder is timed to THIS plant, not a generic "check Friday". */
+const WATER_OPTIONS: { key: string; label: string; daysAgo: number | null }[] = [
+  { key: 'today', label: 'Today', daysAgo: 0 },
+  { key: 'yesterday', label: 'Yesterday', daysAgo: 1 },
+  { key: 'few', label: 'A few days ago', daysAgo: 3 },
+  { key: 'week', label: 'About a week ago', daysAgo: 7 },
+  { key: 'longer', label: 'Two weeks or more', daysAgo: 14 },
+  { key: 'unsure', label: 'Not sure', daysAgo: null },
+];
 
 export interface AddPlantWizardProps {
   onDone: (plant: Plant) => void;
@@ -53,12 +63,10 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
   const [newSpotOutdoor, setNewSpotOutdoor] = useState(!!initialOutdoor);
   const [lightLevel, setLightLevel] = useState<string | null>(initialOutdoor ? 'direct' : null);
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
+  const [lastWatered, setLastWatered] = useState<string | null>(null);
 
   const matches = useMemo(() => topMatches(), []);
   const results = useMemo(() => (query.trim() ? searchSpecies(query, 40) : []), [query]);
-
-  const estScore = 74;
-  const estBand = 9;
 
   const pick = (s: PlantSpecies) => {
     setSpecies(s);
@@ -83,10 +91,19 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
     };
     addSpot(spot);
     setSpotId(spot.id);
-    setStep('score');
+    setStep('water');
   };
 
   const finish = () => {
+    const now = new Date();
+    const wateredOpt = WATER_OPTIONS.find((o) => o.key === lastWatered);
+    const lastWateredAt =
+      wateredOpt?.daysAgo != null
+        ? new Date(now.getTime() - wateredOpt.daysAgo * 86400000).toISOString()
+        : null;
+    // Internal model seed only — never shown until the 10-day baseline passes
+    // (or instantly with a sensor). See vitalityFor().
+    const estScore = 74;
     const plant: Plant = {
       id: genPlantId(),
       name: name.trim() || species.common,
@@ -97,15 +114,18 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
       spotId: spotId ?? spots[0]?.id ?? '',
       potSize,
       potMaterial,
+      addedAt: now.toISOString(),
+      lastWateredAt,
+      waterLog: lastWateredAt ? [{ at: lastWateredAt, ml: null }] : [],
       score: estScore,
       estimate: true,
-      estimateBand: estBand,
+      estimateBand: 9,
       sensorId: null,
       components: { hydration: 26, light: 20, climate: 12, consistency: 8, trend: 8 },
       comfortBand: species.band,
       moistureHistory: [{ daysAgo: 0, moisture: Math.round((species.band[0] + species.band[1]) / 2) }],
       scoreTrend14: Array(14).fill(estScore),
-      forecast: { warnInDays: 5, criticalInDays: null, confidenceDays: 2, action: 'Check ~Fri' },
+      forecast: { warnInDays: null, criticalInDays: null, confidenceDays: 2, action: 'Check the soil' },
       timeline: [{ id: 'tl-new', daysAgo: 0, kind: 'photo', text: photoUri ? 'First photo added' : 'Added to garden' }],
       timeInRangePct: 100,
       addedDaysAgo: 0,
@@ -406,42 +426,76 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
             style={{ marginTop: 12 }}
           />
         </Card>
-        <GButton title="Continue" onPress={() => setStep('score')} disabled={!spotId} style={{ marginTop: 24 }} />
+        <GButton title="Continue" onPress={() => setStep('water')} disabled={!spotId} style={{ marginTop: 24 }} />
       </Screen>
     );
   }
 
-  // ── O5: first score (dark) ──
+  // ── O5: when was it last watered? (times the first reminder honestly) ──
+  if (step === 'water') {
+    return (
+      <Screen mode="light">
+        <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>
+          When did you last water it?
+        </Text>
+        <Text style={[type.body, { color: light.inkMuted, marginTop: 6, lineHeight: 21 }]}>
+          This times your first reminder to {name.trim() || species.common}&apos;s actual cycle —
+          not a generic day of the week.
+        </Text>
+        <View style={{ gap: 8, marginTop: 16 }}>
+          {WATER_OPTIONS.map((o) => (
+            <Pressable
+              key={o.key}
+              onPress={() => setLastWatered(o.key)}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                minHeight: 52,
+                paddingHorizontal: 14,
+                borderRadius: 12,
+                backgroundColor: light.surface1,
+                borderWidth: 2,
+                borderColor: lastWatered === o.key ? accent.verdant : 'transparent',
+              }}
+            >
+              <Text style={[type.cardTitle, { color: light.ink, fontSize: 15, flex: 1 }]}>{o.label}</Text>
+              {lastWatered === o.key && <Ionicons name="checkmark-circle" size={20} color={accent.verdant} />}
+            </Pressable>
+          ))}
+        </View>
+        {lastWatered === 'unsure' && (
+          <Text style={[type.micro, { color: light.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+            No problem — log the next watering and the cycle starts from there.
+          </Text>
+        )}
+        <GButton title="Continue" onPress={() => setStep('score')} disabled={!lastWatered} style={{ marginTop: 24 }} />
+      </Screen>
+    );
+  }
+
+  // ── O6: done (dark) — honest about what happens next; no invented score ──
   return (
     <Screen scroll={false} style={{ alignItems: 'center', justifyContent: 'center' }}>
-      <VitalityRing score={estScore} size={120} estimate estimateBand={estBand} subLabel="Stable (estimate)">
-        <Text style={{ fontSize: 34, position: 'absolute', opacity: 0.18 }}>{species.emoji}</Text>
-      </VitalityRing>
+      <View
+        style={{
+          width: 120,
+          height: 120,
+          borderRadius: 60,
+          borderWidth: 3,
+          borderStyle: 'dashed',
+          borderColor: dark.hairline,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Text style={{ fontSize: 44 }}>{species.emoji}</Text>
+      </View>
       <Text style={[type.screenTitle, { color: dark.ink, marginTop: 16 }]}>
         {name.trim() || species.common}
       </Text>
-      <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
-        {[
-          { label: 'Light ✓', ok: true },
-          { label: 'Climate ✓', ok: true },
-          { label: 'Hydration ±', ok: false },
-        ].map((c) => (
-          <View
-            key={c.label}
-            style={{
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-              borderRadius: 10,
-              borderWidth: 1,
-              borderColor: c.ok ? accent.sage : dark.hairline,
-            }}
-          >
-            <Text style={[type.micro, { color: c.ok ? accent.sage : dark.inkMuted }]}>{c.label}</Text>
-          </View>
-        ))}
-      </View>
-      <Text style={[type.caption, { color: dark.inkMuted, textAlign: 'center', marginTop: 18, paddingHorizontal: 20 }]}>
-        Estimates tighten as Greenr learns your plant. A Greenr Sensor makes them exact.
+      <Text style={[type.caption, { color: dark.inkMuted, textAlign: 'center', marginTop: 12, paddingHorizontal: 24, lineHeight: 19 }]}>
+        Added. Its health score appears once Greenr has watched it for about 10 days — or instantly
+        with a Greenr Sensor. Watering reminders start now, timed from your answers.
       </Text>
       <GButton title="Done" onPress={finish} style={{ marginTop: 26, alignSelf: 'stretch' }} />
     </Screen>

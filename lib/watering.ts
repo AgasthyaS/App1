@@ -1,4 +1,28 @@
 import type { Reading } from './devices';
+import type { PotMaterial, PotSize } from './types';
+
+/** Approximate soil volume per pot size, in liters. */
+const POT_LITERS: Record<PotSize, number> = { S: 1.2, M: 3, L: 6.5 };
+
+/**
+ * How much water (ml) it takes to lift soil moisture from `fromPct` to
+ * `toPct` in this pot. Roughly: 1% moisture in 1 L of mix ≈ 10 ml of water;
+ * terracotta wicks some away, so it gets a little extra. Rounded to 25 ml —
+ * an amount a person can actually measure with a cup.
+ */
+export function mlNeeded(
+  potSize: PotSize,
+  potMaterial: PotMaterial,
+  fromPct: number,
+  toPct: number,
+): number {
+  const rise = Math.max(0, toPct - fromPct);
+  if (rise === 0) return 0;
+  const liters = POT_LITERS[potSize];
+  const factor = potMaterial === 'Terracotta' ? 1.15 : potMaterial === 'Ceramic' ? 1.05 : 1;
+  const ml = liters * 10 * rise * factor;
+  return Math.max(50, Math.round(ml / 25) * 25);
+}
 
 /**
  * Turns soil-moisture history into a direct watering call — no "check if the

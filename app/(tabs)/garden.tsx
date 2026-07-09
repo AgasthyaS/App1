@@ -8,7 +8,8 @@ import PlantAvatar from '@/components/greenr/PlantAvatar';
 import { Card, GButton, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
-import { primaryAction } from '@/lib/advice';
+import { waterAmount } from '@/lib/advice';
+import { estimateWaterSchedule } from '@/lib/estimate';
 import { vitalityFor } from '@/lib/health';
 import { activePlants, useGreenr } from '@/lib/store';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
@@ -19,7 +20,7 @@ const SORTS: SortKey[] = ['Urgency', 'Score', 'Room', 'Recent'];
 
 export default function GardenTab() {
   const router = useRouter();
-  const { plants: allPlants, spots, logWater, calibrations, settings } = useGreenr();
+  const { plants: allPlants, spots, logWaterAmount, calibrations, settings } = useGreenr();
   const plants = activePlants(allPlants);
   const liveReadings = useAllLiveReadings();
   const vitality = (p: Plant) =>
@@ -50,7 +51,8 @@ export default function GardenTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plants, sort]);
 
-  const statusLine = (p: Plant) => (p.score >= 85 ? 'Thriving' : primaryAction(p));
+  // Sensorless status = the honest watering cycle, not a fabricated action.
+  const statusLine = (p: Plant) => estimateWaterSchedule(p).whenLabel;
 
   return (
     <Screen>
@@ -102,6 +104,7 @@ export default function GardenTab() {
       >
         {sorted.map((p) => {
           const v = vitality(p);
+          const noScore = v.awaiting || v.pending;
           return (
           <Card
             key={p.id}
@@ -114,8 +117,8 @@ export default function GardenTab() {
               style={{ alignItems: grid ? 'center' : 'flex-start', width: '100%' }}
             >
               <View style={{ flexDirection: grid ? 'column' : 'row', alignItems: 'center', gap: grid ? 10 : 14, width: '100%' }}>
-                <Breathing enabled={!v.awaiting && v.score >= 85}>
-                  <VitalityRing score={v.awaiting ? 0 : v.score} size={84} estimate={v.estimate} estimateBand={v.estimateBand} showLabel={false}>
+                <Breathing enabled={!noScore && v.score >= 85}>
+                  <VitalityRing score={noScore ? 0 : v.score} size={84} estimate={v.estimate} estimateBand={v.estimateBand} showLabel={false}>
                     <PlantAvatar photoUri={p.photoUri} emoji={p.emoji} size={58} />
                   </VitalityRing>
                 </Breathing>
@@ -131,7 +134,7 @@ export default function GardenTab() {
                     {spotName(p.spotId)}
                   </Text>
                   <Text style={[type.numHero as any, { fontSize: 22, color: dark.ink, marginTop: 6 }]}>
-                    {v.awaiting ? 'N/A' : v.score}
+                    {noScore ? 'N/A' : v.score}
                     {v.estimate && <Text style={[type.micro, { color: dark.inkMuted }]}> ±{v.estimateBand}</Text>}
                   </Text>
                   <Text
@@ -140,18 +143,18 @@ export default function GardenTab() {
                       {
                         marginTop: 4,
                         textAlign: grid ? 'center' : 'left',
-                        color: v.awaiting
-                          ? dark.inkMuted
-                          : v.score >= 85
-                            ? accent.sage
-                            : p.forecast.criticalInDays != null && !v.sensored
-                              ? accent.sunbeam
-                              : dark.inkMuted,
+                        color: noScore ? dark.inkMuted : v.score >= 85 ? accent.sage : dark.inkMuted,
                       },
                     ]}
                     numberOfLines={2}
                   >
-                    {v.awaiting ? 'Awaiting first reading' : v.sensored ? v.word : statusLine(p)}
+                    {v.awaiting
+                      ? 'Awaiting first reading'
+                      : v.sensored
+                        ? v.word
+                        : v.pending
+                          ? `Building baseline · ${statusLine(p)}`
+                          : statusLine(p)}
                   </Text>
                 </View>
               </View>
@@ -165,7 +168,7 @@ export default function GardenTab() {
                   kind="secondary"
                   style={{ flex: 1, minHeight: 44 }}
                   onPress={() => {
-                    logWater(p.id);
+                    logWaterAmount(p.id, waterAmount(p).ml);
                     setQuickFor(null);
                   }}
                 />

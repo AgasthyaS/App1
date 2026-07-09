@@ -2,6 +2,81 @@ import type { Reading } from './devices';
 import { idealsFor } from './plantStatus';
 
 /**
+ * Light benchmark (needs ~a day of readings): did this spot actually give the
+ * plant the light it wants today? Judged from the real distribution of the
+ * sensor's relative light index — how many daytime hours were bright vs dim —
+ * against what the species needs. Returns null until there's enough history to
+ * say something honest.
+ */
+export interface LightBenchmark {
+  tone: 'good' | 'warn' | 'bad';
+  headline: string; // e.g. "Right spot — plenty of light today"
+  detail: string; // the numbers behind it, in words
+}
+
+export function lightBenchmark(
+  history: Reading[],
+  species: string,
+  dliBand: [number, number],
+  now = Date.now(),
+): LightBenchmark | null {
+  const DAY = 86400000;
+  const pts = history
+    .filter((r) => r.light_lux != null)
+    .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.light_lux as number }))
+    .filter((p) => now - p.t < 26 * 3600000);
+  if (pts.length < 5) return null;
+  const spanH = (Math.max(...pts.map((p) => p.t)) - Math.min(...pts.map((p) => p.t))) / 3600000;
+  if (spanH < 16) return null; // need most of a day before judging the spot
+
+  // Daytime = readings between 7:00 and 19:00 local; night is dark everywhere.
+  const daytime = pts.filter((p) => {
+    const h = new Date(p.t).getHours();
+    return h >= 7 && h < 19;
+  });
+  if (daytime.length < 3) return null;
+
+  const brightFrac = daytime.filter((p) => p.v >= 40).length / daytime.length;
+  const usableFrac = daytime.filter((p) => p.v >= 15).length / daytime.length;
+  const brightHours = Math.round(brightFrac * 12);
+  const usableHours = Math.round(usableFrac * 12);
+
+  const wantsHigh = dliBand[1] >= 10; // sun-lovers
+  const wantsLow = dliBand[1] <= 4; // shade plants
+
+  let tone: LightBenchmark['tone'];
+  let headline: string;
+  if (wantsHigh) {
+    tone = brightFrac >= 0.5 ? 'good' : brightFrac >= 0.25 ? 'warn' : 'bad';
+    headline =
+      tone === 'good'
+        ? 'Right spot — strong light most of the day'
+        : tone === 'warn'
+          ? 'Borderline — it wants more direct light'
+          : 'Too dim here for a sun-lover';
+  } else if (wantsLow) {
+    tone = usableFrac >= 0.3 ? 'good' : 'warn';
+    headline = tone === 'good' ? 'Right spot — gentle light suits it' : 'Very dark — even shade plants need some light';
+  } else {
+    tone = brightFrac >= 0.2 && usableFrac >= 0.5 ? 'good' : usableFrac >= 0.35 ? 'warn' : 'bad';
+    headline =
+      tone === 'good'
+        ? 'Right spot — bright enough through the day'
+        : tone === 'warn'
+          ? 'A bit dim — a brighter spot would help'
+          : 'Too dim here for this plant';
+  }
+
+  return {
+    tone,
+    headline,
+    detail: `Over the last day this spot was bright for ~${brightHours} h and usable for ~${usableHours} h of daylight — ${species} wants ${
+      wantsHigh ? 'strong, direct light' : wantsLow ? 'low to medium light' : 'bright indirect light'
+    } for most of it.`,
+  };
+}
+
+/**
  * Learns from a plant's reading history and turns patterns into plain-language
  * insights ("This spot is consistently bright", "You water about every 4 days").
  * Returns [] until there's enough data — insight quality grows with history.

@@ -48,6 +48,12 @@ export interface TimelineEvent {
   verified?: boolean;
 }
 
+/** One logged watering — the raw material for sensorless accuracy. */
+export interface WaterEvent {
+  at: string; // ISO timestamp
+  ml: number | null; // null = amount unknown
+}
+
 export interface Plant {
   id: string;
   name: string;
@@ -58,6 +64,12 @@ export interface Plant {
   spotId: string;
   potSize: PotSize;
   potMaterial: PotMaterial;
+  /** ISO timestamp when the plant was added (drives the baseline countdown) */
+  addedAt?: string;
+  /** last watering the user reported (asked at registration, updated by logs) */
+  lastWateredAt?: string | null;
+  /** logged waterings with amounts — sharpens the estimate cycle */
+  waterLog?: WaterEvent[];
   score: number;
   estimate: boolean; // true = manual model (dashed ring, ± band)
   estimateBand: number; // the ± value when estimate

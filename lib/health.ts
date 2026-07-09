@@ -249,6 +249,19 @@ export function computeHealth(
  * Every surface (detail hero, garden cards, lists, stats) reads vitality from
  * here so a sensored plant NEVER shows estimate visuals or "±" language.
  */
+/** How long a sensorless plant must be tracked before an estimate score is shown. */
+export const BASELINE_DAYS = 10;
+
+interface VitalityPlant {
+  species: string;
+  comfortBand: [number, number];
+  score: number;
+  estimate: boolean;
+  estimateBand: number;
+  addedAt?: string;
+  addedDaysAgo?: number;
+}
+
 export interface Vitality {
   /** a live device is paired to this plant */
   sensored: boolean;
@@ -256,6 +269,13 @@ export interface Vitality {
   measured: boolean;
   /** sensored but no reading yet — show "awaiting", not a number or estimate */
   awaiting: boolean;
+  /**
+   * sensorless and too new to score honestly — show "N/A · building baseline"
+   * instead of a made-up number (a sensor scores instantly)
+   */
+  pending: boolean;
+  /** which day of the baseline window we're on (1-based), when pending */
+  baselineDay: number | null;
   /** the score to display (health when measured; the model score otherwise) */
   score: number;
   /** whether to draw estimate visuals (dashed ring, ± band) */
@@ -264,8 +284,14 @@ export interface Vitality {
   word: string;
 }
 
+function daysOwned(plant: VitalityPlant, now = Date.now()): number {
+  if (plant.addedAt) return Math.floor((now - new Date(plant.addedAt).getTime()) / 86400000);
+  // Legacy plants without a timestamp: trust the stored age (seeds carry real ages).
+  return plant.addedDaysAgo ?? BASELINE_DAYS;
+}
+
 export function vitalityFor(
-  plant: { species: string; comfortBand: [number, number]; score: number; estimate: boolean; estimateBand: number },
+  plant: VitalityPlant,
   hasSensor: boolean,
   reading: Reading | null,
   calibration?: SensorCalibration | null,
@@ -277,16 +303,38 @@ export function vitalityFor(
       sensored: true,
       measured: h.measured,
       awaiting: !h.measured,
+      pending: false,
+      baselineDay: null,
       score: h.measured ? h.total : 0,
       estimate: false,
       estimateBand: 0,
       word: h.measured ? h.word : 'Awaiting reading',
     };
   }
+
+  // Sensorless: no score at all until the baseline window has passed — a new
+  // plant's health simply isn't known yet, and pretending otherwise is lying.
+  const owned = daysOwned(plant);
+  if (owned < BASELINE_DAYS) {
+    return {
+      sensored: false,
+      measured: false,
+      awaiting: false,
+      pending: true,
+      baselineDay: Math.min(BASELINE_DAYS, owned + 1),
+      score: 0,
+      estimate: false,
+      estimateBand: 0,
+      word: 'Building baseline',
+    };
+  }
+
   return {
     sensored: false,
     measured: false,
     awaiting: false,
+    pending: false,
+    baselineDay: null,
     score: plant.score,
     estimate: plant.estimate,
     estimateBand: plant.estimateBand,
@@ -294,20 +342,24 @@ export function vitalityFor(
   };
 }
 
-/** Garden average that uses live health for sensored plants (§6). Skips plants awaiting a first reading. */
+/**
+ * Garden average over plants whose vitality is actually known — live health for
+ * sensored plants, baselined estimates for the rest. Returns null (show "—")
+ * when nothing is measurable yet, rather than a fabricated number.
+ */
 export function gardenVitalityAvg(
   items: {
-    plant: { species: string; comfortBand: [number, number]; score: number; estimate: boolean; estimateBand: number };
+    plant: VitalityPlant;
     hasSensor: boolean;
     reading: Reading | null;
     calibration?: SensorCalibration | null;
   }[],
   unitsF = true,
-): number {
+): number | null {
   const scores = items
     .map((i) => vitalityFor(i.plant, i.hasSensor, i.reading, i.calibration, unitsF))
-    .filter((v) => !v.awaiting)
+    .filter((v) => !v.awaiting && !v.pending)
     .map((v) => v.score);
-  if (!scores.length) return 0;
+  if (!scores.length) return null;
   return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
 }

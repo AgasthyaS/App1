@@ -8,15 +8,16 @@ import { Card, Chip, SectionHeader } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import WeatherCard from '@/components/greenr/WeatherCard';
 import { accent, bandFor, dark, layout, type } from '@/constants/theme';
-import { primaryAction } from '@/lib/advice';
 import { type AlertLevel, notificationsFor } from '@/lib/alerts';
 import { applyCalibration } from '@/lib/calibration';
+import { estimateWaterSchedule } from '@/lib/estimate';
 import { dliWord } from '@/lib/format';
-import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
+import { BASELINE_DAYS, gardenVitalityAvg, vitalityFor } from '@/lib/health';
 import { idealsFor, lightStatus, soilStatus, tempStatus } from '@/lib/plantStatus';
 import { activePlants, useGreenr } from '@/lib/store';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
 import { useWeather } from '@/lib/useWeather';
+import { cToF } from '@/lib/weather';
 import { Plant, Spot } from '@/lib/types';
 
 /**
@@ -86,7 +87,14 @@ export default function HomeTab() {
   const nowLine = (p: Plant) => {
     const hasSensor = liveReadings.has(p.id);
     const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF);
-    if (!v.sensored) return { text: primaryAction(p), tone: dark.inkMuted };
+    if (!v.sensored) {
+      // No sensor: the honest cycle from last-watered + species rhythm.
+      const est = estimateWaterSchedule(p);
+      return {
+        text: est.status === 'due' ? `${est.whenLabel} — check the soil` : est.whenLabel,
+        tone: est.status === 'due' ? accent.sunbeam : dark.inkMuted,
+      };
+    }
     if (v.awaiting) return { text: 'Awaiting first reading', tone: dark.inkMuted };
     const reading = applyCalibration(liveReadings.get(p.id)!, calFor(p));
     const ideal = idealsFor(p.species, p.comfortBand);
@@ -100,6 +108,16 @@ export default function HomeTab() {
     return { text: `Soil ${soil.label} · ${light.label} · ${temp.label}`, tone: dark.inkMuted };
   };
 
+  // Weather matters on Home only when something actually lives outdoors.
+  const hasOutdoor = plants.some((p) => spots.find((s) => s.id === p.spotId)?.outdoor);
+  // Live climate per spot: if a sensored plant sits there, its reading IS the
+  // spot's real temperature/humidity.
+  const liveForSpot = (spotId: string) => {
+    const occ = plants.find((p) => p.spotId === spotId && liveReadings.get(p.id) != null);
+    if (!occ) return null;
+    return applyCalibration(liveReadings.get(occ.id)!, calFor(occ));
+  };
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: dark.bg }}
@@ -110,12 +128,12 @@ export default function HomeTab() {
       {/* header */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Text style={[type.screenTitle, { color: dark.ink }]}>Home</Text>
-        {plants.length > 0 && <VitalityRing score={avg} size={28} showLabel={false} />}
+        {avg != null && <VitalityRing score={avg} size={28} showLabel={false} />}
       </View>
       <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>Right now in your garden</Text>
 
-      {/* current weather */}
-      <WeatherCard w={weather} unitsF={settings.unitsF} />
+      {/* current weather — only when something lives outdoors */}
+      {hasOutdoor && <WeatherCard w={weather} unitsF={settings.unitsF} />}
 
       {/* alerts */}
       {alerts.length > 0 && (
@@ -147,11 +165,13 @@ export default function HomeTab() {
             const hasSensor = liveReadings.has(p.id);
             const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF);
             const line = nowLine(p);
+            const noScore = v.awaiting || v.pending;
+            const spotName = spots.find((s) => s.id === p.spotId)?.name;
             return (
               <Card key={p.id} onPress={() => router.push(`/plant/${p.id}`)} style={{ marginBottom: 10 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                   <VitalityRing
-                    score={v.awaiting ? 0 : v.score}
+                    score={noScore ? 0 : v.score}
                     size={40}
                     estimate={v.estimate}
                     estimateBand={v.estimateBand}
@@ -164,11 +184,16 @@ export default function HomeTab() {
                         {p.name}
                       </Text>
                       {v.sensored && <Ionicons name="hardware-chip-outline" size={12} color={accent.sage} />}
-                      <Text style={[type.numBold as any, { color: v.awaiting ? dark.inkMuted : bandFor(v.score).color, fontSize: 15 }]}>
-                        {v.awaiting ? 'N/A' : v.score}
+                      <Text style={[type.numBold as any, { color: noScore ? dark.inkMuted : bandFor(v.score).color, fontSize: 15 }]}>
+                        {noScore ? 'N/A' : v.score}
                         {v.estimate ? <Text style={[type.micro, { color: dark.inkMuted }]}> ±{v.estimateBand}</Text> : null}
                       </Text>
                     </View>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]} numberOfLines={1}>
+                      {p.species}
+                      {spotName ? ` · ${spotName}` : ''}
+                      {v.pending ? ` · score by day ${BASELINE_DAYS}` : ''}
+                    </Text>
                     <Text style={[type.caption, { color: line.tone, marginTop: 3 }]} numberOfLines={1}>
                       {line.text}
                     </Text>
@@ -190,6 +215,20 @@ export default function HomeTab() {
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
                 {roomSpots.map((s) => {
                   const occ = occupants(s.id);
+                  // Real numbers only: a live sensor in this spot, or a
+                  // sensor-measured spot. Otherwise honest words, not fake %.
+                  const live = liveForSpot(s.id);
+                  const climateLine = live
+                    ? `🌡 ${
+                        live.temp_c != null
+                          ? settings.unitsF
+                            ? `${Math.round(cToF(live.temp_c))}°F`
+                            : `${Math.round(live.temp_c)}°C`
+                          : '—'
+                      } · 💧 ${live.humidity_pct != null ? `${Math.round(live.humidity_pct)}%` : '—'} (live)`
+                    : s.measuredBySensor
+                      ? `🌡 ${s.tempRange[0]}–${s.tempRange[1]}° · 💧 ${s.rh}% RH`
+                      : '🌡 💧 not measured yet';
                   return (
                     <Card
                       key={s.id}
@@ -200,10 +239,10 @@ export default function HomeTab() {
                       <Text style={[type.cardTitle, { color: dark.ink }]} numberOfLines={1}>
                         {s.name}
                       </Text>
-                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6 }]}>☀ {s.dli.toFixed(1)} DLI</Text>
-                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>
-                        🌡 {s.tempRange[0]}–{s.tempRange[1]}° · 💧 {s.rh}% RH
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6 }]}>
+                        ☀ {s.measuredBySensor ? `${s.dli.toFixed(1)} DLI` : `${dliWord(s.dli)} (your description)`}
                       </Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>{climateLine}</Text>
                       <View style={{ flexDirection: 'row', marginTop: 8, gap: 4, minHeight: 22, alignItems: 'center' }}>
                         {occ.length > 0 ? (
                           occ.map((p) => (

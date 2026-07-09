@@ -105,11 +105,22 @@ function persistedSlice(s: GreenrState): Partial<GreenrState> {
   return base;
 }
 
+/** Backfill fields older saves don't have (addedAt drives the baseline clock). */
+function migratePlants(plants: Plant[] | undefined): Plant[] | undefined {
+  if (!plants) return plants;
+  return plants.map((p) =>
+    p.addedAt
+      ? p
+      : { ...p, addedAt: new Date(Date.now() - (p.addedDaysAgo ?? 0) * 86400000).toISOString() },
+  );
+}
+
 /** Merge a saved (local or cloud) slice onto current state. */
 function applySaved(s: GreenrState, saved: Partial<GreenrState>): GreenrState {
   const base: GreenrState = {
     ...s,
     ...saved,
+    plants: migratePlants(saved.plants) ?? s.plants,
     settings: { ...s.settings, ...saved.settings },
   };
   return saved.demo ? { ...base, ...demoData() } : base;
@@ -123,6 +134,8 @@ interface GreenrApi extends GreenrState {
   addPlant: (p: Plant) => void;
   addSpot: (s: Spot) => void;
   logWater: (plantId: string) => void;
+  /** Log a watering with its amount — feeds the estimate cycle (honest, no fabricated score change). */
+  logWaterAmount: (plantId: string, ml: number | null) => void;
   pairSensor: (plantId: string) => Sensor;
   completeTask: (taskId: string, verified: boolean) => void;
   skipTask: (taskId: string) => void;
@@ -322,6 +335,34 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       }),
       };
     });
+  }, []);
+
+  const logWaterAmount = useCallback((plantId: string, ml: number | null) => {
+    const at = new Date().toISOString();
+    setState((s) => ({
+      ...s,
+      // A paired demo sensor sees the pour on its next reading (cosmetic only).
+      sensors: s.sensors.map((sn) =>
+        sn.plantId === plantId ? { ...sn, lastReadingMinsAgo: 0 } : sn,
+      ),
+      plants: s.plants.map((p) => {
+        if (p.id !== plantId) return p;
+        return {
+          ...p,
+          lastWateredAt: at,
+          waterLog: [...(p.waterLog ?? []), { at, ml }].slice(-30),
+          timeline: [
+            {
+              id: `tl-${Date.now()}`,
+              daysAgo: 0,
+              kind: 'care' as const,
+              text: ml != null ? `Watered ~${ml} ml (logged)` : 'Watered (logged)',
+            },
+            ...p.timeline,
+          ],
+        };
+      }),
+    }));
   }, []);
 
   const pairSensor = useCallback((plantId: string): Sensor => {
@@ -655,6 +696,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       addPlant,
       addSpot,
       logWater,
+      logWaterAmount,
       pairSensor,
       completeTask,
       skipTask,
@@ -679,7 +721,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, calibrateMetric, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, calibrateMetric, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
