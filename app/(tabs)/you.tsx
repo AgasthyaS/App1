@@ -5,8 +5,10 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { Card, Row, Screen, SectionHeader, StatusDot } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
+import { calibrationFor } from '@/lib/calibration';
 import { connectionFrom } from '@/lib/devices';
 import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
+import { storedLightAvg } from '@/lib/insights';
 import { activePlants, useGreenr } from '@/lib/store';
 import type { SensorStatus } from '@/lib/types';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
@@ -15,7 +17,7 @@ import { useMyDevices } from '@/lib/useDevices';
 /** You tab (§11) — identity, the stats band, collection, devices, Plus, settings. */
 export default function YouTab() {
   const router = useRouter();
-  const { plants: allPlants, sensors, spots, accuracy, settings, profile, calibrations } = useGreenr();
+  const { plants: allPlants, sensors, spots, accuracy, settings, profile, calibrations, lightDaily } = useGreenr();
   const plants = activePlants(allPlants);
   const liveReadings = useAllLiveReadings();
   const { devices } = useMyDevices();
@@ -27,7 +29,8 @@ export default function YouTab() {
       plant: p,
       hasSensor: liveReadings.has(p.id),
       reading: liveReadings.get(p.id) ?? null,
-      calibration: p.sensorId ? calibrations[p.sensorId] : null,
+      calibration: calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
+      lightAvg: storedLightAvg(lightDaily[p.id]),
     })),
     settings.unitsF,
   );
@@ -49,8 +52,9 @@ export default function YouTab() {
       p,
       liveReadings.has(p.id),
       liveReadings.get(p.id) ?? null,
-      p.sensorId ? calibrations[p.sensorId] : null,
+      calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
       settings.unitsF,
+      storedLightAvg(lightDaily[p.id]),
     );
     return !v.awaiting && !v.pending && v.score >= 85;
   }).length;

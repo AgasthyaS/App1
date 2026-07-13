@@ -10,7 +10,9 @@ import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
 import { waterAmount } from '@/lib/advice';
 import { estimateWaterSchedule } from '@/lib/estimate';
+import { calibrationFor } from '@/lib/calibration';
 import { vitalityFor } from '@/lib/health';
+import { storedLightAvg } from '@/lib/insights';
 import { activePlants, useGreenr } from '@/lib/store';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
 import { Plant } from '@/lib/types';
@@ -20,11 +22,18 @@ const SORTS: SortKey[] = ['Urgency', 'Score', 'Room', 'Recent'];
 
 export default function GardenTab() {
   const router = useRouter();
-  const { plants: allPlants, spots, logWaterAmount, calibrations, settings } = useGreenr();
+  const { plants: allPlants, spots, logWaterAmount, calibrations, settings, lightDaily } = useGreenr();
   const plants = activePlants(allPlants);
   const liveReadings = useAllLiveReadings();
   const vitality = (p: Plant) =>
-    vitalityFor(p, liveReadings.has(p.id), liveReadings.get(p.id) ?? null, p.sensorId ? calibrations[p.sensorId] : null, settings.unitsF);
+    vitalityFor(
+      p,
+      liveReadings.has(p.id),
+      liveReadings.get(p.id) ?? null,
+      calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
+      settings.unitsF,
+      storedLightAvg(lightDaily[p.id]),
+    );
   const [sort, setSort] = useState<SortKey>('Urgency');
   const [grid, setGrid] = useState(true);
   const [quickFor, setQuickFor] = useState<string | null>(null);
@@ -123,8 +132,11 @@ export default function GardenTab() {
                   </VitalityRing>
                 </Breathing>
                 <View style={{ alignItems: grid ? 'center' : 'flex-start', flex: grid ? undefined : 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                    <Text style={[type.cardTitle, { color: dark.ink, fontSize: 18 }]} numberOfLines={1}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: '100%' }}>
+                    <Text
+                      style={[type.cardTitle, { color: dark.ink, fontSize: 18, flexShrink: 1 }]}
+                      numberOfLines={1}
+                    >
                       {p.name}
                     </Text>
                     {(v.sensored || p.sensorId) && <Ionicons name="hardware-chip-outline" size={12} color={accent.sage} />}

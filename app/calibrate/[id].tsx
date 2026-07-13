@@ -27,10 +27,11 @@ const METRICS: CalMetricKey[] = ['moisture', 'temperature', 'humidity', 'light']
 export default function Calibrate() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { sensors, calibrations, calibrateMetric } = useGreenr();
+  const { sensors, calibrations, calibrateMetric, setLightInverted } = useGreenr();
   const key = typeof id === 'string' ? id : '';
   const sensor = sensors.find((s) => s.id === key);
   const cal = calibrations[key] ?? emptyCalibration();
+  const inverted = !!cal.lightInverted;
 
   const [openMetric, setOpenMetric] = useState<CalMetricKey | null>(null);
   const [ref, setRef] = useState('');
@@ -120,6 +121,35 @@ export default function Calibrate() {
                   </Text>
                 </Pressable>
               </View>
+
+              {m === 'light' && (
+                <View style={{ marginTop: 12 }}>
+                  <Hairline style={{ marginBottom: 10 }} />
+                  <Pressable
+                    onPress={() => setLightInverted(key, !inverted)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44 }}
+                  >
+                    <Ionicons
+                      name={inverted ? 'checkbox' : 'square-outline'}
+                      size={20}
+                      color={inverted ? accent.verdant : dark.inkMuted}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.body, { color: dark.ink }]}>Reversed light sensor</Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                        Some LDR modules read HIGH in the dark and LOW in bright light. Turn this on
+                        if shining a light makes the reading drop — the app flips it (100 − reading)
+                        everywhere.
+                      </Text>
+                    </View>
+                  </Pressable>
+                  {inverted && (
+                    <Text style={[type.micro, { color: accent.sage, marginTop: 4 }]}>
+                      ✓ Flipping readings — bright now reads high.
+                    </Text>
+                  )}
+                </View>
+              )}
 
               {openMetric === m && (
                 <View style={{ marginTop: 12 }}>

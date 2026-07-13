@@ -85,8 +85,18 @@ export default function Devices() {
     const spot = spots.find((s) => s.id === plant?.spotId);
     const batt = latest?.battery_pct ?? device.battery_pct;
     const battStr = batt == null || batt < 0 ? 'Not reported' : `${Math.round(batt)}%`;
-    const wake = device.wake_seconds;
-    const modeStr = wake <= 30 ? 'Live' : `Every ${Math.round(wake / 60)} min`;
+    // The reporting cadence the device is currently set to (idle is ~3 h).
+    const w = device.wake_seconds;
+    const modeStr = w >= 3600 ? `Every ${Math.round(w / 3600)} h` : `Every ${Math.round(w / 60)} min`;
+    // When to expect the next report — a quiet sensor is scheduled, not broken.
+    const nextReport = device.last_seen
+      ? new Date(new Date(device.last_seen).getTime() + Math.max(device.wake_seconds, 30) * 1000)
+      : null;
+    const nextStr = !nextReport
+      ? '—'
+      : nextReport.getTime() < Date.now()
+        ? 'overdue — check its power'
+        : `~${nextReport.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
     const cal = isCalibrated(calibrations[device.id]);
     const isOpen = openId === device.id;
 
@@ -111,11 +121,16 @@ export default function Devices() {
           <Field label="Zone" value={spot?.name ?? '—'} />
           <Field label="Battery" value={battStr} tone={typeof batt === 'number' && batt >= 0 && batt < 15 ? accent.clay : undefined} />
           <Field label="Last update" value={connection.sinceLabel} />
-          <Field label="Signal" value={`${connection.quality} · Wi-Fi`} />
           <Field label="Reporting" value={modeStr} />
+          <Field
+            label="Next report"
+            value={nextStr}
+            tone={nextStr.startsWith('overdue') ? accent.sunbeamText : undefined}
+          />
         </View>
         <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4 }]}>
-          Calibration: {cal ? 'applied to readings' : 'not set'} · Firmware: not reported · Bluetooth: not used
+          Signal: {connection.quality} · Wi-Fi · Calibration: {cal ? 'applied' : 'not set'} · Runs on its own —
+          keep it on a wall charger or power bank (a PC&apos;s USB port cuts power when the PC sleeps).
         </Text>
 
         {isOpen && (
@@ -189,11 +204,15 @@ export default function Devices() {
                 No sensors paired yet. Pair a Greenr sensor to track real soil, light, temperature and humidity.
               </Text>
               <GButton title="Pair a sensor" onPress={() => router.push('/pair-device' as any)} style={{ marginTop: 14 }} />
+              <Pressable onPress={() => router.push('/wifi-setup' as any)} style={{ marginTop: 10, minHeight: 44, justifyContent: 'center' }}>
+                <Text style={[type.caption, { color: accent.verdant }]}>New sensor? Connect it to Wi-Fi first</Text>
+              </Pressable>
             </Card>
           ) : (
             <>
               {devices.map(renderDevice)}
               <Row title="Pair another sensor" onPress={() => router.push('/pair-device' as any)} />
+              <Row title="Connect a sensor to Wi-Fi" onPress={() => router.push('/wifi-setup' as any)} />
             </>
           )}
         </>

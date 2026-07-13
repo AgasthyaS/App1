@@ -5,6 +5,19 @@ import type { PotMaterial, PotSize } from './types';
 const POT_LITERS: Record<PotSize, number> = { S: 1.2, M: 3, L: 6.5 };
 
 /**
+ * Soil volume in liters. With a measured pot diameter this is exact-ish
+ * (tapered pot ≈ 0.55 × d³ ml for d in cm — a 15 cm pot ≈ 1.9 L, 25 cm ≈ 8.6 L);
+ * otherwise fall back to the S/M/L bucket. Same species, different pot size =
+ * different water needs — the diameter is what makes amounts personal.
+ */
+export function soilLiters(potSize: PotSize, potCm?: number | null): number {
+  if (potCm != null && potCm >= 5 && potCm <= 80) {
+    return (0.55 * potCm * potCm * potCm) / 1000;
+  }
+  return POT_LITERS[potSize];
+}
+
+/**
  * How much water (ml) it takes to lift soil moisture from `fromPct` to
  * `toPct` in this pot. Roughly: 1% moisture in 1 L of mix ≈ 10 ml of water;
  * terracotta wicks some away, so it gets a little extra. Rounded to 25 ml —
@@ -15,10 +28,11 @@ export function mlNeeded(
   potMaterial: PotMaterial,
   fromPct: number,
   toPct: number,
+  potCm?: number | null,
 ): number {
   const rise = Math.max(0, toPct - fromPct);
   if (rise === 0) return 0;
-  const liters = POT_LITERS[potSize];
+  const liters = soilLiters(potSize, potCm);
   const factor = potMaterial === 'Terracotta' ? 1.15 : potMaterial === 'Ceramic' ? 1.05 : 1;
   const ml = liters * 10 * rise * factor;
   return Math.max(50, Math.round(ml / 25) * 25);

@@ -3,20 +3,20 @@ import type { Reading } from './devices';
 import { idealsFor, lightStatus, soilStatus, tempStatus, humidityStatus, type Tone } from './plantStatus';
 
 /**
- * The transparent Plant Health engine (§9). Given the latest sensor reading and
- * recent history, it scores health against THIS species' measurable ideals (from
- * lib/plants.ts) — never generic thresholds. Every component reports what it
- * earned, out of what, WHY (citing the ideal it was judged against), and the
- * recommended action for any deduction. Nothing is fabricated: with no reading
- * the score is `measured: false` and shows no number.
+ * The transparent Plant Health engine (§9). Given the latest sensor reading, it
+ * scores health against THIS species' measurable ideals (from lib/plants.ts) —
+ * never generic thresholds. Every component reports what it earned, out of
+ * what, WHY (citing the ideal it was judged against), and the recommended
+ * action for any deduction. Nothing is fabricated: with no reading the score is
+ * `measured: false` and shows no number.
  *
- * Weights (sum 100): Moisture 25 · Light 20 · Temperature 20 · Humidity 15 ·
- * Trend 20. These are the same weights shown in the on-screen breakdown so the
- * total is always reproducible by hand.
+ * Weights (sum 100): Moisture 30 · Light 25 · Temperature 25 · Humidity 20.
+ * Only the four directly-measured metrics count, so the same reading always
+ * produces the same score on every screen, reproducible by hand.
  */
 
 export interface HealthComponent {
-  key: 'moisture' | 'light' | 'temperature' | 'humidity' | 'trend';
+  key: 'moisture' | 'light' | 'temperature' | 'humidity';
   label: string;
   earned: number;
   max: number;
@@ -41,7 +41,7 @@ export interface HealthScore {
   summary: string;
 }
 
-const WEIGHTS = { moisture: 25, light: 20, temperature: 20, humidity: 15, trend: 20 } as const;
+const WEIGHTS = { moisture: 30, light: 25, temperature: 25, humidity: 20 } as const;
 const HEALTH_MAX = 100;
 
 /** Full marks inside [lo,hi]; loses points linearly, reaching 0 `soft` units outside. */
@@ -85,12 +85,42 @@ function moistureComponent(species: string, soil: number | null | undefined, ban
   };
 }
 
-function lightComponent(species: string, lightIdx: number | null | undefined, dli: [number, number]): HealthComponent {
+/** Daytime is 07:00–19:00 local (matches the daytime window used for averaging). */
+function isNightHour(iso: string): boolean {
+  const h = new Date(iso).getHours();
+  return h < 7 || h >= 19;
+}
+
+function lightComponent(
+  species: string,
+  lightIdx: number | null | undefined,
+  dli: [number, number],
+  opts?: { avg?: number | null; days?: number; night?: boolean },
+): HealthComponent {
   const base = { key: 'light' as const, label: 'Light', max: WEIGHTS.light, estimate: true };
-  if (lightIdx == null) {
+  // Prefer the multi-day daytime AVERAGE — a stable, accumulating measure of the
+  // spot's real light — over a single in-the-moment reading (near 0 at night,
+  // swings with clouds). Falls back to the instantaneous reading until an average
+  // exists. This is what makes the light metric get more accurate with each day.
+  const avg = opts?.avg;
+  const useAvg = avg != null;
+  const idx = useAvg ? avg : lightIdx;
+  if (idx == null) {
     return { ...base, earned: 0, tone: 'unknown', value: 'N/A', reason: `Waiting for a light reading.`, recommendation: '' };
   }
-  const st = lightStatus(lightIdx, dli);
+  // Night, with no daytime average yet: a dark nighttime reading says nothing
+  // about the spot's daylight, so hold light neutral instead of tanking health.
+  if (!useAvg && opts?.night) {
+    return {
+      ...base,
+      earned: Math.round(WEIGHTS.light * 0.8),
+      tone: 'unknown',
+      value: 'Awaiting daytime',
+      reason: `It's night — a dark reading now doesn't reflect ${species}'s daylight. This settles as daytime readings accumulate into an average.`,
+      recommendation: '',
+    };
+  }
+  const st = lightStatus(idx, dli);
   // Light is a relative 0–100 index (not calibrated lux), so scoring is coarse
   // and honestly labelled an estimate.
   const earned =
@@ -102,12 +132,16 @@ function lightComponent(species: string, lightIdx: number | null | undefined, dl
       ? `Move ${species} closer to a brighter window, or add a grow light.`
       : `Filter the light or move it back — this is stronger than ${species} wants.`;
   }
+  const multiDay = useAvg && opts?.days && opts.days >= 2;
+  const tag = useAvg ? (multiDay ? ` · ${opts!.days}-day avg` : ' · daytime avg') : '';
   return {
     ...base,
     earned,
     tone: st.tone,
-    value: `${st.label} (${Math.round(lightIdx)}/100)`,
-    reason: `${species} wants ${wants}; the sensor reads a relative ${Math.round(lightIdx)}/100.`,
+    value: `${st.label} (${Math.round(idx)}/100${tag})`,
+    reason: useAvg
+      ? `${species} wants ${wants}; its daytime light${multiDay ? ` over ${opts!.days} days` : ''} averages ${Math.round(idx)}/100.`
+      : `${species} wants ${wants}; the sensor reads a relative ${Math.round(idx)}/100.`,
     recommendation,
   };
 }
@@ -155,66 +189,33 @@ function humidityComponent(species: string, rh: number | null | undefined, floor
   };
 }
 
-/**
- * Trend: how steadily the soil has been kept inside its comfort band recently.
- * Rewards consistency and an improving direction. With < 4 readings there isn't
- * enough history, so it returns a labelled estimate rather than a fake trend.
- */
-function trendComponent(species: string, history: Reading[], band: [number, number]): HealthComponent {
-  const base = { key: 'trend' as const, label: 'Trend', max: WEIGHTS.trend };
-  const soils = history.map((r) => r.soil_pct).filter((v): v is number => v != null);
-  if (soils.length < 4) {
-    return {
-      ...base,
-      estimate: true,
-      earned: Math.round(WEIGHTS.trend * 0.7),
-      tone: 'unknown',
-      value: `${soils.length} reading${soils.length === 1 ? '' : 's'}`,
-      reason: `Still learning ${species}'s rhythm — a firm trend needs a few days of readings.`,
-      recommendation: '',
-    };
-  }
-  const [lo, hi] = band;
-  const inRange = soils.filter((v) => v >= lo && v <= hi).length / soils.length;
-  // Direction over the last third vs the first third.
-  const third = Math.max(1, Math.floor(soils.length / 3));
-  const firstAvg = soils.slice(0, third).reduce((a, b) => a + b, 0) / third;
-  const lastAvg = soils.slice(-third).reduce((a, b) => a + b, 0) / third;
-  const mid = (lo + hi) / 2;
-  const improving = Math.abs(lastAvg - mid) < Math.abs(firstAvg - mid) - 2;
-  const earned = Math.min(WEIGHTS.trend, Math.round(WEIGHTS.trend * inRange) + (improving ? 2 : 0));
-  const pct = Math.round(inRange * 100);
-  const tone: Tone = inRange >= 0.8 ? 'good' : inRange >= 0.5 ? 'warn' : 'bad';
-  return {
-    ...base,
-    estimate: false,
-    earned,
-    tone,
-    value: `${pct}% in range`,
-    reason: `Soil has stayed inside the ${lo}–${hi}% band ${pct}% of the last ${soils.length} readings${improving ? ', and is trending back toward ideal' : ''}.`,
-    recommendation: inRange < 0.5 ? `Aim to water ${species} before it dips below ${lo}% to keep it steadier.` : '',
-  };
+/** Multi-day daytime light average for a plant (from stored lightDaily). */
+export interface LightAvgInput {
+  /** blended daytime average, 0–100 (null → fall back to the live reading) */
+  avg?: number | null;
+  /** how many days are behind it (for wording/confidence) */
+  days?: number;
 }
 
 export function computeHealth(
   species: string,
   band: [number, number],
   reading: Reading | null,
-  history: Reading[] = [],
+  _history: Reading[] = [], // kept for call-site compatibility; trends live in the charts, not the score
   unitsF = true,
   calibration?: SensorCalibration | null,
+  lightAvg?: LightAvgInput | null,
 ): HealthScore {
   const ideal = idealsFor(species, band);
-  // Correct the reading + history with the sensor's calibration offsets first,
-  // so health is judged on corrected values (§8/§6).
+  // Correct the reading with the sensor's calibration offsets first, so health
+  // is judged on corrected values (§8/§6).
   const r = reading ? applyCalibration(reading, calibration) : reading;
-  const hist = calibration ? history.map((h) => applyCalibration(h, calibration)) : history;
+  const night = reading ? isNightHour(reading.created_at) : false;
   const components: HealthComponent[] = [
     moistureComponent(species, r?.soil_pct, ideal.band),
-    lightComponent(species, r?.light_lux, ideal.dli),
+    lightComponent(species, r?.light_lux, ideal.dli, { avg: lightAvg?.avg, days: lightAvg?.days, night }),
     temperatureComponent(species, r?.temp_c, ideal.temp, unitsF),
     humidityComponent(species, r?.humidity_pct, ideal.rhFloor),
-    trendComponent(species, hist, ideal.band),
   ];
 
   const measured = reading != null;
@@ -296,9 +297,10 @@ export function vitalityFor(
   reading: Reading | null,
   calibration?: SensorCalibration | null,
   unitsF = true,
+  lightAvg?: LightAvgInput | null,
 ): Vitality {
   if (hasSensor) {
-    const h = computeHealth(plant.species, plant.comfortBand, reading, [], unitsF, calibration);
+    const h = computeHealth(plant.species, plant.comfortBand, reading, [], unitsF, calibration, lightAvg);
     return {
       sensored: true,
       measured: h.measured,
@@ -353,11 +355,12 @@ export function gardenVitalityAvg(
     hasSensor: boolean;
     reading: Reading | null;
     calibration?: SensorCalibration | null;
+    lightAvg?: LightAvgInput | null;
   }[],
   unitsF = true,
 ): number | null {
   const scores = items
-    .map((i) => vitalityFor(i.plant, i.hasSensor, i.reading, i.calibration, unitsF))
+    .map((i) => vitalityFor(i.plant, i.hasSensor, i.reading, i.calibration, unitsF, i.lightAvg))
     .filter((v) => !v.awaiting && !v.pending)
     .map((v) => v.score);
   if (!scores.length) return null;

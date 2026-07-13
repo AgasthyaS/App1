@@ -1,4 +1,4 @@
-﻿{
+{
   "expo": {
     "name": "greenr",
     "slug": "App1",
@@ -52,6 +52,14 @@
         "expo-camera",
         {
           "cameraPermission": "Greenr uses the camera so you can photograph your plant and it becomes its picture."
+        }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": ["central"],
+          "bluetoothAlwaysPermission": "Greenr uses Bluetooth once during setup to connect your plant sensor to your Wi-Fi."
         }
       ]
     ],

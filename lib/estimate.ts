@@ -1,5 +1,6 @@
 import { getSpecies, type CategoryKey } from './plants';
 import type { Plant } from './types';
+import { soilLiters } from './watering';
 
 /**
  * The sensorless estimate engine. Without a sensor Greenr refuses to invent
@@ -27,6 +28,8 @@ const TYPICAL_DAYS: Record<CategoryKey, number> = {
   orchid: 7,
   grass: 5,
   carnivorous: 4,
+  shrub: 7,
+  bulb: 5,
 };
 
 const DAY = 86400000;
@@ -51,9 +54,12 @@ function intervalFor(plant: Plant, now: Date): { days: number; learned: boolean 
   const category = species?.category ?? 'tropical';
   let days = TYPICAL_DAYS[category];
 
-  // Pot: small pots dry faster, big ones slower; terracotta breathes.
-  if (plant.potSize === 'S') days *= 0.8;
-  if (plant.potSize === 'L') days *= 1.25;
+  // Pot: small pots dry faster, big ones slower; terracotta breathes. With a
+  // measured diameter the soil volume drives it (same species, bigger pot =
+  // longer between waterings), otherwise the S/M/L bucket.
+  const liters = soilLiters(plant.potSize, plant.potCm);
+  if (liters < 1.8) days *= 0.8;
+  else if (liters > 4.5) days *= 1.25;
   if (plant.potMaterial === 'Terracotta') days *= 0.85;
   if (plant.potMaterial === 'Plastic') days *= 1.1;
 

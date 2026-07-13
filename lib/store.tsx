@@ -11,6 +11,7 @@ import React, {
 import { useAuth } from './auth';
 import { type CalMetricKey, type SensorCalibration, emptyCalibration, withCalibration } from './calibration';
 import { pullGarden, pushGarden } from './cloud';
+import type { DayLight } from './insights';
 import { SEED_ACCURACY, SEED_PLANTS, SEED_SENSORS, SEED_SPOTS, SEED_TASKS } from './seed';
 import {
   AccuracyEntry,
@@ -39,6 +40,9 @@ interface GreenrState {
   briefingOpened: boolean;
   /** sensor/device calibration, keyed by sensor or device id (§8) */
   calibrations: Record<string, SensorCalibration>;
+  /** per-plant daily daytime-light snapshots — the multi-day light average
+   *  accumulates here so the light verdict improves with each day of data. */
+  lightDaily: Record<string, DayLight[]>;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -67,6 +71,7 @@ function emptyState(): GreenrState {
     settings: DEFAULT_SETTINGS,
     briefingOpened: false,
     calibrations: {},
+    lightDaily: {},
   };
 }
 
@@ -95,6 +100,9 @@ function persistedSlice(s: GreenrState): Partial<GreenrState> {
     // Calibration persists for everyone — it's tied to physical hardware, not
     // the demo garden, so it survives restarts and syncs across devices (§7/§8).
     calibrations: s.calibrations,
+    // Measured light history persists too — it's real per-day data that the
+    // multi-day light average is built from (would otherwise reset each launch).
+    lightDaily: s.lightDaily,
   };
   if (!s.demo) {
     base.plants = s.plants;
@@ -136,6 +144,8 @@ interface GreenrApi extends GreenrState {
   logWater: (plantId: string) => void;
   /** Log a watering with its amount — feeds the estimate cycle (honest, no fabricated score change). */
   logWaterAmount: (plantId: string, ml: number | null) => void;
+  /** Log non-watering care (fertilized, misted, repotted, …) to the plant's history. */
+  logCare: (plantId: string, note: string) => void;
   pairSensor: (plantId: string) => Sensor;
   completeTask: (taskId: string, verified: boolean) => void;
   skipTask: (taskId: string) => void;
@@ -155,6 +165,10 @@ interface GreenrApi extends GreenrState {
   recalibrateSensor: (sensorId: string) => void;
   /** §8: record a per-metric calibration (offset = reference − measured) */
   calibrateMetric: (sensorKey: string, key: CalMetricKey, reference: number, measured: number) => void;
+  /** Flip a reversed light sensor (LDR modules that read high in the dark). */
+  setLightInverted: (sensorKey: string, inverted: boolean) => void;
+  /** Snapshot a plant's daytime-light for one day (multi-day light average). */
+  recordLightDay: (plantId: string, day: DayLight) => void;
   installFirmware: (sensorId: string) => void;
   forgetSensor: (sensorId: string) => void;
   remeasureSpot: (spotId: string) => void;
@@ -362,6 +376,23 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
           ],
         };
       }),
+    }));
+  }, []);
+
+  const logCare = useCallback((plantId: string, note: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) =>
+        p.id === plantId
+          ? {
+              ...p,
+              timeline: [
+                { id: `tl-${Date.now()}`, daysAgo: 0, kind: 'care' as const, text: note },
+                ...p.timeline,
+              ],
+            }
+          : p,
+      ),
     }));
   }, []);
 
@@ -612,6 +643,32 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setLightInverted = useCallback((sensorKey: string, inverted: boolean) => {
+    setState((s) => {
+      const current = s.calibrations[sensorKey] ?? emptyCalibration();
+      return {
+        ...s,
+        calibrations: { ...s.calibrations, [sensorKey]: { ...current, lightInverted: inverted } },
+      };
+    });
+  }, []);
+
+  // Snapshot a plant's daytime-light for one day into the accumulating record.
+  // Upserts by day key (a later, better-covered snapshot of the same day wins)
+  // and keeps ~30 days. No-op unless the value actually changed, so the plant
+  // screen can call it freely on every reading without churning state/persist.
+  const recordLightDay = useCallback((plantId: string, day: DayLight) => {
+    setState((s) => {
+      const prev = s.lightDaily[plantId] ?? [];
+      const existing = prev.find((d) => d.day === day.day);
+      if (existing && existing.avg === day.avg && existing.hours === day.hours) return s;
+      const next = [...prev.filter((d) => d.day !== day.day), day]
+        .sort((a, b) => (a.day < b.day ? -1 : 1))
+        .slice(-30);
+      return { ...s, lightDaily: { ...s.lightDaily, [plantId]: next } };
+    });
+  }, []);
+
   const installFirmware = useCallback((sensorId: string) => {
     setState((s) => ({
       ...s,
@@ -697,6 +754,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       addSpot,
       logWater,
       logWaterAmount,
+      logCare,
       pairSensor,
       completeTask,
       skipTask,
@@ -715,13 +773,15 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       reassignSensor,
       recalibrateSensor,
       calibrateMetric,
+      setLightInverted,
+      recordLightDay,
       installFirmware,
       forgetSensor,
       remeasureSpot,
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, calibrateMetric, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

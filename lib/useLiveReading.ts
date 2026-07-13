@@ -3,10 +3,6 @@ import { useEffect, useState } from 'react';
 import {
   getLatestReading,
   getReadingHistory,
-  IDLE_WAKE_SECONDS,
-  LIVE_WAKE_SECONDS,
-  requestReadNow,
-  setWakeInterval,
   type Reading,
 } from './devices';
 import { supabase } from './supabase';
@@ -52,9 +48,10 @@ export function useAllReadingHistories(): Map<string, Reading[]> {
 }
 
 /**
- * Live sensor data for a given plant. Finds the device paired to that plant
- * (devices.plant_key), pulls its newest reading plus recent history, and
- * refreshes every 30s. Also nudges the device to report soon (read_now).
+ * Sensor data for a given plant. Finds the device paired to that plant
+ * (devices.plant_key) and pulls its newest reading + recent history. The sensor
+ * reports on its own (~every 3 h, deep-sleeping in between); this just displays
+ * whatever has landed — no live streaming.
  */
 export function useLiveReading(plantKey?: string): {
   reading: Reading | null;
@@ -88,18 +85,10 @@ export function useLiveReading(plantKey?: string): {
     };
 
     load();
-    const iv = setInterval(load, 10000); // poll fast while the screen is open
+    // Refresh the view periodically so a new 3-hourly report shows up on its own.
+    const iv = setInterval(load, 30000);
     return () => { alive = false; clearInterval(iv); };
   }, [plantKey]);
-
-  // While this plant is open, put the sensor in live mode (fast reads); when the
-  // user leaves, drop it back to the slow, deep-sleeping idle cadence.
-  useEffect(() => {
-    if (!deviceId) return;
-    requestReadNow(deviceId);
-    setWakeInterval(deviceId, LIVE_WAKE_SECONDS);
-    return () => { setWakeInterval(deviceId, IDLE_WAKE_SECONDS); };
-  }, [deviceId]);
 
   return { reading, history, deviceId };
 }
@@ -125,6 +114,7 @@ export function useAllLiveReadings(): Map<string, Reading | null> {
       if (!devs || !alive) return;
       const next = new Map<string, Reading | null>();
       devs.forEach((d: any) => { if (d.plant_key) next.set(d.plant_key, null); });
+      // Home just DISPLAYS the latest reading the sensor has reported.
       await Promise.all(
         devs.map(async (d: any) => {
           if (!d.plant_key) return;

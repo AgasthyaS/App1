@@ -18,10 +18,10 @@ import { useGreenr } from '@/lib/store';
 import { useLiveReading } from '@/lib/useLiveReading';
 import { idealsFor, type Tone } from '@/lib/plantStatus';
 import { plantsForEnvironment } from '@/lib/compatibility';
-import { insightsFor, lightBenchmark } from '@/lib/insights';
+import { insightsFor, lightBenchmark, dayLight, recentLightAvg, lightVerdict } from '@/lib/insights';
 import { careProfileFor } from '@/lib/plantCare';
 import { computeHealth, vitalityFor, BASELINE_DAYS, type HealthComponent } from '@/lib/health';
-import { applyCalibration } from '@/lib/calibration';
+import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { estimateWaterSchedule, qualitativeNeeds } from '@/lib/estimate';
 import type { Toxicity } from '@/lib/plants';
 import { computeSchedule, wateringIcs } from '@/lib/schedule';
@@ -140,13 +140,14 @@ export default function PlantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, spots, sensors, settings, calibrations, logWaterAmount, archivePlant, setPlantPhoto, renamePlant } =
+  const { plants, spots, sensors, settings, calibrations, lightDaily, recordLightDay, logWaterAmount, logCare, archivePlant, setPlantPhoto, renamePlant, setLightInverted } =
     useGreenr();
   const plant = plants.find((p) => p.id === id);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [careOpen, setCareOpen] = useState(false);
   const [signsOpen, setSignsOpen] = useState(false);
   const [waterOpen, setWaterOpen] = useState(false);
+  const [loggedCare, setLoggedCare] = useState<string | null>(null);
   const [filter, setFilter] = useState<TimelineFilter>('All');
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -156,13 +157,16 @@ export default function PlantDetail() {
 
   const spot = useMemo(() => spots.find((s) => s.id === plant?.spotId), [spots, plant]);
   const sensor = useMemo(() => sensors.find((s) => s.id === plant?.sensorId), [sensors, plant]);
+  // The sensor reports on its own every ~3 h; this just shows the latest reading
+  // and history (no live streaming).
   const { reading: liveReading, history: liveHistory, deviceId: liveDeviceId } = useLiveReading(
     typeof id === 'string' ? id : undefined,
   );
   const weather = useWeather(); // shares the cached location/weather; no extra prompt
   // Apply this sensor's calibration offsets so the whole screen — health,
   // status, watering, charts — uses corrected values consistently (§8/§6).
-  const cal = calibrations[sensor?.id ?? liveDeviceId ?? ''] ?? null;
+  // Device id first (real paired sensors), legacy demo sensor id as fallback.
+  const cal = calibrationFor(calibrations, liveDeviceId, sensor?.id);
   const calReading = useMemo(
     () => (liveReading ? applyCalibration(liveReading, cal) : liveReading),
     [liveReading, cal],
@@ -171,14 +175,35 @@ export default function PlantDetail() {
     () => (cal ? liveHistory.map((r) => applyCalibration(r, cal)) : liveHistory),
     [liveHistory, cal],
   );
+  // Multi-day daytime light average. The light metric is judged on this
+  // accumulating average — not a single in-the-moment reading — so it gets more
+  // accurate with each day of data. Today (and yesterday, if the window reaches
+  // it) are computed from live history; older days come from the persisted store.
+  const todayLight = useMemo(() => dayLight(calHistory), [calHistory]);
+  const yesterdayLight = useMemo(() => dayLight(calHistory, Date.now() - 86400000), [calHistory]);
+  const lightAvg = useMemo(
+    () => recentLightAvg(lightDaily[plant?.id ?? ''] ?? [], todayLight),
+    [lightDaily, plant?.id, todayLight],
+  );
+  const lightAvgInput = useMemo(
+    () => (lightAvg ? { avg: lightAvg.avg, days: lightAvg.days } : null),
+    [lightAvg],
+  );
+  // Snapshot each day's light into the store so the average survives restarts and
+  // keeps growing over calendar time (recordLightDay is a no-op when unchanged).
+  useEffect(() => {
+    if (!plant?.id) return;
+    if (todayLight) recordLightDay(plant.id, todayLight);
+    if (yesterdayLight) recordLightDay(plant.id, yesterdayLight);
+  }, [plant?.id, todayLight, yesterdayLight, recordLightDay]);
   // Live health, computed from the sensor vs this species' ideals (§9). When
   // measured, it — not the seeded estimate — drives the hero ring (§3).
   const health = useMemo(
     () =>
       plant && liveDeviceId
-        ? computeHealth(plant.species, plant.comfortBand, liveReading, liveHistory, settings.unitsF, cal)
+        ? computeHealth(plant.species, plant.comfortBand, liveReading, liveHistory, settings.unitsF, cal, lightAvgInput)
         : null,
-    [plant, liveDeviceId, liveReading, liveHistory, settings.unitsF, cal],
+    [plant, liveDeviceId, liveReading, liveHistory, settings.unitsF, cal, lightAvgInput],
   );
   // A live sensor is authoritative: never show estimate visuals for it (§6).
   const sensored = liveDeviceId != null;
@@ -186,7 +211,7 @@ export default function PlantDetail() {
   const awaiting = sensored && !measured; // paired but no reading yet
   // Sensorless + too new = no score at all yet ("building baseline"), because a
   // fresh plant's health simply isn't known — no invented numbers.
-  const vit = plant ? vitalityFor(plant, sensored, liveReading, cal, settings.unitsF) : null;
+  const vit = plant ? vitalityFor(plant, sensored, liveReading, cal, settings.unitsF, lightAvgInput) : null;
   const pending = !!vit?.pending;
   const showEstimate = !!plant?.estimate && !sensored && !pending;
   const effectiveScore = measured ? health!.total : pending ? 0 : plant?.score ?? 0;
@@ -217,13 +242,19 @@ export default function PlantDetail() {
   // and qualitative needs in words — no invented measurements.
   const estSchedule = !sensored ? estimateWaterSchedule(plant) : null;
   const qualNeeds = !sensored ? qualitativeNeeds(plant.species) : [];
-  // Sensored: after ~a day of readings, judge whether this spot's light suits it.
-  const bench = sensored ? lightBenchmark(calHistory, plant.species, ideal.dli) : null;
+  // Sensored: judge whether this spot's light suits it — from the MULTI-DAY
+  // average once we have one (more days = more accurate), falling back to the
+  // single-day daytime average until then.
+  const bench = sensored
+    ? lightAvg
+      ? lightVerdict(lightAvg.avg, plant.species, ideal.dli, { days: lightAvg.days, hours: lightAvg.hours })
+      : lightBenchmark(calHistory, plant.species, ideal.dli)
+    : null;
   // Exact refill: ml to take the soil from its current reading back to mid-band.
   const bandMid = Math.round((ideal.band[0] + ideal.band[1]) / 2);
   const refillMl =
     sensored && calReading?.soil_pct != null && calReading.soil_pct < ideal.band[0]
-      ? mlNeeded(plant.potSize, plant.potMaterial, calReading.soil_pct, bandMid)
+      ? mlNeeded(plant.potSize, plant.potMaterial, calReading.soil_pct, bandMid, plant.potCm)
       : null;
   const careProfile = careProfileFor(plant.species);
   // Charts plot only real readings — a missing metric is skipped, never drawn as 0.
@@ -373,13 +404,20 @@ export default function PlantDetail() {
                   Health score by day {BASELINE_DAYS} (day {vit?.baselineDay ?? 1} now) — a sensor scores it instantly
                 </Text>
               )}
-              <Text style={[type.screenTitle, { color: dark.ink, marginTop: 14 }]}>{plant.name}</Text>
-              <Text style={[type.caption, { color: dark.inkMuted, marginTop: 3 }]}>
+              <Text
+                style={[type.screenTitle, { color: dark.ink, marginTop: 14, paddingHorizontal: 16, textAlign: 'center' }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                {plant.name}
+              </Text>
+              <Text style={[type.caption, { color: dark.inkMuted, marginTop: 3, paddingHorizontal: 16 }]} numberOfLines={1}>
                 {plant.latin} · {spot?.name ?? '—'}
               </Text>
               {sensored ? (
                 <Pressable onPress={() => router.push('/devices' as any)} style={{ marginTop: 10 }}>
-                  <Chip label={measured ? 'Sensor connected · live data' : 'Sensor connected · awaiting reading'} color={accent.sage} />
+                  <Chip label={measured ? 'Sensor connected · real data' : 'Sensor connected · awaiting reading'} color={accent.sage} />
                 </Pressable>
               ) : sensor ? (
                 <Pressable onPress={() => router.push(`/sensor/${sensor.id}`)} style={{ marginTop: 10 }}>
@@ -395,13 +433,13 @@ export default function PlantDetail() {
         </View>
 
         <View style={{ paddingHorizontal: layout.margin }}>
-          {/* ── Live readings & health — every number with its meaning + action ── */}
+          {/* ── Sensor readings & health — every number with its meaning + action ── */}
           {liveDeviceId && (
             <>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 20, marginBottom: 8 }}>
                 <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: accent.sage }} />
                 <Text style={[type.micro, { color: accent.sage, letterSpacing: 0.5 }]}>
-                  LIVE READINGS{liveReading ? ` · ${new Date(liveReading.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}
+                  SENSOR READINGS{liveReading ? ` · ${new Date(liveReading.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}
                 </Text>
               </View>
               <Card>
@@ -423,14 +461,25 @@ export default function PlantDetail() {
                       <HealthRow key={c.key} c={c} />
                     ))}
                     <Text style={[type.micro, { color: dark.inkMuted, marginTop: 16, lineHeight: 15 }]}>
-                      Health = the five parts summed (max 100), each judged against {plant.species}&apos;s
+                      Health = the four readings summed (max 100), each judged against {plant.species}&apos;s
                       ideal ranges. Light is a relative index, so it&apos;s coarser than the measured metrics.
                     </Text>
                   </>
                 ) : (
                   <Text style={[type.body, { color: dark.inkMuted, lineHeight: 21 }]}>
-                    Waiting for the first reading — values and health appear the moment your sensor
-                    reports (within its wake cycle).
+                    Waiting for the first reading. The sensor wakes, reads, and reports on its own
+                    about every 3 hours, then sleeps to save power (keep it on a wall charger or power
+                    bank — a PC&apos;s USB port cuts power when the PC sleeps).
+                  </Text>
+                )}
+                {liveReading && (
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                    Reports on its own about every 3 h · next ~
+                    {new Date(new Date(liveReading.created_at).getTime() + 10800 * 1000).toLocaleTimeString('en-US', {
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}
+                    .
                   </Text>
                 )}
                 <Pressable
@@ -479,6 +528,13 @@ export default function PlantDetail() {
                     Still gathering history — accuracy climbs with every reading.
                   </Text>
                 )}
+                <Pressable
+                  onPress={() => setWaterOpen(true)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, minHeight: 36 }}
+                >
+                  <Ionicons name="add-circle-outline" size={15} color={accent.verdant} />
+                  <Text style={[type.caption, { color: accent.verdant }]}>Log a watering</Text>
+                </Pressable>
 
                 {/* Scheduled next watering — an exact date/time, not "check Friday" (§5) */}
                 {schedule && (
@@ -579,8 +635,46 @@ export default function PlantDetail() {
                 <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
                   {estSchedule.learned
                     ? 'Timed from your own logged rhythm — keep logging and it stays sharp.'
-                    : 'Log each watering below and Greenr learns this plant’s real rhythm.'}
+                    : 'Log each watering and Greenr learns this plant’s real rhythm.'}
                 </Text>
+                <GButton
+                  title="＋ Log a watering"
+                  onPress={() => setWaterOpen(true)}
+                  style={{ marginTop: 12, minHeight: 44 }}
+                />
+                {/* other care worth logging — it all lands in the plant's history */}
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                  {(
+                    [
+                      ['🧪', 'Fertilized'],
+                      ['💨', 'Misted'],
+                      ['🪴', 'Repotted'],
+                    ] as [string, string][]
+                  ).map(([emoji, label]) => (
+                    <Pressable
+                      key={label}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                        logCare(plant.id, `${label} (logged)`);
+                        setLoggedCare(label);
+                        setTimeout(() => setLoggedCare((l) => (l === label ? null : l)), 2000);
+                      }}
+                      style={{
+                        flex: 1,
+                        minHeight: 40,
+                        borderRadius: 10,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderWidth: 1,
+                        borderColor: loggedCare === label ? accent.sage : dark.hairline,
+                      }}
+                    >
+                      <Text style={[type.micro, { color: loggedCare === label ? accent.sage : dark.ink }]}>
+                        {loggedCare === label ? '✓ Logged' : `${emoji} ${label}`}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
               </Card>
 
               <SectionHeader>What it needs</SectionHeader>
@@ -649,7 +743,7 @@ export default function PlantDetail() {
               ) : (
                 <Text style={[type.body, { color: dark.inkMuted, lineHeight: 21 }]}>
                   Collecting readings — your soil history builds here as the sensor reports (about every
-                  30 minutes).
+                  3 hours).
                 </Text>
               )
             ) : (
@@ -722,6 +816,25 @@ export default function PlantDetail() {
                   <Text style={[type.body, { color: dark.inkMuted, lineHeight: 21 }]}>
                     Collecting light readings — this fills in as your sensor reports.
                   </Text>
+                )}
+
+                {/* One-tap fix for reversed LDR modules (they read HIGH in the dark) */}
+                {liveDeviceId && (
+                  <Pressable
+                    onPress={() => setLightInverted(liveDeviceId, !cal?.lightInverted)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12, minHeight: 40 }}
+                  >
+                    <Ionicons
+                      name={cal?.lightInverted ? 'swap-vertical' : 'swap-vertical-outline'}
+                      size={15}
+                      color={cal?.lightInverted ? accent.sage : accent.verdant}
+                    />
+                    <Text style={[type.caption, { color: cal?.lightInverted ? accent.sage : accent.verdant, flex: 1 }]}>
+                      {cal?.lightInverted
+                        ? 'Reversed-sensor fix is ON (readings flipped) — tap to undo'
+                        : 'Readings backwards? (bright when covered) Tap to flip this sensor'}
+                    </Text>
+                  </Pressable>
                 )}
               </Card>
             </>

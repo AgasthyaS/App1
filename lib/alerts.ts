@@ -37,7 +37,7 @@ export interface NotifyContext {
   outdoor?: boolean;
   weather?: WeatherData | null;
   /** pot info — lets the water alert say exactly how many ml to add */
-  pot?: { size: PotSize; material: PotMaterial };
+  pot?: { size: PotSize; material: PotMaterial; cm?: number | null };
 }
 
 const DAY = 86400000;
@@ -55,7 +55,7 @@ export function notificationsFor(ctx: NotifyContext): Alert[] {
   // exactly how much to pour to land mid-band.
   if (reading.soil_pct != null && reading.soil_pct < lo) {
     const target = Math.round((lo + hi) / 2);
-    const ml = pot ? mlNeeded(pot.size, pot.material, reading.soil_pct, target) : null;
+    const ml = pot ? mlNeeded(pot.size, pot.material, reading.soil_pct, target, pot.cm) : null;
     out.push({
       level: 'bad',
       key: 'soil-low',

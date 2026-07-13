@@ -36,16 +36,17 @@ export interface DeviceConnection {
 
 /**
  * Connection quality from how recently the device last reported. Sensors
- * deep-sleep (~30 min idle), so "online" allows a generous window before a
- * device is considered idle/offline. Honest: derived from real last_seen, not a
+ * deep-sleep (~3 h idle), so "online" spans a full reporting cycle before a
+ * device is considered idle/offline (else a healthy sensor would look offline
+ * right before its next report). Honest: derived from real last_seen, not a
  * fabricated RSSI (the firmware doesn't report Wi-Fi signal strength).
  */
 export function connectionFrom(lastSeen: string | null): DeviceConnection {
   if (!lastSeen) return { status: 'offline', quality: 'Unknown', sinceLabel: 'never reported' };
   const mins = (Date.now() - new Date(lastSeen).getTime()) / 60000;
   const sinceLabel = mins < 1 ? 'just now' : relTime(mins);
-  if (mins < 45) return { status: 'online', quality: 'Good', sinceLabel };
-  if (mins < 180) return { status: 'idle', quality: 'Fair', sinceLabel };
+  if (mins < 210) return { status: 'online', quality: 'Good', sinceLabel }; // within one ~3 h cycle
+  if (mins < 420) return { status: 'idle', quality: 'Fair', sinceLabel }; // missed a report
   return { status: 'offline', quality: 'Weak', sinceLabel };
 }
 
@@ -162,9 +163,9 @@ export async function requestReadNow(deviceId?: string): Promise<void> {
   await q;
 }
 
-/** Fast "live" cadence while the app is open on a sensor; slow cadence when away. */
-export const LIVE_WAKE_SECONDS = 10;
-export const IDLE_WAKE_SECONDS = 1800; // 30 min deep-sleep between reads when idle
+/** Idle cadence: the sensor wakes, reads, and deep-sleeps ~3 h between reports
+ *  (battery-friendly). Server-controlled via devices.wake_seconds. */
+export const IDLE_WAKE_SECONDS = 10800;
 
 /** Set how often the device wakes to read (server-controlled; no reflash). */
 export async function setWakeInterval(deviceId: string, seconds: number): Promise<void> {

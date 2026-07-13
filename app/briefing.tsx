@@ -6,24 +6,40 @@ import { Pressable, Text, View } from 'react-native';
 import { Card, GButton, Hairline, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { light, type } from '@/constants/theme';
+import { calibrationFor } from '@/lib/calibration';
+import { deriveCareTasks } from '@/lib/careTasks';
 import { vitalityFor } from '@/lib/health';
+import { storedLightAvg } from '@/lib/insights';
 import { useGreenr } from '@/lib/store';
+import { useAllLiveReadings } from '@/lib/useLiveReading';
 
 /** The Sunday briefing (§8.3) — a ritual, not an instrument. Light surface. */
 export default function Briefing() {
   const router = useRouter();
-  const { plants, tasks, sensors, markBriefingOpened } = useGreenr();
+  const { plants, spots, sensors, calibrations, lightDaily, markBriefingOpened } = useGreenr();
+  const liveReadings = useAllLiveReadings();
 
   useEffect(() => {
     markBriefingOpened();
   }, [markBriefingOpened]);
 
   // Only plants whose vitality is actually known count — no fabricated average.
-  const vitals = plants.map((p) => vitalityFor(p, false, null));
-  const known = vitals.filter((v) => !v.pending);
+  const vitals = plants.map((p) =>
+    vitalityFor(
+      p,
+      liveReadings.has(p.id),
+      liveReadings.get(p.id) ?? null,
+      calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
+      undefined,
+      storedLightAvg(lightDaily[p.id]),
+    ),
+  );
+  const known = vitals.filter((v) => !v.pending && !v.awaiting);
   const avg = known.length ? Math.round(known.reduce((a, v) => a + v.score, 0) / known.length) : null;
-  const thriving = vitals.filter((v) => !v.pending && v.score >= 85).length;
-  const careMinutes = tasks.filter((t) => !t.done).reduce((a, t) => a + t.minutes, 0);
+  const thriving = known.filter((v) => v.score >= 85).length;
+  // This week's care — derived live from readings + watering cycles, like Care Mode.
+  const careTasks = deriveCareTasks({ plants, spots, readings: liveReadings, calibrations, lightDaily });
+  const careMinutes = careTasks.reduce((a, t) => a + t.minutes, 0);
   const lowBattery = sensors.filter((s) => s.batteryPct < 20);
   const monstera = plants.find((p) => p.id === 'pl-monstera');
   // "What changed" is drawn from real logged events this week — never canned copy.
@@ -90,23 +106,25 @@ export default function Briefing() {
             </Card>
           )}
 
-          {/* this week's care */}
+          {/* this week's care — derived live, same list Care Mode runs */}
           <Card mode="light" style={{ marginTop: 10 }}>
-            <Text style={[type.micro, { color: light.inkMuted }]}>THIS WEEK&apos;S CARE</Text>
-            {tasks.filter((t) => !t.done).map((t, i) => (
+            <Text style={[type.micro, { color: light.inkMuted }]}>CARE NEEDED NOW</Text>
+            {careTasks.map((t, i) => (
               <View key={t.id}>
                 {i > 0 && <Hairline mode="light" style={{ marginVertical: 8 }} />}
                 <Text style={[type.body, { color: light.ink, marginTop: i === 0 ? 6 : 0 }]}>{t.title}</Text>
               </View>
             ))}
-            {tasks.filter((t) => !t.done).length === 0 && (
+            {careTasks.length === 0 && (
               <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
-                Nothing needs you this week.
+                Nothing needs you — every reading is in range and no waterings are due.
               </Text>
             )}
-            <Text style={[type.caption, { color: light.inkMuted, marginTop: 10 }]}>
-              ~{careMinutes} min of care
-            </Text>
+            {careTasks.length > 0 && (
+              <Text style={[type.caption, { color: light.inkMuted, marginTop: 10 }]}>
+                ~{careMinutes} min of care
+              </Text>
+            )}
           </Card>
 
           {/* records — only when earned */}

@@ -5,6 +5,7 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { QRScanner } from '@/components/greenr/QRScanner';
 import { Card, GButton, Screen } from '@/components/greenr/UI';
+import { WifiSetupFlow } from '@/components/greenr/WifiSetupFlow';
 import { accent, light, type } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
 import {
@@ -23,7 +24,7 @@ import { useGreenr } from '@/lib/store';
  * and watch the first live reading land.
  */
 
-type Step = 'scan' | 'linking' | 'assign' | 'done';
+type Step = 'scan' | 'linking' | 'wifi' | 'assign' | 'done';
 
 export default function PairDevice() {
   const router = useRouter();
@@ -48,7 +49,7 @@ export default function PairDevice() {
     if (error) { setError(error); setStep('scan'); return; }
     setDeviceId(parsed.id);
     requestReadNow(parsed.id); // nudge it to report soon
-    setStep('assign');
+    setStep('wifi');
   };
 
   // Poll for the first reading once we're on the done screen.
@@ -113,7 +114,10 @@ export default function PairDevice() {
         />
         {error && <Text style={[type.micro, { color: '#C0392B', marginTop: 10 }]}>{error}</Text>}
         <GButton title="Pair sensor" onPress={() => claim(manual)} disabled={!manual.trim()} style={{ marginTop: 12 }} />
-        <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', marginTop: 12, minHeight: 44, justifyContent: 'center' }}>
+        <Pressable onPress={() => router.push('/wifi-setup' as any)} style={{ alignSelf: 'center', marginTop: 14, minHeight: 44, justifyContent: 'center' }}>
+          <Text style={[type.caption, { color: accent.verdant }]}>Sensor not on Wi-Fi yet? Set that up first</Text>
+        </Pressable>
+        <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', minHeight: 44, justifyContent: 'center' }}>
           <Text style={[type.body, { color: light.inkMuted }]}>Cancel</Text>
         </Pressable>
       </Screen>
@@ -129,12 +133,27 @@ export default function PairDevice() {
     );
   }
 
+  // --- give the sensor Wi-Fi (skippable if it's already online) ---
+  if (step === 'wifi') {
+    return (
+      <Screen mode="light">
+        <Text style={[type.micro, { color: accent.sage, marginTop: 8 }]}>PAIRED TO YOUR ACCOUNT ✓</Text>
+        <WifiSetupFlow
+          onDone={() => setStep('assign')}
+          doneCta="Continue"
+          onSkip={() => setStep('assign')}
+          skipLabel="Already on Wi-Fi — skip"
+        />
+      </Screen>
+    );
+  }
+
   // --- assign to a plant ---
   if (step === 'assign') {
     const active = plants.filter((p) => !p.archived);
     return (
       <Screen mode="light">
-        <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Paired! ✅</Text>
+        <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Almost done</Text>
         <Text style={[type.body, { color: light.inkMuted, marginTop: 8 }]}>
           Which plant does this sensor live with?
         </Text>

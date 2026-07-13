@@ -6,7 +6,7 @@ import { Card, GButton, Screen } from '@/components/greenr/UI';
 import { accent, dark, light, type } from '@/constants/theme';
 import { genPlantId } from '@/lib/ids';
 import { dliWord } from '@/lib/format';
-import { ALL_SPECIES, PlantSpecies, getSpecies, searchSpecies, topMatches } from '@/lib/plants';
+import { ALL_SPECIES, PlantSpecies, getSpecies, searchSpecies, topMatches, type CategoryKey } from '@/lib/plants';
 import { useGreenr } from '@/lib/store';
 import { Plant, PotMaterial, PotSize, Spot } from '@/lib/types';
 import CameraCapture from './CameraCapture';
@@ -29,6 +29,20 @@ const LIGHT_LEVELS: { key: string; label: string; hint: string; dli: number; emo
 ];
 
 type Step = 'camera' | 'identify' | 'details' | 'spot' | 'water' | 'score';
+
+/** Browse groups for the 1000+ catalog — search is exact, browsing is how you
+ *  discover. Each chip maps to one or more categories. */
+const BROWSE_GROUPS: { label: string; emoji: string; cats: CategoryKey[] }[] = [
+  { label: 'Houseplants', emoji: '🌿', cats: ['tropical', 'vine', 'fern', 'palm'] },
+  { label: 'Succulents & cacti', emoji: '🌵', cats: ['succulent', 'cactus'] },
+  { label: 'Herbs', emoji: '🌿', cats: ['herb'] },
+  { label: 'Vegetables', emoji: '🥬', cats: ['vegetable'] },
+  { label: 'Flowers', emoji: '🌸', cats: ['flowering', 'bulb'] },
+  { label: 'Shrubs & trees', emoji: '🌳', cats: ['shrub', 'tree'] },
+  { label: 'Orchids', emoji: '🌺', cats: ['orchid'] },
+  { label: 'Grasses', emoji: '🎋', cats: ['grass'] },
+  { label: 'Carnivorous', emoji: '🪰', cats: ['carnivorous'] },
+];
 
 /** "When did you last water it?" — seeds the watering cycle so the first
  *  reminder is timed to THIS plant, not a generic "check Friday". */
@@ -64,9 +78,16 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
   const [lightLevel, setLightLevel] = useState<string | null>(initialOutdoor ? 'direct' : null);
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
   const [lastWatered, setLastWatered] = useState<string | null>(null);
+  const [browse, setBrowse] = useState<number | null>(null);
+  const [potCmText, setPotCmText] = useState('');
 
   const matches = useMemo(() => topMatches(), []);
-  const results = useMemo(() => (query.trim() ? searchSpecies(query, 40) : []), [query]);
+  const results = useMemo(() => (query.trim() ? searchSpecies(query, 60) : []), [query]);
+  const browseResults = useMemo(() => {
+    if (browse == null) return [];
+    const cats = new Set(BROWSE_GROUPS[browse].cats);
+    return ALL_SPECIES.filter((s) => cats.has(s.category)).sort((a, b) => a.common.localeCompare(b.common));
+  }, [browse]);
 
   const pick = (s: PlantSpecies) => {
     setSpecies(s);
@@ -114,6 +135,10 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
       spotId: spotId ?? spots[0]?.id ?? '',
       potSize,
       potMaterial,
+      potCm: (() => {
+        const n = parseFloat(potCmText);
+        return Number.isFinite(n) && n >= 5 && n <= 80 ? n : null;
+      })(),
       addedAt: now.toISOString(),
       lastWateredAt,
       waterLog: lastWateredAt ? [{ at: lastWateredAt, ml: null }] : [],
@@ -147,15 +172,16 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
     );
   }
 
-  // ── O2b: identify (searchable across the full database) ──
+  // ── O2b: identify (search or browse the full 1000+ catalog) ──
   if (step === 'identify') {
     const showResults = query.trim().length > 0;
+    const showBrowse = !showResults && browse != null;
     const confidences = [96, 88, 81];
     return (
       <Screen mode="light">
         <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Which is it?</Text>
         <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
-          Pick a match, or search {ALL_SPECIES.length}+ species.
+          Search {ALL_SPECIES.length.toLocaleString()} plants, or browse by type.
         </Text>
 
         {/* search */}
@@ -188,8 +214,32 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
           )}
         </View>
 
+        {/* browse-by-type chips */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12, flexGrow: 0 }} contentContainerStyle={{ gap: 8 }}>
+          {BROWSE_GROUPS.map((g, i) => (
+            <Pressable
+              key={g.label}
+              onPress={() => setBrowse(browse === i ? null : i)}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 5,
+                paddingHorizontal: 12,
+                minHeight: 40,
+                borderRadius: 20,
+                backgroundColor: browse === i ? accent.verdant : light.surface1,
+                borderWidth: 1,
+                borderColor: browse === i ? accent.verdant : light.hairline,
+              }}
+            >
+              <Text style={{ fontSize: 13 }}>{g.emoji}</Text>
+              <Text style={[type.caption, { color: browse === i ? '#fff' : light.ink }]}>{g.label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
         <ScrollView style={{ marginTop: 12 }} keyboardShouldPersistTaps="handled">
-          {!showResults &&
+          {!showResults && !showBrowse &&
             matches.map((s, i) => (
               <Card
                 key={s.common}
@@ -214,29 +264,34 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
             </Text>
           )}
 
-          {showResults &&
-            results.map((s) => (
-              <Pressable
-                key={s.common}
-                onPress={() => pick(s)}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 12,
-                  paddingVertical: 10,
-                  paddingHorizontal: 6,
-                  borderBottomWidth: 1,
-                  borderBottomColor: light.hairline,
-                }}
-              >
-                <Text style={{ fontSize: 26 }}>{s.emoji}</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={[type.cardTitle, { color: light.ink, fontSize: 15 }]}>{s.common}</Text>
-                  <Text style={[type.caption, { color: light.inkMuted, fontStyle: 'italic' }]}>{s.latin}</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={16} color={light.inkMuted} />
-              </Pressable>
-            ))}
+          {showBrowse && (
+            <Text style={[type.micro, { color: light.inkMuted, marginBottom: 6 }]}>
+              {browseResults.length} plants · A–Z
+            </Text>
+          )}
+
+          {(showResults ? results : showBrowse ? browseResults : []).map((s) => (
+            <Pressable
+              key={s.common}
+              onPress={() => pick(s)}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 12,
+                paddingVertical: 10,
+                paddingHorizontal: 6,
+                borderBottomWidth: 1,
+                borderBottomColor: light.hairline,
+              }}
+            >
+              <Text style={{ fontSize: 26 }}>{s.emoji}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: light.ink, fontSize: 15 }]}>{s.common}</Text>
+                <Text style={[type.caption, { color: light.inkMuted, fontStyle: 'italic' }]}>{s.latin}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={light.inkMuted} />
+            </Pressable>
+          ))}
         </ScrollView>
       </Screen>
     );
@@ -316,6 +371,36 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
         <Text style={[type.micro, { color: light.inkMuted, marginTop: 8 }]}>
           Terracotta dries ~2× faster — we account for it.
         </Text>
+
+        <Text style={[type.caption, { color: light.inkMuted, marginTop: 20 }]}>
+          Pot diameter (optional)
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 }}>
+          <TextInput
+            value={potCmText}
+            onChangeText={setPotCmText}
+            keyboardType="numeric"
+            placeholder="e.g. 18"
+            placeholderTextColor={light.inkMuted}
+            style={[
+              type.cardTitle,
+              {
+                color: light.ink,
+                backgroundColor: light.surface1,
+                borderRadius: 14,
+                paddingHorizontal: 14,
+                minHeight: 48,
+                width: 110,
+              },
+            ]}
+          />
+          <Text style={[type.body, { color: light.inkMuted }]}>cm across the top</Text>
+        </View>
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+          Same species, different pot = different water needs. Measuring makes the ml amounts exact;
+          skip it and Greenr uses the size bucket above.
+        </Text>
+
         <GButton title="Continue" onPress={() => setStep('spot')} style={{ marginTop: 28 }} />
       </Screen>
     );

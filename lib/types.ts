@@ -64,6 +64,11 @@ export interface Plant {
   spotId: string;
   potSize: PotSize;
   potMaterial: PotMaterial;
+  /**
+   * Pot diameter in cm (optional). Same species, different pot = different
+   * water needs — this makes ml amounts exact instead of S/M/L buckets.
+   */
+  potCm?: number | null;
   /** ISO timestamp when the plant was added (drives the baseline countdown) */
   addedAt?: string;
   /** last watering the user reported (asked at registration, updated by logs) */

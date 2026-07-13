@@ -1,5 +1,6 @@
 import { getSpecies } from './plants';
 import { Plant, Spot } from './types';
+import { soilLiters } from './watering';
 
 /**
  * The advice engine. Every recommendation is specific: exact water volume
@@ -20,11 +21,15 @@ function envFor(species: string): { dli: [number, number]; rhFloor: number } {
   return { dli: [1.5, 6], rhFloor: 35 };
 }
 
-/** Exact watering volume from pot size + material (terracotta breathes). */
+/**
+ * Recommended thorough-watering volume: ~11.5% of the pot's soil volume, from
+ * the measured pot diameter when the user gave one (same species, bigger pot =
+ * more water), else the S/M/L bucket. Terracotta breathes, so it gets extra.
+ */
 export function waterAmount(plant: Plant): { ml: number; label: string } {
-  const base = plant.potSize === 'S' ? 150 : plant.potSize === 'M' ? 350 : 700;
+  const base = soilLiters(plant.potSize, plant.potCm) * 115;
   const factor = plant.potMaterial === 'Terracotta' ? 1.2 : plant.potMaterial === 'Ceramic' ? 1 : 0.9;
-  const ml = Math.round((base * factor) / 25) * 25;
+  const ml = Math.max(50, Math.round((base * factor) / 25) * 25);
   // kitchen units first — cups under 2, pints above
   const cups = ml / 240;
   let unit: string;

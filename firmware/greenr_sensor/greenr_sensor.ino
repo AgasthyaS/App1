@@ -4,17 +4,19 @@
  *  WiFi hotspot → pick home WiFi on the page that appears → done. No code, no
  *  computer. The WiFi is remembered across deep sleep.
  *
- *  Reads light (LDR), soil (capacitive), temp/humidity (DHT11), keeps a running
- *  Daily Light Integral, uploads to Supabase, deep-sleeps. The server controls
- *  the sleep interval and can request an immediate reading (app "read now").
- *okay
+ *  Reads light (LDR), soil (capacitive), temp/humidity (AHT10 on the C3 build,
+ *  DHT22 on the legacy dev kit), keeps a running Daily Light Integral, uploads
+ *  to Supabase, deep-sleeps. The server controls the sleep interval and can
+ *  request an immediate reading (app "read now").
+ *
  *  LIBRARIES (Arduino IDE → Library Manager):
  *    - "WiFiManager" by tzapu
- *    - "DHT sensor library" by Adafruit (+ "Adafruit Unified Sensor")
+ *    - "Adafruit AHTX0" (+ "Adafruit BusIO", "Adafruit Unified Sensor")  [C3 build]
+ *    - "DHT sensor library" by Adafruit                                  [legacy dev-kit build]
  *  Board: "ESP32C3 Dev Module".
  *
  *  WIRING (ESP32-C3 Super Mini):
- *    LDR AO -> GPIO0 | Soil AO -> GPIO1 | DHT11 DATA -> GPIO3
+ *    LDR AO -> GPIO0 | Soil AOUT -> GPIO1 | AHT10 SDA -> GPIO4, SCL -> GPIO5
  *    All sensor VCC -> GPIO10 (switched power) | All GND -> GND
  *
  *  DEVICE_ID / DEVICE_KEY: these are unique per unit. The provisioning tool
@@ -25,11 +27,21 @@
 #include <WiFiManager.h>          // tzapu
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <DHT.h>
 #include <time.h>
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  // C3 build: AHT10 temp/humidity over I2C.
+  // Library Manager → install "Adafruit AHTX0" (+ its "Adafruit BusIO" dep).
+  #include <Wire.h>
+  #include <Adafruit_AHTX0.h>
+#else
+  #include <DHT.h>
+#endif
 
 // ---------- PER-DEVICE IDENTITY (from the provisioning tool) ----------
-// (Defaults below are your first test device so you can try it immediately.)
+// THIS BUILD = the ORIGINAL ESP32 dev-kit unit (DHT22). Board = "ESP32 Dev
+// Module" → the #else pin set + DHT22 are selected automatically below.
+// (The C3+AHT10 unit is 1b9345cb-5b4c-41de-a137-1e8f46b3f022 / key
+//  2b442b85c5491c5164519937d1d051c2 — paste that back if you flash the C3.)
 #define DEVICE_ID   "ae2da43d-781a-40f7-a3ca-45e5570f5d81"
 #define DEVICE_KEY  "b7b1da534f47fef89ebd1f182fef646c"
 // ----------------------------------------------------------------------
@@ -38,6 +50,12 @@
 // SOIL_AIR = raw value when DRY (must be a bit ABOVE your dry reading so dry
 // lands near 0%). SOIL_WATER = raw value when the probe sits in water.
 int SOIL_AIR = 3150, SOIL_WATER = 1400;
+
+// LIGHT: raw ADC at DARK vs BRIGHT. Defaults assume a normal LDR (dark = low
+// raw). If YOUR module is reversed (reads HIGH in the dark), the easiest fix is
+// in the app — Devices → Calibrate → "Reversed light sensor" — which flips it
+// everywhere without a reflash. (Alternatively swap these two numbers, but then
+// leave that in-app switch OFF so it isn't flipped twice.)
 int LIGHT_DARK = 200, LIGHT_BRIGHT = 3200;
 
 const char* SUPABASE_URL =
@@ -48,25 +66,42 @@ const char* SUPABASE_ANON =
 // Pins differ by board. The right set is picked automatically from the board
 // you select in Arduino IDE (Tools → Board).
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
-  // ESP32-C3 Super Mini
+  // ESP32-C3 Super Mini: LDR + soil are analog; AHT10 rides the I2C bus.
   #define LDR_PIN    0
   #define SOIL_PIN   1
-  #define DHT_PIN    3
+  #define AHT_SDA    4    // AHT10 SDA
+  #define AHT_SCL    5    // AHT10 SCL
   #define SENSOR_PWR 10
+  Adafruit_AHTX0 aht;
+  bool ahtOk = false;
 #else
   // Original ESP32 dev kit — matches the soldered wiring:
   #define LDR_PIN    34   // light sensor AO   (light VCC on 3V3)
   #define SOIL_PIN   39   // soil AOUT (the "VN" pin = GPIO39)
   #define DHT_PIN    18   // DHT22 Out         (DHT VCC on 3V3)
   #define SENSOR_PWR 19   // soil VCC -> GPIO19: code powers the soil sensor here
+  #define DHTTYPE    DHT22
+  DHT dht(DHT_PIN, DHTTYPE);
 #endif
-#define DHTTYPE DHT22
 
-DHT dht(DHT_PIN, DHTTYPE);
+// Temp (°C) + relative humidity (%), from whichever climate sensor this build
+// carries. Returns NAN on failure; caller decides what to send.
+void readClimate(float* tempC, float* hum){
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  *tempC = NAN; *hum = NAN;
+  if (ahtOk){
+    sensors_event_t h, t;
+    if (aht.getEvent(&h, &t)){ *tempC = t.temperature; *hum = h.relative_humidity; }
+  }
+#else
+  *tempC = dht.readTemperature();
+  *hum   = dht.readHumidity();
+#endif
+}
 
 RTC_DATA_ATTR float dliAccum = 0;
 RTC_DATA_ATTR int   dayOfYear = -1;
-RTC_DATA_ATTR int   wakeSeconds = 1800;
+RTC_DATA_ATTR int   wakeSeconds = 10800;  // 3 h between reports when idle (server can override)
 
 int clampPct(long v){ return v<0?0:(v>100?100:(int)v); }
 
@@ -82,8 +117,8 @@ void goToSleep(int s){
 void readAndUpload(){
   int rawLight = analogRead(LDR_PIN);
   int rawSoil  = analogRead(SOIL_PIN);
-  float tempC  = dht.readTemperature();
-  float hum    = dht.readHumidity();
+  float tempC, hum;
+  readClimate(&tempC, &hum);
   if (isnan(tempC)) tempC = 0;
   if (isnan(hum))   hum   = 0;
   Serial.printf("raw light=%d  raw soil=%d  temp=%.1f  hum=%.1f\n", rawLight, rawSoil, tempC, hum);
@@ -118,13 +153,17 @@ void readAndUpload(){
     Serial.printf("POST %d: %s\n", code, resp.c_str());
     int wi = resp.indexOf("wake_seconds");
     if (wi >= 0){ int c = resp.indexOf(':', wi); wakeSeconds = resp.substring(c + 1).toInt(); }
-    if (wakeSeconds < 5 || wakeSeconds > 86400) wakeSeconds = 1800;  // sane bounds
+    if (wakeSeconds < 5 || wakeSeconds > 86400) wakeSeconds = 10800;  // sane bounds
     https.end();
   }
 }
 
 void setup(){
   Serial.begin(115200); delay(50);
+
+  // Power the sensors FIRST — their power LEDs double as a "wiring is good"
+  // indicator even before Wi-Fi is configured.
+  if (SENSOR_PWR >= 0){ pinMode(SENSOR_PWR, OUTPUT); digitalWrite(SENSOR_PWR, HIGH); }
 
   // WiFi via captive portal (see header). No WiFi yet → nap, reopen setup.
   WiFiManager wm;
@@ -134,9 +173,14 @@ void setup(){
     goToSleep(300);
   }
 
-  // Power the sensors and sync the clock once, then let them warm up.
-  if (SENSOR_PWR >= 0){ pinMode(SENSOR_PWR, OUTPUT); digitalWrite(SENSOR_PWR, HIGH); }
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  delay(50);                        // AHT10 wants ~40 ms after power-up
+  Wire.begin(AHT_SDA, AHT_SCL);
+  ahtOk = aht.begin();
+  if (!ahtOk) Serial.println("AHT10 not found — check SDA=4 / SCL=5 wiring");
+#else
   dht.begin();
+#endif
   configTime(0, 0, "pool.ntp.org");
   delay(1200);
 

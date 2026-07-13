@@ -7,8 +7,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Card, GButton } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, layout, type } from '@/constants/theme';
+import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { estimateWaterSchedule, type EstimateSchedule } from '@/lib/estimate';
+import { idealsFor } from '@/lib/plantStatus';
+import { mlNeeded } from '@/lib/watering';
 import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
+import { storedLightAvg } from '@/lib/insights';
 import { computeSchedule, type WaterSchedule } from '@/lib/schedule';
 import { activePlants, useGreenr } from '@/lib/store';
 import { useAllLiveReadings, useAllReadingHistories } from '@/lib/useLiveReading';
@@ -73,12 +77,15 @@ function ForecastRow({
   hasSensor,
   schedule,
   estimate,
+  refillMl,
   onPress,
 }: {
   plant: Plant;
   hasSensor: boolean;
   schedule?: WaterSchedule;
   estimate?: EstimateSchedule;
+  /** exact ml to pour when the sensor says it's dry right now */
+  refillMl?: number | null;
   onPress: () => void;
 }) {
   // Sensored plants project a real next-watering date from the drying trend (§5).
@@ -101,6 +108,11 @@ function ForecastRow({
             ? s.basis
             : 'A watering date appears once the sensor has logged a few readings.'}
         </Text>
+        {overdue && refillMl != null && (
+          <Text style={[type.caption, { color: accent.clay, marginTop: 6 }]}>
+            Add about <Text style={type.numBold as any}>{refillMl} ml</Text> to bring it back into range.
+          </Text>
+        )}
         {s?.weatherNote ? (
           <Text style={[type.micro, { color: accent.verdant, marginTop: 4, lineHeight: 15 }]} numberOfLines={2}>
             {s.weatherNote}
@@ -135,7 +147,7 @@ function ForecastRow({
 export default function ForecastTab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants: allPlants, spots, tasks, briefingOpened, settings, calibrations } = useGreenr();
+  const { plants: allPlants, spots, tasks, briefingOpened, settings, calibrations, lightDaily } = useGreenr();
   const liveReadings = useAllLiveReadings();
   const histories = useAllReadingHistories();
   const weather = useWeather();
@@ -144,14 +156,17 @@ export default function ForecastTab() {
   const plants = useMemo(() => activePlants(allPlants), [allPlants]);
 
   // Project each sensored plant's next watering from its drying history + weather.
+  // History is calibration-corrected first so offsets shift the projection too.
   const schedules = useMemo(() => {
     const m = new Map<string, WaterSchedule>();
     plants.forEach((p) => {
       if (!liveReadings.has(p.id)) return;
       const outdoor = !!spots.find((s) => s.id === p.spotId)?.outdoor;
+      const cal = calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId);
+      const hist = (histories.get(p.id) ?? []).map((r) => applyCalibration(r, cal));
       m.set(
         p.id,
-        computeSchedule(histories.get(p.id) ?? [], p.comfortBand, p.species, {
+        computeSchedule(hist, p.comfortBand, p.species, {
           weather: weather.weather,
           outdoor,
         }),
@@ -159,7 +174,7 @@ export default function ForecastTab() {
     });
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plants, liveReadings, histories, spots, weather.weather]);
+  }, [plants, liveReadings, histories, spots, weather.weather, calibrations]);
 
   // Sensorless plants get the honest last-watered cycle instead of a model bar.
   const estimates = useMemo(() => {
@@ -187,11 +202,12 @@ export default function ForecastTab() {
           plant: p,
           hasSensor: liveReadings.has(p.id),
           reading: liveReadings.get(p.id) ?? null,
-          calibration: p.sensorId ? calibrations[p.sensorId] : null,
+          calibration: calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
+          lightAvg: storedLightAvg(lightDaily[p.id]),
         })),
         settings.unitsF,
       ),
-    [plants, liveReadings, calibrations, settings.unitsF],
+    [plants, liveReadings, calibrations, lightDaily, settings.unitsF],
   );
 
   // Healthy = plants whose vitality is actually known and ≥70.
@@ -202,12 +218,13 @@ export default function ForecastTab() {
           p,
           liveReadings.has(p.id),
           liveReadings.get(p.id) ?? null,
-          p.sensorId ? calibrations[p.sensorId] : null,
+          calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
           settings.unitsF,
+          storedLightAvg(lightDaily[p.id]),
         );
         return !v.awaiting && !v.pending && v.score >= 70;
       }).length,
-    [plants, liveReadings, calibrations, settings.unitsF],
+    [plants, liveReadings, calibrations, lightDaily, settings.unitsF],
   );
 
   const dueSoon = sorted.filter((p) => {
@@ -286,16 +303,29 @@ export default function ForecastTab() {
         ) : (
           <>
             <Text style={[type.sectionHeader as any, { color: dark.inkMuted, marginBottom: 8 }]}>WATERING SCHEDULE</Text>
-            {sorted.map((p) => (
-              <ForecastRow
-                key={p.id}
-                plant={p}
-                hasSensor={liveReadings.has(p.id)}
-                schedule={schedules.get(p.id)}
-                estimate={estimates.get(p.id)}
-                onPress={() => router.push(`/plant/${p.id}`)}
-              />
-            ))}
+            {sorted.map((p) => {
+              // Exact refill for plants the sensor says are dry right now.
+              let refillMl: number | null = null;
+              const raw = liveReadings.get(p.id);
+              if (raw) {
+                const r = applyCalibration(raw, calibrationFor(calibrations, raw.device_id, p.sensorId));
+                const [lo, hi] = idealsFor(p.species, p.comfortBand).band;
+                if (r.soil_pct != null && r.soil_pct < lo) {
+                  refillMl = mlNeeded(p.potSize, p.potMaterial, r.soil_pct, Math.round((lo + hi) / 2), p.potCm);
+                }
+              }
+              return (
+                <ForecastRow
+                  key={p.id}
+                  plant={p}
+                  hasSensor={liveReadings.has(p.id)}
+                  schedule={schedules.get(p.id)}
+                  estimate={estimates.get(p.id)}
+                  refillMl={refillMl}
+                  onPress={() => router.push(`/plant/${p.id}`)}
+                />
+              );
+            })}
           </>
         )}
       </View>

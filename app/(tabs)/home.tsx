@@ -9,14 +9,16 @@ import VitalityRing from '@/components/greenr/VitalityRing';
 import WeatherCard from '@/components/greenr/WeatherCard';
 import { accent, bandFor, dark, layout, type } from '@/constants/theme';
 import { type AlertLevel, notificationsFor } from '@/lib/alerts';
-import { applyCalibration } from '@/lib/calibration';
+import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { estimateWaterSchedule } from '@/lib/estimate';
 import { dliWord } from '@/lib/format';
 import { BASELINE_DAYS, gardenVitalityAvg, vitalityFor } from '@/lib/health';
+import { storedLightAvg } from '@/lib/insights';
 import { idealsFor, lightStatus, soilStatus, tempStatus } from '@/lib/plantStatus';
 import { activePlants, useGreenr } from '@/lib/store';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
 import { useWeather } from '@/lib/useWeather';
+import { mlNeeded } from '@/lib/watering';
 import { cToF } from '@/lib/weather';
 import { Plant, Spot } from '@/lib/types';
 
@@ -33,13 +35,17 @@ function tintFor(dli: number): string {
 
 export default function HomeTab() {
   const router = useRouter();
-  const { plants: allPlants, spots, settings, calibrations } = useGreenr();
+  const { plants: allPlants, spots, settings, calibrations, lightDaily } = useGreenr();
   const plants = useMemo(() => activePlants(allPlants), [allPlants]);
   const liveReadings = useAllLiveReadings();
   const weather = useWeather();
   const insets = useSafeAreaInsets();
 
-  const calFor = (p: Plant) => (p.sensorId ? calibrations[p.sensorId] : null);
+  const calFor = (p: Plant) =>
+    calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId);
+  // Judge light on the plant's accumulated multi-day daytime average (null until
+  // it's built up any days → health falls back to the live reading).
+  const lightFor = (p: Plant) => storedLightAvg(lightDaily[p.id]);
 
   const avg = useMemo(
     () =>
@@ -49,11 +55,12 @@ export default function HomeTab() {
           hasSensor: liveReadings.has(p.id),
           reading: liveReadings.get(p.id) ?? null,
           calibration: calFor(p),
+          lightAvg: lightFor(p),
         })),
         settings.unitsF,
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [plants, liveReadings, calibrations, settings.unitsF],
+    [plants, liveReadings, calibrations, lightDaily, settings.unitsF],
   );
 
   // Alerts across sensored plants, using live weather for outdoor rain-delay.
@@ -62,19 +69,22 @@ export default function HomeTab() {
     plants.forEach((p) => {
       if (!liveReadings.has(p.id)) return;
       const outdoor = !!spots.find((s) => s.id === p.spotId)?.outdoor;
+      const raw = liveReadings.get(p.id) ?? null;
       notificationsFor({
         plantName: p.name,
         species: p.species,
         band: p.comfortBand,
-        reading: liveReadings.get(p.id) ?? null,
+        // Alerts judge the calibration-corrected reading (incl. flipped light).
+        reading: raw ? applyCalibration(raw, calFor(p)) : raw,
         outdoor,
         weather: weather.weather,
+        pot: { size: p.potSize, material: p.potMaterial, cm: p.potCm },
       }).forEach((a, i) => items.push({ id: `${p.id}-${i}`, level: a.level, text: a.text }));
     });
     const order: Record<AlertLevel, number> = { bad: 0, warn: 1, info: 2 };
     return items.sort((a, b) => order[a.level] - order[b.level]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plants, liveReadings, spots, weather.weather]);
+  }, [plants, liveReadings, spots, weather.weather, calibrations]);
 
   const byRoom = useMemo(() => {
     const rooms = new Map<string, Spot[]>();
@@ -86,7 +96,7 @@ export default function HomeTab() {
 
   const nowLine = (p: Plant) => {
     const hasSensor = liveReadings.has(p.id);
-    const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF);
+    const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF, lightFor(p));
     if (!v.sensored) {
       // No sensor: the honest cycle from last-watered + species rhythm.
       const est = estimateWaterSchedule(p);
@@ -99,8 +109,10 @@ export default function HomeTab() {
     const reading = applyCalibration(liveReadings.get(p.id)!, calFor(p));
     const ideal = idealsFor(p.species, p.comfortBand);
     const soil = soilStatus(reading.soil_pct, ideal.band);
-    if (reading.soil_pct != null && reading.soil_pct < ideal.band[0])
-      return { text: `Water now — soil ${Math.round(reading.soil_pct)}%`, tone: accent.clay };
+    if (reading.soil_pct != null && reading.soil_pct < ideal.band[0]) {
+      const ml = mlNeeded(p.potSize, p.potMaterial, reading.soil_pct, Math.round((ideal.band[0] + ideal.band[1]) / 2), p.potCm);
+      return { text: `Water now — soil ${Math.round(reading.soil_pct)}% · add ~${ml} ml`, tone: accent.clay };
+    }
     if (reading.soil_pct != null && reading.soil_pct > ideal.band[1])
       return { text: `Let it dry — soil ${Math.round(reading.soil_pct)}%`, tone: accent.sunbeam };
     const light = lightStatus(reading.light_lux, ideal.dli);
@@ -163,7 +175,7 @@ export default function HomeTab() {
           <SectionHeader>Your plants now</SectionHeader>
           {plants.map((p) => {
             const hasSensor = liveReadings.has(p.id);
-            const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF);
+            const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF, lightFor(p));
             const line = nowLine(p);
             const noScore = v.awaiting || v.pending;
             const spotName = spots.find((s) => s.id === p.spotId)?.name;
