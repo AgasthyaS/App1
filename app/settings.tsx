@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { Card, Row, Screen, SectionHeader } from '@/components/greenr/UI';
-import { dark, type } from '@/constants/theme';
+import { accent, dark, type } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
 import { BUILD_STAMP } from '@/lib/build';
+import * as notifications from '@/lib/notifications';
 import { confirmAction, notify, shareContent } from '@/lib/platform';
 import { useGreenr } from '@/lib/store';
 
@@ -27,6 +28,32 @@ export default function SettingsScreen() {
 
   const cycle = <T,>(list: readonly T[], current: T): T =>
     list[(list.findIndex((v) => JSON.stringify(v) === JSON.stringify(current)) + 1) % list.length];
+
+  const [reminderNote, setReminderNote] = useState<string | null>(null);
+  const supported = notifications.isSupported();
+
+  const toggleReminders = async () => {
+    if (settings.remindersEnabled) {
+      setSettings({ remindersEnabled: false });
+      await notifications.cancelAll();
+      setReminderNote(null);
+      return;
+    }
+    if (!supported) {
+      setReminderNote('This browser doesn’t support notifications. Use the phone app for care reminders.');
+      return;
+    }
+    const status = await notifications.ensurePermission();
+    if (status === 'granted') {
+      setSettings({ remindersEnabled: true });
+      setReminderNote(null);
+      notifications.sendTest();
+    } else {
+      setReminderNote(
+        'Notifications are blocked. Turn them on for Greenr in your browser or phone settings, then try again.',
+      );
+    }
+  };
 
   const exportAll = () => {
     const payload = {
@@ -60,6 +87,30 @@ export default function SettingsScreen() {
           value={settings.briefingTime}
           onPress={() => setSettings({ briefingTime: cycle(TIMES, settings.briefingTime) })}
         />
+      </Card>
+
+      <SectionHeader>Reminders</SectionHeader>
+      <Card>
+        <Text style={[type.caption, { color: dark.inkMuted, lineHeight: 18 }]}>
+          A nudge when a plant needs watering, moving to better light, or feeding — scheduled from
+          each plant’s real cadence and kept out of your quiet hours.{' '}
+          {notifications.backgroundDelivery
+            ? 'Delivered even when the app is closed.'
+            : 'On the web these arrive while Greenr is open in a tab; install the phone app for reminders when it’s closed.'}
+        </Text>
+        <Row
+          title="Care reminders"
+          value={settings.remindersEnabled ? 'On' : 'Off'}
+          onPress={toggleReminders}
+        />
+        {settings.remindersEnabled && (
+          <Row title="Send a test reminder" value="→" onPress={() => notifications.sendTest()} />
+        )}
+        {reminderNote && (
+          <Text style={[type.caption, { color: accent.clay, lineHeight: 18, marginTop: 6 }]}>
+            {reminderNote}
+          </Text>
+        )}
       </Card>
 
       <SectionHeader>Notifications</SectionHeader>

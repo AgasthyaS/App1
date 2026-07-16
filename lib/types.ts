@@ -169,4 +169,6 @@ export interface Settings {
   appearance: 'Dark' | 'Light' | 'System';
   researchOptIn: boolean;
   plus: boolean;
+  /** local care reminders (water / move / feed) scheduled on-device */
+  remindersEnabled: boolean;
 }

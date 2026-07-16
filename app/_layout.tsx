@@ -19,6 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { dark } from '@/constants/theme';
 import { AuthProvider } from '@/lib/auth';
 import { GreenrProvider } from '@/lib/store';
+import { ReminderSync } from '@/lib/useReminders';
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -40,6 +41,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <GreenrProvider>
+        <ReminderSync />
         <StatusBar style="light" />
         <Stack
           screenOptions={{

@@ -55,6 +55,7 @@ const DEFAULT_SETTINGS: Settings = {
   appearance: 'Dark',
   researchOptIn: true,
   plus: false,
+  remindersEnabled: false,
 };
 
 /** Real users start with nothing — the garden is theirs to build. */
