@@ -9,7 +9,7 @@ import { Card, Chip, SectionHeader } from '@/components/greenr/UI';
 import { accent, dark, layout, type } from '@/constants/theme';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { getDeviceIdForPlant, getReadingsSince, type Reading } from '@/lib/devices';
-import { GRADE_WORD, overallGrade, rateMetrics, type Grade, type MetricRating } from '@/lib/rating';
+import { GRADE_WORD, metricTrend, overallGrade, rateMetrics, type Grade, type MetricRating } from '@/lib/rating';
 import { useGreenr } from '@/lib/store';
 
 type Range = 'day' | 'week' | 'month';
@@ -262,9 +262,21 @@ export default function Dashboard() {
                         ))}
                       </View>
                     )}
-                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, marginLeft: 23, lineHeight: 14 }]}>
-                      {m.idealText}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, marginLeft: 23, gap: 6 }}>
+                      <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 14 }]}>
+                        {m.idealText}
+                      </Text>
+                      {!selectedDay && (() => {
+                        const tr = metricTrend(m.days);
+                        if (!tr) return null;
+                        const arrow = tr.direction === 'rising' ? '↑' : tr.direction === 'falling' ? '↓' : '→';
+                        return (
+                          <Text style={[type.micro, { color: dark.inkMuted }]}>
+                            {arrow} {tr.direction === 'steady' ? 'steady' : `${tr.perDay > 0 ? '+' : ''}${tr.perDay}${m.unit}/day`}
+                          </Text>
+                        );
+                      })()}
+                    </View>
                   </View>
                 );
               })}

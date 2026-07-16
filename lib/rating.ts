@@ -203,6 +203,41 @@ export function rateMetrics(
   ];
 }
 
+export interface Trend {
+  /** slope in display-units per day (least-squares fit) */
+  perDay: number;
+  /** 'rising' | 'falling' | 'steady' */
+  direction: 'rising' | 'falling' | 'steady';
+  /** Pearson r² of the fit, 0–1 — how much of the variation the trend explains */
+  r2: number;
+}
+
+/**
+ * Least-squares trend of a metric's per-day averages, with r² so the UI can say
+ * how meaningful the trend is (a noisy series with low r² is "steady", not a
+ * real drift). Null until there are ≥3 days.
+ */
+export function metricTrend(days: DayRating[]): Trend | null {
+  if (days.length < 3) return null;
+  const xs = days.map((_, i) => i);
+  const ys = days.map((d) => d.avg);
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) {
+    sxy += (xs[i] - mx) * (ys[i] - my);
+    sxx += (xs[i] - mx) ** 2;
+    syy += (ys[i] - my) ** 2;
+  }
+  if (sxx === 0) return { perDay: 0, direction: 'steady', r2: 0 };
+  const slope = sxy / sxx;
+  const r2 = syy === 0 ? 1 : (sxy * sxy) / (sxx * syy);
+  // Only call it a real trend when the fit explains a meaningful share of variance.
+  const direction: Trend['direction'] = r2 < 0.35 ? 'steady' : slope > 0 ? 'rising' : 'falling';
+  return { perDay: Math.round(slope * 100) / 100, direction, r2: Math.round(r2 * 100) / 100 };
+}
+
 /** One overall rank across the rated metrics (null until something is rated). */
 export function overallGrade(ratings: MetricRating[]): { grade: Grade; word: string } | null {
   const graded = ratings.filter((r) => r.grade != null) as (MetricRating & { grade: Grade })[];

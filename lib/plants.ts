@@ -162,6 +162,52 @@ const CATEGORIES: Record<CategoryKey, CategoryBands> = {
   bulb: { emoji: '🌷', band: [30, 55], dli: [6, 25], rhFloor: 30, temp: [45, 80], outdoor: true },
 };
 
+/**
+ * Ecological niche width per category — how forgiving a plant is when a factor
+ * drifts outside its ideal band. These are physiologically grounded: desert
+ * CAM plants (cacti, succulents) tolerate enormous swings in light, heat, and
+ * humidity; rainforest understory plants (ferns, calatheas) are stenotopic —
+ * narrow tolerance, punished fast by any drift. The compatibility model reads
+ * these as the σ (falloff width) of each factor's tolerance curve, so the score
+ * is driven by real data instead of one hardcoded margin for every plant.
+ *
+ *   lightSigmaDli  — DLI units of grace beyond the band before fit → ~0
+ *   tempSigmaF     — °F of grace beyond the comfortable range
+ *   rhSigmaPct     — %RH of grace below the humidity floor
+ *   demand         — relative weight of LIGHT in this plant's suitability
+ *                    (sun-driven plants care more about getting light right)
+ */
+export interface CategoryNiche {
+  lightSigmaDli: number;
+  tempSigmaF: number;
+  rhSigmaPct: number;
+  demand: number; // 0.9 (buffered) … 1.15 (light-critical)
+}
+
+const CATEGORY_NICHE: Record<CategoryKey, CategoryNiche> = {
+  tropical: { lightSigmaDli: 4, tempSigmaF: 10, rhSigmaPct: 22, demand: 1.0 },
+  fern: { lightSigmaDli: 2.5, tempSigmaF: 8, rhSigmaPct: 16, demand: 0.95 },
+  palm: { lightSigmaDli: 4.5, tempSigmaF: 11, rhSigmaPct: 26, demand: 1.0 },
+  succulent: { lightSigmaDli: 9, tempSigmaF: 16, rhSigmaPct: 40, demand: 1.12 },
+  cactus: { lightSigmaDli: 10, tempSigmaF: 18, rhSigmaPct: 45, demand: 1.15 },
+  vine: { lightSigmaDli: 4, tempSigmaF: 10, rhSigmaPct: 24, demand: 0.98 },
+  tree: { lightSigmaDli: 5, tempSigmaF: 12, rhSigmaPct: 28, demand: 1.02 },
+  herb: { lightSigmaDli: 6, tempSigmaF: 12, rhSigmaPct: 30, demand: 1.08 },
+  vegetable: { lightSigmaDli: 7, tempSigmaF: 12, rhSigmaPct: 30, demand: 1.12 },
+  flowering: { lightSigmaDli: 5, tempSigmaF: 11, rhSigmaPct: 26, demand: 1.05 },
+  orchid: { lightSigmaDli: 3, tempSigmaF: 9, rhSigmaPct: 18, demand: 1.0 },
+  grass: { lightSigmaDli: 6, tempSigmaF: 13, rhSigmaPct: 30, demand: 1.05 },
+  carnivorous: { lightSigmaDli: 4, tempSigmaF: 10, rhSigmaPct: 14, demand: 1.08 },
+  shrub: { lightSigmaDli: 8, tempSigmaF: 16, rhSigmaPct: 34, demand: 1.05 },
+  bulb: { lightSigmaDli: 7, tempSigmaF: 15, rhSigmaPct: 34, demand: 1.03 },
+};
+
+/** The niche width for a species (falls back to tropical if unknown). */
+export function nicheFor(species: string | undefined): CategoryNiche {
+  const s = getSpecies(species);
+  return CATEGORY_NICHE[s?.category ?? 'tropical'];
+}
+
 /** Everything a category profile carries except the bands + generated fields. */
 type CategoryCare = Omit<
   CareProfile,

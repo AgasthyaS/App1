@@ -16,7 +16,8 @@ import { daysAgoLabel } from '@/lib/format';
 import { useGreenr } from '@/lib/store';
 import { useLiveReading } from '@/lib/useLiveReading';
 import { idealsFor, type Tone } from '@/lib/plantStatus';
-import { plantsForEnvironment } from '@/lib/compatibility';
+import { plantsForEnvironment, scoreSpeciesForEnvironment, type Match } from '@/lib/compatibility';
+import { estimateDli, dliBracket } from '@/lib/lightModel';
 import { insightsFor, lightBenchmark, dayLight, recentLightAvg, lightVerdict } from '@/lib/insights';
 import { careProfileFor } from '@/lib/plantCare';
 import { computeHealth, vitalityFor, BASELINE_DAYS, type HealthComponent } from '@/lib/health';
@@ -73,6 +74,30 @@ function toxSummary(t: Toxicity): { text: string; color: string; icon: 'warning'
 
 const healthTone = (t: HealthComponent['tone']) =>
   t === 'good' ? accent.sage : t === 'warn' ? accent.sunbeam : t === 'bad' ? accent.clay : dark.inkMuted;
+
+/** Color ramp for a 0–100 suitability score. */
+const matchColor = (score: number) =>
+  score >= 82 ? accent.sage : score >= 62 ? accent.verdant : score >= 42 ? accent.sunbeam : accent.clay;
+
+/** One factor of the spot-suitability breakdown: fit bar + measured vs ideal. */
+function FactorBar({ f }: { f: Match['factors'][number] }) {
+  const pct = Math.round(f.fit * 100);
+  const color = matchColor(pct);
+  return (
+    <View style={{ marginTop: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[type.caption, { color: dark.ink, flex: 1 }]}>{f.label}</Text>
+        <Text style={[type.micro, { color: dark.inkMuted }]}>
+          {f.measured} · {f.ideal}
+        </Text>
+        <Text style={[type.numBold as any, { color, fontSize: 12, minWidth: 34, textAlign: 'right' }]}>{pct}%</Text>
+      </View>
+      <View style={{ height: 5, borderRadius: 3, backgroundColor: dark.hairline, marginTop: 5, overflow: 'hidden' }}>
+        <View style={{ width: `${pct}%`, height: 5, backgroundColor: color }} />
+      </View>
+    </View>
+  );
+}
 
 /** One row of the transparent health breakdown: earned/max, reason, action (§9/§2). */
 function HealthRow({ c }: { c: HealthComponent }) {
@@ -283,13 +308,33 @@ export default function PlantDetail() {
   // Charts plot only real readings — a missing metric is skipped, never drawn as 0.
   const soilBars = calHistory.filter((r) => r.soil_pct != null);
   const lightBars = calHistory.filter((r) => r.light_lux != null);
-  // Which species would thrive in THIS spot, from the sensor's real environment.
-  const spotMatches =
-    calReading != null
-      ? plantsForEnvironment(calReading.light_lux, calReading.temp_c, calReading.humidity_pct, 5).filter(
-          (m) => m.species.common !== plant.species,
-        )
-      : [];
+  // Which species would thrive in THIS spot, from the sensor's real environment,
+  // scored by the Habitat Suitability model (lib/compatibility). Memoized — the
+  // model scans the whole species database.
+  const envLight = calReading?.light_lux ?? null;
+  const envTemp = calReading?.temp_c ?? null;
+  const envRh = calReading?.humidity_pct ?? null;
+  const hasEnv = calReading != null;
+  const spotMatches = useMemo(
+    () =>
+      hasEnv
+        ? plantsForEnvironment(envLight, envTemp, envRh, 5).filter((m) => m.species.common !== plant.species)
+        : [],
+    [hasEnv, envLight, envTemp, envRh, plant.species],
+  );
+  // How well THIS plant scores in its own spot — same math, comparable number,
+  // named limiting factor.
+  const selfMatch: Match | null = useMemo(
+    () => (hasEnv ? scoreSpeciesForEnvironment(plant.species, envLight, envTemp, envRh) : null),
+    [hasEnv, envLight, envTemp, envRh, plant.species],
+  );
+  // The physically-grounded DLI estimate for this spot (log-photometry). Prefer
+  // the accumulated multi-day light average when we have it.
+  const dliHere = useMemo(() => {
+    if (lightAvg) return estimateDli(lightAvg.avg);
+    if (envLight != null) return estimateDli(envLight);
+    return null;
+  }, [lightAvg, envLight]);
   const events = plant.timeline.filter((e) => {
     if (filter === 'All') return true;
     if (filter === 'Photos') return e.kind === 'photo';
@@ -928,6 +973,29 @@ export default function PlantDetail() {
                         spot gives {plant.name} the light it needs.
                       </Text>
                     )}
+                    {/* DLI estimate — real photometry from the light index */}
+                    {dliHere && (
+                      <View style={{ flexDirection: 'row', gap: 10, marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: dark.hairline }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>ESTIMATED DLI</Text>
+                          <Text style={[type.numBold as any, { color: dark.ink, fontSize: 18, marginTop: 2 }]}>
+                            {dliHere.dli.toFixed(1)} <Text style={[type.micro, { color: dark.inkMuted }]}>mol/m²/day</Text>
+                          </Text>
+                          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 14 }]}>
+                            {dliHere.low.toFixed(1)}–{dliHere.high.toFixed(1)} range · {dliBracket(dliHere.dli)}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>{plant.species.toUpperCase()} WANTS</Text>
+                          <Text style={[type.numBold as any, { color: dark.ink, fontSize: 18, marginTop: 2 }]}>
+                            {ideal.dli[0]}–{ideal.dli[1]} <Text style={[type.micro, { color: dark.inkMuted }]}>DLI</Text>
+                          </Text>
+                          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 14 }]}>
+                            from ~{Math.round(dliHere.lux).toLocaleString()} lux · {Math.round(dliHere.ppfd)} µmol/m²/s
+                          </Text>
+                        </View>
+                      </View>
+                    )}
                   </>
                 ) : (
                   <Text style={[type.body, { color: dark.inkMuted, lineHeight: 21 }]}>
@@ -1096,17 +1164,52 @@ export default function PlantDetail() {
             </View>
           </Card>
 
+          {/* ── Spot fit for THIS plant (Habitat Suitability model) ── */}
+          {selfMatch && selfMatch.factors.length > 0 && (
+            <>
+              <SectionHeader>How well this spot suits {plant.name}</SectionHeader>
+              <Card accentBorder={selfMatch.score < 42 ? accent.clay : undefined}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={{ alignItems: 'center', minWidth: 62 }}>
+                    <Text style={[type.ritualTitle, { color: matchColor(selfMatch.score), fontSize: 30 }]}>
+                      {selfMatch.score}
+                    </Text>
+                    <Text style={[type.micro, { color: dark.inkMuted }]}>/ 100</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[type.cardTitle, { color: matchColor(selfMatch.score), fontSize: 16 }]}>
+                      {selfMatch.verdict}
+                    </Text>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                      {selfMatch.why}
+                    </Text>
+                  </View>
+                </View>
+                <Hairline style={{ marginVertical: 12 }} />
+                {selfMatch.factors.map((f) => (
+                  <FactorBar key={f.key} f={f} />
+                ))}
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                  Habitat Suitability Index: each factor scored against {plant.species}&apos;s tolerance
+                  curve, combined by weighted geometric mean (the scarcest factor limits the score).
+                  {selfMatch.confidence < 0.7 ? ' Light is an uncalibrated estimate, so treat this as approximate.' : ''}
+                </Text>
+              </Card>
+            </>
+          )}
+
           {/* ── What thrives in this spot (compatibility from the sensor) ── */}
           {spotMatches.length > 0 && (
             <>
               <SectionHeader>Thrives in this spot</SectionHeader>
               <Card>
-                <Text style={[type.micro, { color: dark.inkMuted, marginBottom: 10, lineHeight: 15 }]}>
-                  Scored from this spot&apos;s live light, temperature, and humidity.
+                <Text style={[type.micro, { color: dark.inkMuted, marginBottom: 12, lineHeight: 15 }]}>
+                  Every species ranked for this spot&apos;s measured light (≈{dliHere ? dliHere.dli.toFixed(1) : '—'} DLI),
+                  temperature, and humidity — same suitability model, higher = better fit.
                 </Text>
                 {spotMatches.map((m, i) => (
                   <View key={m.species.common}>
-                    {i > 0 && <Hairline style={{ marginVertical: 10 }} />}
+                    {i > 0 && <Hairline style={{ marginVertical: 12 }} />}
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                       <Text style={{ fontSize: 22 }}>{m.species.emoji}</Text>
                       <View style={{ flex: 1 }}>
@@ -1114,17 +1217,17 @@ export default function PlantDetail() {
                           {m.species.common}
                         </Text>
                         <Text style={[type.micro, { color: dark.inkMuted }]} numberOfLines={1}>
-                          {m.why}
+                          {m.verdict}
+                          {m.limiting ? ` · limited by ${m.limiting.label.toLowerCase()}` : ' · all factors in range'}
                         </Text>
                       </View>
-                      <Text
-                        style={[
-                          type.numBold as any,
-                          { fontSize: 16, color: m.score >= 80 ? accent.sage : m.score >= 55 ? accent.sunbeam : accent.clay },
-                        ]}
-                      >
-                        {m.score}%
+                      <Text style={[type.numBold as any, { fontSize: 17, color: matchColor(m.score) }]}>
+                        {m.score}
                       </Text>
+                    </View>
+                    {/* score bar */}
+                    <View style={{ height: 5, borderRadius: 3, backgroundColor: dark.hairline, marginTop: 7, overflow: 'hidden' }}>
+                      <View style={{ width: `${m.score}%`, height: 5, backgroundColor: matchColor(m.score) }} />
                     </View>
                   </View>
                 ))}
