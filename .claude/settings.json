@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(git add *)",
-      "Bash(git commit -q -m 'Rigorous spot-compatibility model + photometry + trend stats *)"
+      "Bash(git commit -q -m 'Rigorous spot-compatibility model + photometry + trend stats *)",
+      "Bash(VERCEL_TOKEN=vcp_4Ybg8ArGOqaSsfrX2Gj0Ga2mFhwyhTM9GrgqtBawm02yLBlJCr3ngThd node ./scripts/deploy-web.mjs)",
+      "Bash(git commit -q -m 'Sensorless care-fidelity rating system *)"
     ]
   }
 }

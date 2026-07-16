@@ -298,6 +298,9 @@ export function vitalityFor(
   calibration?: SensorCalibration | null,
   unitsF = true,
   lightAvg?: LightAvgInput | null,
+  /** sensorless care-fidelity score (lib/careScore) — the honest score when
+   *  there's no sensor but the user has logged real care behaviour */
+  careScore?: number | null,
 ): Vitality {
   if (hasSensor) {
     const h = computeHealth(plant.species, plant.comfortBand, reading, [], unitsF, calibration, lightAvg);
@@ -314,8 +317,26 @@ export function vitalityFor(
     };
   }
 
-  // Sensorless: no score at all until the baseline window has passed — a new
-  // plant's health simply isn't known yet, and pretending otherwise is lying.
+  // Sensorless: once the user has logged enough real care behaviour, the
+  // care-fidelity score (lib/careScore) is the honest, computed score — no
+  // sensor, but no invented measurements either.
+  if (careScore != null) {
+    return {
+      sensored: false,
+      measured: false,
+      awaiting: false,
+      pending: false,
+      baselineDay: null,
+      score: careScore,
+      estimate: false,
+      estimateBand: 0,
+      word: wordFor(careScore),
+    };
+  }
+
+  // No sensor and not enough logged behaviour yet — no score at all until the
+  // baseline window passes. A new plant's health simply isn't known, and
+  // pretending otherwise is lying.
   const owned = daysOwned(plant);
   if (owned < BASELINE_DAYS) {
     return {
@@ -356,11 +377,12 @@ export function gardenVitalityAvg(
     reading: Reading | null;
     calibration?: SensorCalibration | null;
     lightAvg?: LightAvgInput | null;
+    careScore?: number | null;
   }[],
   unitsF = true,
 ): number | null {
   const scores = items
-    .map((i) => vitalityFor(i.plant, i.hasSensor, i.reading, i.calibration, unitsF, i.lightAvg))
+    .map((i) => vitalityFor(i.plant, i.hasSensor, i.reading, i.calibration, unitsF, i.lightAvg, i.careScore))
     .filter((v) => !v.awaiting && !v.pending)
     .map((v) => v.score);
   if (!scores.length) return null;

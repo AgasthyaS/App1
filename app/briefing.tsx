@@ -7,6 +7,7 @@ import { Card, GButton, Hairline, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { light, type } from '@/constants/theme';
 import { calibrationFor } from '@/lib/calibration';
+import { careScoreValue } from '@/lib/careScore';
 import { deriveCareTasks } from '@/lib/careTasks';
 import { vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
@@ -34,6 +35,7 @@ export default function Briefing() {
       calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
       undefined,
       storedLightAvg(lightDaily[p.id]),
+      liveReadings.has(p.id) ? null : careScoreValue(p, spots.find((s) => s.id === p.spotId)),
     ),
   );
   const known = vitals.filter((v) => !v.pending && !v.awaiting);

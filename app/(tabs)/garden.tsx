@@ -11,6 +11,7 @@ import { accent, dark, type } from '@/constants/theme';
 import { waterAmount } from '@/lib/advice';
 import { estimateWaterSchedule } from '@/lib/estimate';
 import { calibrationFor } from '@/lib/calibration';
+import { careScoreValue } from '@/lib/careScore';
 import { vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
 import { activePlants, useGreenr } from '@/lib/store';
@@ -33,6 +34,7 @@ export default function GardenTab() {
       calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
       settings.unitsF,
       storedLightAvg(lightDaily[p.id]),
+      liveReadings.has(p.id) ? null : careScoreValue(p, spots.find((s) => s.id === p.spotId)),
     );
   const [sort, setSort] = useState<SortKey>('Urgency');
   const [grid, setGrid] = useState(true);

@@ -21,6 +21,7 @@ import { estimateDli, dliBracket } from '@/lib/lightModel';
 import { insightsFor, lightBenchmark, dayLight, recentLightAvg, lightVerdict } from '@/lib/insights';
 import { careProfileFor } from '@/lib/plantCare';
 import { computeHealth, vitalityFor, BASELINE_DAYS, type HealthComponent } from '@/lib/health';
+import { computeCareScore, type CareComponent } from '@/lib/careScore';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { estimateWaterSchedule, qualitativeNeeds } from '@/lib/estimate';
 import type { Toxicity } from '@/lib/plants';
@@ -78,6 +79,31 @@ const healthTone = (t: HealthComponent['tone']) =>
 /** Color ramp for a 0–100 suitability score. */
 const matchColor = (score: number) =>
   score >= 82 ? accent.sage : score >= 62 ? accent.verdant : score >= 42 ? accent.sunbeam : accent.clay;
+
+/** Representative percentage for a grade word (for coloring the watering strip). */
+const gradePct = (g: 'excellent' | 'good' | 'fair' | 'poor') =>
+  g === 'excellent' ? 90 : g === 'good' ? 70 : g === 'fair' ? 50 : 25;
+
+/** One component of the sensorless care-fidelity breakdown. */
+function CareRow({ c }: { c: CareComponent }) {
+  const pct = Math.round(c.fit * 100);
+  const color = matchColor(pct);
+  return (
+    <View style={{ marginTop: 14 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[type.caption, { color: dark.ink, flex: 1 }]}>{c.label}</Text>
+        <Text style={[type.numBold as any, { color, fontSize: 13, minWidth: 34, textAlign: 'right' }]}>{pct}%</Text>
+      </View>
+      <View style={{ height: 5, borderRadius: 3, backgroundColor: dark.hairline, marginTop: 6, overflow: 'hidden' }}>
+        <View style={{ width: `${pct}%`, height: 5, backgroundColor: color }} />
+      </View>
+      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 5, lineHeight: 15 }]}>{c.detail}</Text>
+      {c.recommendation ? (
+        <Text style={[type.micro, { color: accent.verdant, marginTop: 2, lineHeight: 15 }]}>→ {c.recommendation}</Text>
+      ) : null}
+    </View>
+  );
+}
 
 /** One factor of the spot-suitability breakdown: fit bar + measured vs ideal. */
 function FactorBar({ f }: { f: Match['factors'][number] }) {
@@ -236,12 +262,21 @@ export default function PlantDetail() {
   const sensored = liveDeviceId != null;
   const measured = !!health?.measured;
   const awaiting = sensored && !measured; // paired but no reading yet
+  // Sensorless: a rigorous CARE-FIDELITY score from the user's logged behaviour
+  // (rhythm, consistency, chosen spot, amounts) — no sensor, no invented
+  // measurements. Null until there's enough logged behaviour to judge.
+  const careScore = useMemo(
+    () => (!sensored && plant ? computeCareScore(plant, spot) : null),
+    [sensored, plant, spot],
+  );
   // Sensorless + too new = no score at all yet ("building baseline"), because a
   // fresh plant's health simply isn't known — no invented numbers.
-  const vit = plant ? vitalityFor(plant, sensored, liveReading, cal, settings.unitsF, lightAvgInput) : null;
+  const vit = plant
+    ? vitalityFor(plant, sensored, liveReading, cal, settings.unitsF, lightAvgInput, careScore?.total ?? null)
+    : null;
   const pending = !!vit?.pending;
-  const showEstimate = !!plant?.estimate && !sensored && !pending;
-  const effectiveScore = measured ? health!.total : pending ? 0 : plant?.score ?? 0;
+  const showEstimate = !!plant?.estimate && !sensored && !pending && !careScore;
+  const effectiveScore = measured ? health!.total : pending ? 0 : careScore?.total ?? plant?.score ?? 0;
   const displayScore = useLiquidScore(effectiveScore);
 
   if (!plant) {
@@ -490,7 +525,8 @@ export default function PlantDetail() {
               ) : null}
               {pending && (
                 <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, textAlign: 'center' }]}>
-                  Health score by day {BASELINE_DAYS} (day {vit?.baselineDay ?? 1} now) — a sensor scores it instantly
+                  Log a couple of waterings to start a care rating now, or reach day {BASELINE_DAYS} (day{' '}
+                  {vit?.baselineDay ?? 1} now). A sensor scores it instantly.
                 </Text>
               )}
               <Text
@@ -730,6 +766,84 @@ export default function PlantDetail() {
           )}
 
           {/* ── Sensorless: the honest watering cycle + needs in plain words ── */}
+          {/* ── Sensorless CARE RATING — the honest score from logged behaviour ── */}
+          {!sensored && careScore && (
+            <>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 20, marginBottom: 8 }}>
+                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: accent.verdant }} />
+                <Text style={[type.micro, { color: accent.verdant, letterSpacing: 0.5 }]}>
+                  CARE RATING · {careScore.waterings} WATERING{careScore.waterings === 1 ? '' : 'S'} LOGGED
+                </Text>
+              </View>
+              <Card>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+                  <VitalityRing score={careScore.total} size={58} showLabel={false} trackColor={dark.hairline} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[type.ritualTitle, { color: matchColor(careScore.total), fontSize: 26 }]}>
+                      {careScore.total}
+                      <Text style={[type.caption, { color: dark.inkMuted }]}> / 100 · {careScore.word}</Text>
+                    </Text>
+                    <Text style={[type.caption, { color: dark.inkMuted, marginTop: 1, lineHeight: 17 }]}>
+                      {careScore.summary}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* per-watering grade strip — the sensorless analogue of daily squares */}
+                {careScore.history.length > 0 && (
+                  <View style={{ marginTop: 14 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3, marginBottom: 6 }]}>
+                      EACH WATERING, GRADED ON TIMING
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 4 }}>
+                      {careScore.history.slice(-10).map((h, i) => (
+                        <View
+                          key={i}
+                          style={{
+                            flex: 1,
+                            height: 22,
+                            borderRadius: 4,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: `${matchColor(gradePct(h.grade))}33`,
+                            borderWidth: 1,
+                            borderColor: matchColor(gradePct(h.grade)),
+                          }}
+                        >
+                          <Text style={[type.micro, { color: dark.ink, fontSize: 9 }]}>{Math.round(h.gapDays)}d</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 5, lineHeight: 14 }]}>
+                      Days between waterings · green = well-timed, amber/red = too soon or too late.
+                    </Text>
+                  </View>
+                )}
+
+                <Hairline style={{ marginTop: 14 }} />
+                {careScore.components.map((c) => (
+                  <CareRow key={c.key} c={c} />
+                ))}
+
+                {/* confidence meter — grows as they log more, capped below a sensor's */}
+                <View style={{ marginTop: 16 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>CONFIDENCE</Text>
+                    <Text style={[type.micro, { color: dark.inkMuted }]}>{Math.round(careScore.confidence * 100)}%</Text>
+                  </View>
+                  <View style={{ height: 5, borderRadius: 3, backgroundColor: dark.hairline, overflow: 'hidden' }}>
+                    <View style={{ width: `${Math.round(careScore.confidence * 100)}%`, height: 5, backgroundColor: accent.verdant }} />
+                  </View>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+                    This score rates how well your logged care matches what {plant.species} needs — rhythm,
+                    consistency, spot, and amounts. It sharpens every time you log, but a sensor is the only
+                    way to measure the soil itself. Pair one to turn this into a live health score.
+                  </Text>
+                </View>
+              </Card>
+            </>
+          )}
+
           {!sensored && estSchedule && (
             <>
               <SectionHeader>Watering</SectionHeader>

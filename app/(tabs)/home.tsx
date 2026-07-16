@@ -10,6 +10,7 @@ import WeatherCard from '@/components/greenr/WeatherCard';
 import { accent, bandFor, dark, layout, type } from '@/constants/theme';
 import { type AlertLevel, notificationsFor } from '@/lib/alerts';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
+import { careScoreValue } from '@/lib/careScore';
 import { estimateWaterSchedule } from '@/lib/estimate';
 import { dliWord } from '@/lib/format';
 import { BASELINE_DAYS, gardenVitalityAvg, vitalityFor } from '@/lib/health';
@@ -46,6 +47,10 @@ export default function HomeTab() {
   // Judge light on the plant's accumulated multi-day daytime average (null until
   // it's built up any days → health falls back to the live reading).
   const lightFor = (p: Plant) => storedLightAvg(lightDaily[p.id]);
+  // Sensorless plants score on care fidelity (null when a sensor is present or
+  // there's not enough logged behaviour yet).
+  const careFor = (p: Plant) =>
+    liveReadings.has(p.id) ? null : careScoreValue(p, spots.find((s) => s.id === p.spotId));
 
   const avg = useMemo(
     () =>
@@ -56,11 +61,12 @@ export default function HomeTab() {
           reading: liveReadings.get(p.id) ?? null,
           calibration: calFor(p),
           lightAvg: lightFor(p),
+          careScore: careFor(p),
         })),
         settings.unitsF,
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [plants, liveReadings, calibrations, lightDaily, settings.unitsF],
+    [plants, liveReadings, calibrations, lightDaily, settings.unitsF, spots],
   );
 
   // Alerts across sensored plants, using live weather for outdoor rain-delay.
@@ -96,7 +102,7 @@ export default function HomeTab() {
 
   const nowLine = (p: Plant) => {
     const hasSensor = liveReadings.has(p.id);
-    const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF, lightFor(p));
+    const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF, lightFor(p), careFor(p));
     if (!v.sensored) {
       // No sensor: the honest cycle from last-watered + species rhythm.
       const est = estimateWaterSchedule(p);
@@ -175,7 +181,7 @@ export default function HomeTab() {
           <SectionHeader>Your plants now</SectionHeader>
           {plants.map((p) => {
             const hasSensor = liveReadings.has(p.id);
-            const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF, lightFor(p));
+            const v = vitalityFor(p, hasSensor, liveReadings.get(p.id) ?? null, calFor(p), settings.unitsF, lightFor(p), careFor(p));
             const line = nowLine(p);
             const noScore = v.awaiting || v.pending;
             const spotName = spots.find((s) => s.id === p.spotId)?.name;

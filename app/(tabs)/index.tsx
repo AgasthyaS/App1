@@ -8,6 +8,7 @@ import { Card, GButton } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, layout, type } from '@/constants/theme';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
+import { careScoreValue } from '@/lib/careScore';
 import { estimateWaterSchedule, type EstimateSchedule } from '@/lib/estimate';
 import { idealsFor } from '@/lib/plantStatus';
 import { mlNeeded } from '@/lib/watering';
@@ -195,6 +196,9 @@ export default function ForecastTab() {
     [plants, schedules, estimates],
   );
 
+  const careFor = (p: Plant) =>
+    liveReadings.has(p.id) ? null : careScoreValue(p, spots.find((s) => s.id === p.spotId));
+
   const avg = useMemo(
     () =>
       gardenVitalityAvg(
@@ -204,10 +208,12 @@ export default function ForecastTab() {
           reading: liveReadings.get(p.id) ?? null,
           calibration: calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
           lightAvg: storedLightAvg(lightDaily[p.id]),
+          careScore: careFor(p),
         })),
         settings.unitsF,
       ),
-    [plants, liveReadings, calibrations, lightDaily, settings.unitsF],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plants, liveReadings, calibrations, lightDaily, settings.unitsF, spots],
   );
 
   // Healthy = plants whose vitality is actually known and ≥70.
@@ -221,10 +227,12 @@ export default function ForecastTab() {
           calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
           settings.unitsF,
           storedLightAvg(lightDaily[p.id]),
+          careFor(p),
         );
         return !v.awaiting && !v.pending && v.score >= 70;
       }).length,
-    [plants, liveReadings, calibrations, lightDaily, settings.unitsF],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plants, liveReadings, calibrations, lightDaily, settings.unitsF, spots],
   );
 
   const dueSoon = sorted.filter((p) => {

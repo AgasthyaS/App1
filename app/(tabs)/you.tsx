@@ -6,11 +6,12 @@ import { Card, Row, Screen, SectionHeader, StatusDot } from '@/components/greenr
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
 import { calibrationFor } from '@/lib/calibration';
+import { careScoreValue } from '@/lib/careScore';
 import { connectionFrom } from '@/lib/devices';
 import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
 import { activePlants, useGreenr } from '@/lib/store';
-import type { SensorStatus } from '@/lib/types';
+import type { Plant, SensorStatus } from '@/lib/types';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
 import { useMyDevices } from '@/lib/useDevices';
 
@@ -24,6 +25,8 @@ export default function YouTab() {
   const deviceCount = sensors.length + devices.length;
   const connToStatus = (s: 'online' | 'idle' | 'offline'): SensorStatus =>
     s === 'online' ? 'online' : s === 'idle' ? 'late' : 'offline';
+  const careFor = (p: Plant) =>
+    liveReadings.has(p.id) ? null : careScoreValue(p, spots.find((s) => s.id === p.spotId));
   const avg = gardenVitalityAvg(
     plants.map((p) => ({
       plant: p,
@@ -31,6 +34,7 @@ export default function YouTab() {
       reading: liveReadings.get(p.id) ?? null,
       calibration: calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
       lightAvg: storedLightAvg(lightDaily[p.id]),
+      careScore: careFor(p),
     })),
     settings.unitsF,
   );
@@ -55,6 +59,7 @@ export default function YouTab() {
       calibrationFor(calibrations, liveReadings.get(p.id)?.device_id, p.sensorId),
       settings.unitsF,
       storedLightAvg(lightDaily[p.id]),
+      careFor(p),
     );
     return !v.awaiting && !v.pending && v.score >= 85;
   }).length;
