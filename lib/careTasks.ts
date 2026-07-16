@@ -4,6 +4,7 @@ import type { Reading } from './devices';
 import { estimateWaterSchedule } from './estimate';
 import { dayLight, lightVerdict, recentLightAvg, type DayLight } from './insights';
 import { idealsFor } from './plantStatus';
+import { currentSeason, SEASON_LABEL } from './season';
 import { activePlants } from './store';
 import type { Plant, Spot } from './types';
 import { mlNeeded } from './watering';
@@ -20,7 +21,7 @@ export interface DerivedTask {
   id: string;
   plantId: string;
   plantName: string;
-  kind: 'water' | 'water-check' | 'hold' | 'light' | 'humidity';
+  kind: 'water' | 'water-check' | 'hold' | 'light' | 'humidity' | 'feed';
   title: string;
   why: string;
   /** exact amount for water tasks on sensored plants */
@@ -35,7 +36,8 @@ const KIND_ORDER: Record<DerivedTask['kind'], number> = {
   'water-check': 1,
   light: 2,
   humidity: 3,
-  hold: 4,
+  feed: 4,
+  hold: 5,
 };
 
 export function deriveCareTasks(opts: {
@@ -144,7 +146,31 @@ export function deriveCareTasks(opts: {
           minutes: 3,
         });
       }
-    } else if (!sensored) {
+    }
+
+    // Seasonal feeding — growth season only, and only when nothing was logged
+    // recently (winter feeding burns dormant roots, so it's never suggested).
+    const season = currentSeason();
+    if (season === 'spring' || season === 'summer') {
+      const fedRecently = p.timeline.some(
+        (e) => e.kind === 'care' && e.daysAgo <= 28 && /fertili/i.test(e.text),
+      );
+      if (!fedRecently) {
+        out.push({
+          id: `ct-${p.id}-feed`,
+          plantId: p.id,
+          plantName: p.name,
+          kind: 'feed',
+          title: `Feed ${p.name} — it's growing season`,
+          why: `${SEASON_LABEL[season]} is peak growth for ${p.species}, and no feeding has been logged in the last 4 weeks. Half-strength fertilizer with the next watering is plenty.`,
+          ml: null,
+          sensorVerifies: false,
+          minutes: 2,
+        });
+      }
+    }
+
+    if (!sensored) {
       // Sensorless: the estimate cycle decides when a check is due.
       const est = estimateWaterSchedule(p);
       if (est.status === 'due') {

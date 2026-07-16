@@ -8,9 +8,16 @@ import {
 import { supabase } from './supabase';
 
 /**
+ * The sensor reports about every 3 hours, so the app re-checks the database on
+ * a matching, unhurried pace — often enough that a fresh report appears within
+ * minutes of landing, without hammering the network for data that can't exist.
+ */
+const REFRESH_MS = 10 * 60 * 1000;
+
+/**
  * Recent reading history for every sensored plant, keyed by plant id. Powers the
  * Forecast tab, where projecting each plant's next-watering date needs the
- * drying trend (not just the latest value). Refreshes every 60s.
+ * drying trend (not just the latest value).
  */
 export function useAllReadingHistories(): Map<string, Reading[]> {
   const [map, setMap] = useState<Map<string, Reading[]>>(new Map());
@@ -37,7 +44,7 @@ export function useAllReadingHistories(): Map<string, Reading[]> {
     };
 
     load();
-    const iv = setInterval(load, 60000);
+    const iv = setInterval(load, REFRESH_MS);
     return () => {
       alive = false;
       clearInterval(iv);
@@ -85,8 +92,8 @@ export function useLiveReading(plantKey?: string): {
     };
 
     load();
-    // Refresh the view periodically so a new 3-hourly report shows up on its own.
-    const iv = setInterval(load, 30000);
+    // Re-check periodically so a new 3-hourly report shows up on its own.
+    const iv = setInterval(load, REFRESH_MS);
     return () => { alive = false; clearInterval(iv); };
   }, [plantKey]);
 
@@ -95,9 +102,8 @@ export function useLiveReading(plantKey?: string): {
 
 /**
  * Latest reading for every sensored plant, keyed by plant id. Value is null
- * when a sensor is paired but hasn't reported yet (→ show N/A). Refreshes every
- * 20s so the Home dashboard updates when new readings land. Does NOT change the
- * device cadence (Home just displays what's there).
+ * when a sensor is paired but hasn't reported yet (→ show N/A). Does NOT change
+ * the device cadence (Home just displays what's there).
  */
 export function useAllLiveReadings(): Map<string, Reading | null> {
   const [map, setMap] = useState<Map<string, Reading | null>>(new Map());
@@ -126,7 +132,7 @@ export function useAllLiveReadings(): Map<string, Reading | null> {
     };
 
     load();
-    const iv = setInterval(load, 20000);
+    const iv = setInterval(load, REFRESH_MS);
     return () => { alive = false; clearInterval(iv); };
   }, []);
 

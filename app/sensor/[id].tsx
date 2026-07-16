@@ -21,7 +21,6 @@ export default function SensorDetail() {
     spots,
     settings,
     calibrations,
-    readNow,
     reassignSensor,
     installFirmware,
     forgetSensor,
@@ -29,7 +28,6 @@ export default function SensorDetail() {
   const [logOpen, setLogOpen] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);
   const [troubleshootOpen, setTroubleshootOpen] = useState(false);
-  const [readRequested, setReadRequested] = useState(false);
   const [installing, setInstalling] = useState(false);
 
   const sensor = sensors.find((s) => s.id === id);
@@ -168,20 +166,8 @@ export default function SensorDetail() {
             {sensor.lastReadingMinsAgo === 0 ? 'just now' : relTime(sensor.lastReadingMinsAgo)}
           </Text>
           <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6 }]}>
-            next wake ~{nextWakeMins} min
+            next wake ~{nextWakeMins} min · reports on its own
           </Text>
-          <Pressable
-            onPress={() => {
-              readNow(sensor.id);
-              setReadRequested(true);
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-            }}
-            style={{ marginTop: 8, minHeight: 32, justifyContent: 'center' }}
-          >
-            <Text style={[type.caption, { color: readRequested ? accent.sage : accent.verdant }]}>
-              {readRequested ? 'Fresh reading received' : 'Read now'}
-            </Text>
-          </Pressable>
         </Card>
         <Card style={{ width: '48%' }}>
           <Text style={[type.micro, { color: dark.inkMuted }]}>MODE</Text>

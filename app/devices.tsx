@@ -7,7 +7,7 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { Card, Chip, GButton, Hairline, Row, Screen, SectionHeader, StatusDot } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
 import { isCalibrated } from '@/lib/calibration';
-import { assignDeviceToPlant, renameDevice, releaseDevice, requestReadNow } from '@/lib/devices';
+import { assignDeviceToPlant, renameDevice, releaseDevice } from '@/lib/devices';
 import { confirmAction, notify } from '@/lib/platform';
 import { activePlants, useGreenr } from '@/lib/store';
 import type { SensorStatus } from '@/lib/types';
@@ -37,7 +37,6 @@ export default function Devices() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [mode, setMode] = useState<'rename' | 'assign' | null>(null);
   const [renameText, setRenameText] = useState('');
-  const [readId, setReadId] = useState<string | null>(null);
 
   const openActions = (id: string) => {
     setOpenId(openId === id ? null : id);
@@ -55,13 +54,6 @@ export default function Devices() {
     await assignDeviceToPlant(id, plantId);
     setMode(null);
     reload();
-  };
-
-  const doReadNow = async (id: string) => {
-    await requestReadNow(id);
-    setReadId(id);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    setTimeout(() => setReadId((r) => (r === id ? null : r)), 2200);
   };
 
   const doRemove = (d: EnrichedDevice) => {
@@ -139,7 +131,6 @@ export default function Devices() {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               <ActionBtn icon="create-outline" label="Rename" onPress={() => { setMode(mode === 'rename' ? null : 'rename'); setRenameText(device.label ?? ''); }} />
               <ActionBtn icon="leaf-outline" label="Assign" onPress={() => setMode(mode === 'assign' ? null : 'assign')} />
-              <ActionBtn icon={readId === device.id ? 'checkmark' : 'refresh'} label={readId === device.id ? 'Requested' : 'Read now'} onPress={() => doReadNow(device.id)} />
               <ActionBtn icon="options-outline" label="Calibrate" onPress={() => router.push(`/calibrate/${device.id}` as any)} />
               <ActionBtn icon="trash-outline" label="Remove" danger onPress={() => doRemove(d)} />
             </View>

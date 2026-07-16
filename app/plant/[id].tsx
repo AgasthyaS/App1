@@ -12,7 +12,6 @@ import PlantAvatar from '@/components/greenr/PlantAvatar';
 import { Card, Chip, GButton, Hairline, SectionHeader } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, bandFor, dark, layout, type } from '@/constants/theme';
-import { waterAmount } from '@/lib/advice';
 import { daysAgoLabel } from '@/lib/format';
 import { useGreenr } from '@/lib/store';
 import { useLiveReading } from '@/lib/useLiveReading';
@@ -28,7 +27,9 @@ import { computeSchedule, wateringIcs } from '@/lib/schedule';
 import { useWeather } from '@/lib/useWeather';
 import { weatherWateringImpact } from '@/lib/weather';
 import { shareContent } from '@/lib/platform';
-import { mlNeeded, wateringAdvice } from '@/lib/watering';
+import { currentSeason, seasonalNotes, SEASON_EMOJI, SEASON_LABEL } from '@/lib/season';
+import { groomingTip, tipsFor } from '@/lib/tips';
+import { mlNeeded, waterPlan, wateringAdvice } from '@/lib/watering';
 
 /** A labelled fact chip for the care guide (difficulty, size, zones, …). */
 function Fact({ label, value }: { label: string; value: string }) {
@@ -140,7 +141,7 @@ export default function PlantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, spots, sensors, settings, calibrations, lightDaily, recordLightDay, logWaterAmount, logCare, archivePlant, setPlantPhoto, renamePlant, setLightInverted } =
+  const { plants, spots, sensors, settings, profile, calibrations, lightDaily, recordLightDay, logWaterAmount, logCare, archivePlant, setPlantPhoto, renamePlant, setLightInverted } =
     useGreenr();
   const plant = plants.find((p) => p.id === id);
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -154,6 +155,7 @@ export default function PlantDetail() {
   const [renameText, setRenameText] = useState('');
   const [photoAdded, setPhotoAdded] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
+  const [fabOpen, setFabOpen] = useState(false);
 
   const spot = useMemo(() => spots.find((s) => s.id === plant?.spotId), [spots, plant]);
   const sensor = useMemo(() => sensors.find((s) => s.id === plant?.sensorId), [sensors, plant]);
@@ -257,6 +259,27 @@ export default function PlantDetail() {
       ? mlNeeded(plant.potSize, plant.potMaterial, calReading.soil_pct, bandMid, plant.potCm)
       : null;
   const careProfile = careProfileFor(plant.species);
+  // Seasonal context + the personalized water plan (pot volume × species draw ×
+  // measured climate × season — the real calculation, factors listed).
+  const season = currentSeason();
+  const seasonNotes = seasonalNotes(season);
+  const userTips = tipsFor({ experience: profile?.experience, struggle: profile?.struggle, season, count: 3 });
+  const groom = groomingTip(plant.species, profile?.experience);
+  const plan = waterPlan({
+    species: plant.species,
+    potSize: plant.potSize,
+    potMaterial: plant.potMaterial,
+    potCm: plant.potCm,
+    tempC: calReading?.temp_c,
+    humidityPct: calReading?.humidity_pct,
+    lightAvg: lightAvg?.avg ?? null,
+  });
+  const batteryPct = calReading?.battery_pct;
+  // The diagnose camera is a Greenr+ feature — route non-subscribers to the sheet.
+  const openDiagnose = () =>
+    settings.plus
+      ? router.push({ pathname: '/diagnose/[id]', params: { id: plant.id } })
+      : router.push('/plus');
   // Charts plot only real readings — a missing metric is skipped, never drawn as 0.
   const soilBars = calHistory.filter((r) => r.soil_pct != null);
   const lightBars = calHistory.filter((r) => r.light_lux != null);
@@ -299,9 +322,30 @@ export default function PlantDetail() {
               <Pressable onPress={() => router.back()} style={{ minWidth: 44, minHeight: 44, justifyContent: 'center' }}>
                 <Ionicons name="chevron-back" size={24} color={dark.ink} />
               </Pressable>
-              <Pressable onPress={() => setMenuOpen(!menuOpen)} style={{ minWidth: 44, minHeight: 44, alignItems: 'flex-end', justifyContent: 'center' }}>
-                <Ionicons name="ellipsis-horizontal" size={22} color={dark.ink} />
-              </Pressable>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                {sensored && (
+                  <Pressable
+                    onPress={() => router.push(`/dashboard/${plant.id}` as any)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 6,
+                      minHeight: 36,
+                      paddingHorizontal: 12,
+                      borderRadius: 18,
+                      backgroundColor: `${accent.verdant}22`,
+                      borderWidth: 1,
+                      borderColor: `${accent.verdant}55`,
+                    }}
+                  >
+                    <Ionicons name="stats-chart" size={14} color={accent.verdant} />
+                    <Text style={[type.caption, { color: accent.verdant }]}>Graphs</Text>
+                  </Pressable>
+                )}
+                <Pressable onPress={() => setMenuOpen(!menuOpen)} style={{ minWidth: 44, minHeight: 44, alignItems: 'flex-end', justifyContent: 'center' }}>
+                  <Ionicons name="ellipsis-horizontal" size={22} color={dark.ink} />
+                </Pressable>
+              </View>
             </View>
 
             {menuOpen && (
@@ -416,8 +460,14 @@ export default function PlantDetail() {
                 {plant.latin} · {spot?.name ?? '—'}
               </Text>
               {sensored ? (
-                <Pressable onPress={() => router.push('/devices' as any)} style={{ marginTop: 10 }}>
+                <Pressable onPress={() => router.push('/devices' as any)} style={{ marginTop: 10, flexDirection: 'row', gap: 6 }}>
                   <Chip label={measured ? 'Sensor connected · real data' : 'Sensor connected · awaiting reading'} color={accent.sage} />
+                  {batteryPct != null && batteryPct >= 0 && (
+                    <Chip
+                      label={`🔋 ${Math.round(batteryPct)}%`}
+                      color={batteryPct <= 20 ? accent.clay : batteryPct <= 40 ? accent.sunbeamText : accent.sage}
+                    />
+                  )}
                 </Pressable>
               ) : sensor ? (
                 <Pressable onPress={() => router.push(`/sensor/${sensor.id}`)} style={{ marginTop: 10 }}>
@@ -528,6 +578,24 @@ export default function PlantDetail() {
                     Still gathering history — accuracy climbs with every reading.
                   </Text>
                 )}
+
+                {/* the calculated plan: pot volume × species draw × measured climate × season */}
+                <Hairline style={{ marginVertical: 12 }} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
+                  WATER PLAN — CALCULATED FOR THIS PLANT
+                </Text>
+                <Text style={[type.cardTitle, { color: dark.ink, marginTop: 4, fontSize: 15 }]}>
+                  {plan.summary}
+                </Text>
+                {plan.factors.map((f) => (
+                  <View key={f.label} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                    <Text style={[type.micro, { color: accent.verdant }]}>·</Text>
+                    <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 15 }]}>
+                      <Text style={{ color: dark.ink }}>{f.label}</Text> — {f.effect}
+                    </Text>
+                  </View>
+                ))}
+
                 <Pressable
                   onPress={() => setWaterOpen(true)}
                   style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, minHeight: 36 }}
@@ -637,6 +705,23 @@ export default function PlantDetail() {
                     ? 'Timed from your own logged rhythm — keep logging and it stays sharp.'
                     : 'Log each watering and Greenr learns this plant’s real rhythm.'}
                 </Text>
+
+                {/* the calculated plan: pot volume × species draw × season */}
+                <Hairline style={{ marginVertical: 12 }} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
+                  WATER PLAN — CALCULATED FOR THIS PLANT
+                </Text>
+                <Text style={[type.cardTitle, { color: dark.ink, marginTop: 4, fontSize: 15 }]}>
+                  {plan.summary}
+                </Text>
+                {plan.factors.map((f) => (
+                  <View key={f.label} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                    <Text style={[type.micro, { color: accent.verdant }]}>·</Text>
+                    <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 15 }]}>
+                      <Text style={{ color: dark.ink }}>{f.label}</Text> — {f.effect}
+                    </Text>
+                  </View>
+                ))}
                 <GButton
                   title="＋ Log a watering"
                   onPress={() => setWaterOpen(true)}
@@ -692,6 +777,38 @@ export default function PlantDetail() {
                   Described in words because nothing here is measured yet — a sensor turns these into
                   live readings.
                 </Text>
+              </Card>
+            </>
+          )}
+
+          {/* ── This season: automatic winter/summer care shifts ── */}
+          <SectionHeader>{`${SEASON_EMOJI[season]} ${SEASON_LABEL[season]} care`}</SectionHeader>
+          <Card>
+            <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 15 }]}>
+              Applied automatically — the watering plan above already reflects the season.
+            </Text>
+            {seasonNotes.map((n, i) => (
+              <View key={i} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginTop: 10 }}>
+                <Ionicons name={n.icon as any} size={17} color={accent.verdant} style={{ marginTop: 1 }} />
+                <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{n.text}</Text>
+              </View>
+            ))}
+          </Card>
+
+          {/* ── Tips tuned to the user's survey (beginner ≠ expert) ── */}
+          {(userTips.length > 0 || groom) && (
+            <>
+              <SectionHeader>Tips for you</SectionHeader>
+              <Card>
+                <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 15 }]}>
+                  Matched to your experience{profile?.struggle && profile.struggle !== 'Honestly, not sure' ? ` and what you said goes wrong most (${profile.struggle.toLowerCase()})` : ''}.
+                </Text>
+                {[...(groom ? [groom] : []), ...userTips].map((t, i) => (
+                  <View key={i} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginTop: 10 }}>
+                    <Ionicons name={t.icon as any} size={17} color={accent.sage} style={{ marginTop: 1 }} />
+                    <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{t.text}</Text>
+                  </View>
+                ))}
               </Card>
             </>
           )}
@@ -963,10 +1080,7 @@ export default function PlantDetail() {
           )}
 
           {/* ── Photo-check: for problems no sensor can see (pests, spots, yellowing) ── */}
-          <Card
-            style={{ marginTop: 10 }}
-            onPress={() => router.push({ pathname: '/diagnose/[id]', params: { id: plant.id } })}
-          >
+          <Card style={{ marginTop: 10 }} onPress={openDiagnose}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <Text style={{ fontSize: 22 }}>🔍</Text>
               <View style={{ flex: 1 }}>
@@ -977,6 +1091,7 @@ export default function PlantDetail() {
                   Yellowing leaves, spots, pests — {sensored ? 'sensors can’t see these. ' : ''}Photo-check it.
                 </Text>
               </View>
+              {!settings.plus && <Chip label="Greenr+" color={accent.sunbeamText} />}
               <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
             </View>
           </Card>
@@ -1093,7 +1208,7 @@ export default function PlantDetail() {
             position: 'absolute',
             left: 0,
             right: 0,
-            bottom: insets.bottom + 66,
+            bottom: insets.bottom + 92,
             paddingHorizontal: layout.margin,
           }}
         >
@@ -1137,7 +1252,7 @@ export default function PlantDetail() {
             <Pressable
               onPress={() => {
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-                logWaterAmount(plant.id, waterAmount(plant).ml);
+                logWaterAmount(plant.id, refillMl ?? plan.ml);
                 setWaterOpen(false);
               }}
               style={{
@@ -1150,7 +1265,9 @@ export default function PlantDetail() {
               }}
             >
               <Text style={[type.cardTitle, { color: '#fff', fontSize: 14 }]}>
-                Recommended for this pot — {waterAmount(plant).label}
+                {refillMl != null
+                  ? `Calculated refill — ${refillMl} ml`
+                  : `Calculated for this plant — ${plan.ml} ml`}
               </Text>
             </Pressable>
             <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 15 }]}>
@@ -1162,40 +1279,79 @@ export default function PlantDetail() {
         </View>
       )}
 
-      {/* ── Sticky action bar ── */}
-      <View
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          flexDirection: 'row',
-          gap: 10,
-          paddingHorizontal: layout.margin,
-          paddingTop: 10,
-          paddingBottom: insets.bottom + 10,
-          backgroundColor: dark.surface1,
-          borderTopWidth: 1,
-          borderTopColor: dark.hairline,
-        }}
-      >
-        <GButton
-          title="Water"
-          style={{ flex: 1, paddingHorizontal: 6 }}
-          onPress={() => setWaterOpen(!waterOpen)}
+      {/* ── Log FAB: one unmissable button, every loggable action inside ── */}
+      {fabOpen && (
+        <Pressable
+          onPress={() => setFabOpen(false)}
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.55)' }}
         />
-        <GButton
-          title={photoAdded ? 'Photo ✓' : plant.photoUri ? 'Change' : 'Photo'}
-          kind="secondary"
-          style={{ flex: 1, paddingHorizontal: 6 }}
-          onPress={() => setShowCamera(true)}
-        />
-        <GButton
-          title="Diagnose"
-          kind="secondary"
-          style={{ flex: 1, paddingHorizontal: 6 }}
-          onPress={() => router.push({ pathname: '/diagnose/[id]', params: { id: plant.id } })}
-        />
+      )}
+      <View style={{ position: 'absolute', right: 16, bottom: insets.bottom + 18, alignItems: 'flex-end' }}>
+        {fabOpen && (
+          <View style={{ marginBottom: 12, gap: 8, alignItems: 'flex-end' }}>
+            {(
+              [
+                { icon: '💧', label: 'Log watering', run: () => setWaterOpen(true) },
+                { icon: '🧪', label: 'Log fertilizing', run: () => logCare(plant.id, 'Fertilized (logged)') },
+                { icon: '💨', label: 'Log misting', run: () => logCare(plant.id, 'Misted (logged)') },
+                { icon: '✂️', label: 'Log pruning', run: () => logCare(plant.id, 'Pruned (logged)') },
+                { icon: '🪴', label: 'Log repotting', run: () => logCare(plant.id, 'Repotted (logged)') },
+                { icon: '📷', label: photoAdded ? 'Photo added ✓' : 'Add a photo', run: () => setShowCamera(true) },
+                { icon: '🔍', label: settings.plus ? 'Diagnose (photo-check)' : 'Diagnose · Greenr+', run: openDiagnose },
+              ] as { icon: string; label: string; run: () => void }[]
+            ).map((a) => (
+              <Pressable
+                key={a.label}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  setFabOpen(false);
+                  a.run();
+                }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 10,
+                  minHeight: 46,
+                  paddingLeft: 16,
+                  paddingRight: 14,
+                  borderRadius: 23,
+                  backgroundColor: dark.surface2,
+                  borderWidth: 1,
+                  borderColor: dark.hairline,
+                }}
+              >
+                <Text style={[type.body, { color: dark.ink }]}>{a.label}</Text>
+                <Text style={{ fontSize: 18 }}>{a.icon}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+            setFabOpen(!fabOpen);
+          }}
+          style={{
+            width: 60,
+            height: 60,
+            borderRadius: 30,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: accent.verdant,
+            shadowColor: '#000',
+            shadowOpacity: 0.35,
+            shadowRadius: 10,
+            shadowOffset: { width: 0, height: 4 },
+            elevation: 8,
+          }}
+        >
+          <Ionicons name={fabOpen ? 'close' : 'add'} size={30} color="#08110B" />
+        </Pressable>
+        {!fabOpen && (
+          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, textAlign: 'center', alignSelf: 'center' }]}>
+            Log
+          </Text>
+        )}
       </View>
     </View>
   );

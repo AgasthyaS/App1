@@ -58,7 +58,7 @@ function buildDifferential(plant: Plant, spot?: Spot): Finding[] {
 export default function Diagnose() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { plants, spots, addDiagnosis, addTasks } = useGreenr();
+  const { plants, spots, settings, addDiagnosis, addTasks } = useGreenr();
   const plant = plants.find((p) => p.id === id);
   const spot = spots.find((s) => s.id === plant?.spotId);
   const [step, setStep] = useState<Step>('camera');
@@ -69,6 +69,26 @@ export default function Diagnose() {
     const t = setTimeout(() => setStep('findings'), 4000);
     return () => clearTimeout(t);
   }, [step]);
+
+  // Photo diagnosis is a Greenr+ feature — everyone else sees the upgrade path.
+  if (!settings.plus) {
+    return (
+      <Screen scroll={false} style={{ alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontSize: 40 }}>🔍</Text>
+        <Text style={[type.ritualTitle, { color: dark.ink, marginTop: 12, textAlign: 'center' }]}>
+          Photo diagnosis is a Greenr+ feature
+        </Text>
+        <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, textAlign: 'center', lineHeight: 22 }]}>
+          Point the camera at a struggling plant and get a ranked differential — with the
+          evidence for and against each finding — plus a care plan.
+        </Text>
+        <GButton title="See Greenr+" onPress={() => router.push('/plus')} style={{ marginTop: 20, alignSelf: 'stretch' }} />
+        <Pressable onPress={() => router.back()} style={{ minHeight: 44, justifyContent: 'center', marginTop: 6 }}>
+          <Text style={[type.body, { color: dark.inkMuted }]}>Not now</Text>
+        </Pressable>
+      </Screen>
+    );
+  }
 
   if (!plant) {
     return (

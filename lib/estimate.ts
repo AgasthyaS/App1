@@ -1,4 +1,5 @@
 import { getSpecies, type CategoryKey } from './plants';
+import { currentSeason, seasonIntervalFactor } from './season';
 import type { Plant } from './types';
 import { soilLiters } from './watering';
 
@@ -63,11 +64,15 @@ function intervalFor(plant: Plant, now: Date): { days: number; learned: boolean 
   if (plant.potMaterial === 'Terracotta') days *= 0.85;
   if (plant.potMaterial === 'Plastic') days *= 1.1;
 
-  // Winter dormancy stretches the gap (species-specific reduction).
-  const month = now.getMonth(); // 0-based
-  const winter = month === 10 || month === 11 || month === 0 || month === 1;
-  const reduction = species?.care.moisture.winterReductionPct ?? 30;
-  if (winter && reduction > 0) days *= 1 + reduction / 100;
+  // Season reshapes the cycle year-round: winter dormancy stretches it (using
+  // the species' own reduction when known), summer growth shortens it.
+  const season = currentSeason(now);
+  if (season === 'winter') {
+    const reduction = species?.care.moisture.winterReductionPct ?? 30;
+    if (reduction > 0) days *= 1 + reduction / 100;
+  } else {
+    days *= seasonIntervalFactor(season);
+  }
 
   // Learned rhythm: with ≥3 logged waterings, the user's own average gap
   // (clamped to a sane multiple of the baseline) takes over.

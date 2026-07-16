@@ -10,13 +10,15 @@ import { calibrationFor } from '@/lib/calibration';
 import { deriveCareTasks } from '@/lib/careTasks';
 import { vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
+import { currentSeason, seasonalNotes, SEASON_EMOJI, SEASON_LABEL } from '@/lib/season';
 import { useGreenr } from '@/lib/store';
+import { tipsFor } from '@/lib/tips';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
 
 /** The Sunday briefing (§8.3) — a ritual, not an instrument. Light surface. */
 export default function Briefing() {
   const router = useRouter();
-  const { plants, spots, sensors, calibrations, lightDaily, markBriefingOpened } = useGreenr();
+  const { plants, spots, sensors, profile, calibrations, lightDaily, markBriefingOpened } = useGreenr();
   const liveReadings = useAllLiveReadings();
 
   useEffect(() => {
@@ -55,6 +57,11 @@ export default function Briefing() {
     month: 'long',
     day: 'numeric',
   });
+  // Seasonal outlook + tips tuned to the survey (beginners get fundamentals,
+  // veterans get the advanced stuff).
+  const season = currentSeason();
+  const seasonCare = seasonalNotes(season).slice(0, 3);
+  const weekTips = tipsFor({ experience: profile?.experience, struggle: profile?.struggle, season, count: 2 });
 
   return (
     <Screen mode="light">
@@ -106,6 +113,21 @@ export default function Briefing() {
             </Card>
           )}
 
+          {/* seasonal outlook — what this time of year changes, automatically */}
+          <Card mode="light" style={{ marginTop: 10 }}>
+            <Text style={[type.micro, { color: light.inkMuted }]}>
+              {SEASON_EMOJI[season]} {SEASON_LABEL[season].toUpperCase()} — WHAT CHANGES NOW
+            </Text>
+            {seasonCare.map((n, i) => (
+              <Text key={i} style={[type.body, { color: light.ink, marginTop: 6, lineHeight: 22 }]}>
+                {n.text}
+              </Text>
+            ))}
+            <Text style={[type.caption, { color: light.inkMuted, marginTop: 8, lineHeight: 18 }]}>
+              Watering schedules already account for this — no math needed on your end.
+            </Text>
+          </Card>
+
           {/* this week's care — derived live, same list Care Mode runs */}
           <Card mode="light" style={{ marginTop: 10 }}>
             <Text style={[type.micro, { color: light.inkMuted }]}>CARE NEEDED NOW</Text>
@@ -113,6 +135,9 @@ export default function Briefing() {
               <View key={t.id}>
                 {i > 0 && <Hairline mode="light" style={{ marginVertical: 8 }} />}
                 <Text style={[type.body, { color: light.ink, marginTop: i === 0 ? 6 : 0 }]}>{t.title}</Text>
+                <Text style={[type.caption, { color: light.inkMuted, marginTop: 3, lineHeight: 18 }]}>
+                  {t.why}
+                </Text>
               </View>
             ))}
             {careTasks.length === 0 && (
@@ -134,6 +159,18 @@ export default function Briefing() {
               <Text style={[type.body, { color: light.ink, marginTop: 6 }]}>
                 Monstera: 60 days thriving — its longest run.
               </Text>
+            </Card>
+          )}
+
+          {/* tips for the week — tuned to the user's survey answers */}
+          {weekTips.length > 0 && (
+            <Card mode="light" style={{ marginTop: 10 }}>
+              <Text style={[type.micro, { color: light.inkMuted }]}>FOR YOU THIS WEEK</Text>
+              {weekTips.map((t, i) => (
+                <Text key={i} style={[type.body, { color: light.ink, marginTop: 6, lineHeight: 22 }]}>
+                  {t.text}
+                </Text>
+              ))}
             </Card>
           )}
 
