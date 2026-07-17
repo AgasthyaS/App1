@@ -33,6 +33,7 @@ import { shareContent } from '@/lib/platform';
 import { currentSeason, seasonalNotes, SEASON_EMOJI, SEASON_LABEL } from '@/lib/season';
 import { groomingTip, tipsFor } from '@/lib/tips';
 import { mlNeeded, waterPlan, wateringAdvice } from '@/lib/watering';
+import { buildHydrationModel } from '@/lib/hydration';
 
 /** A labelled fact chip for the care guide (difficulty, size, zones, …). */
 function Fact({ label, value }: { label: string; value: string }) {
@@ -322,6 +323,21 @@ export default function PlantDetail() {
       ? mlNeeded(plant.potSize, plant.potMaterial, calReading.soil_pct, bandMid, plant.potCm)
       : null;
   const careProfile = careProfileFor(plant.species);
+  // Soil-hydration dynamics: infer poured volume from each watering's moisture
+  // rise, learn the drying rate, and invert it into the efficient pour for the
+  // plant's ideal interval. Sensored only (needs the moisture curve).
+  const hydration = useMemo(
+    () =>
+      sensored
+        ? buildHydrationModel(
+            calHistory,
+            plant.waterLog,
+            { size: plant.potSize, material: plant.potMaterial, cm: plant.potCm },
+            ideal.band,
+          )
+        : null,
+    [sensored, calHistory, plant.waterLog, plant.potSize, plant.potMaterial, plant.potCm, ideal.band],
+  );
   // Seasonal context + the personalized water plan (pot volume × species draw ×
   // measured climate × season — the real calculation, factors listed).
   const season = currentSeason();
@@ -338,6 +354,11 @@ export default function PlantDetail() {
     lightAvg: lightAvg?.avg ?? null,
   });
   const batteryPct = calReading?.battery_pct;
+  // The efficient pour for this plant's ideal interval, learned from its own
+  // moisture curve — the volume that lasts the target gap without overwatering.
+  const efficientPour = hydration
+    ? hydration.mlForDays(plan.intervalDays, calReading?.soil_pct ?? ideal.band[0], ideal.band)
+    : null;
   const growth = useMemo(() => growthSummary(plant), [plant]);
   const growthLine = growthHeadline(growth);
   // Most recent logged pour with a known amount — powers a one-tap "repeat".
@@ -768,6 +789,76 @@ export default function PlantDetail() {
                     )}
                   </>
                 )}
+              </Card>
+            </>
+          )}
+
+          {/* ── Watering efficiency: volume learned from the moisture curve ── */}
+          {hydration && (
+            <>
+              <SectionHeader>Watering efficiency</SectionHeader>
+              <Card>
+                <Text style={[type.body, { color: dark.ink, lineHeight: 21 }]}>
+                  Every time you water, the soil jumps up then dries at{' '}
+                  {hydration.dryingPerDay != null ? (
+                    <Text style={[type.numBold as any, { color: accent.verdant }]}>~{hydration.dryingPerDay}%/day</Text>
+                  ) : (
+                    'a rate Greenr is still learning'
+                  )}
+                  . Greenr reads the size of each jump to estimate how much you poured — so a bigger drink
+                  simply lasts longer.
+                </Text>
+
+                {/* the efficient recommendation */}
+                {efficientPour && (
+                  <View style={{ marginTop: 12, padding: 12, borderRadius: 12, backgroundColor: `${accent.verdant}18` }}>
+                    <Text style={[type.micro, { color: accent.verdant, letterSpacing: 0.3 }]}>
+                      MOST EFFICIENT POUR
+                    </Text>
+                    <Text style={[type.ritualTitle, { color: dark.ink, fontSize: 22, marginTop: 2 }]}>
+                      {efficientPour.ml} ml
+                      <Text style={[type.caption, { color: dark.inkMuted }]}> · lasts ~{Math.round(efficientPour.lastsDays)} days</Text>
+                    </Text>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 3, lineHeight: 15 }]}>
+                      Fills the soil to ~{efficientPour.peak}% — enough to reach {plant.species}&apos;s next-water point
+                      in about {Math.round(efficientPour.lastsDays)} days.{' '}
+                      {efficientPour.capped
+                        ? `That's the most one pour can hold; past ~${hydration.saturationPct}% the water just drains away.`
+                        : `Pouring much past that just drains out — wasted water.`}
+                    </Text>
+                  </View>
+                )}
+
+                {/* recent pours: estimated volume + how long each lasted */}
+                {hydration.events.length > 0 && (
+                  <>
+                    <Hairline style={{ marginVertical: 12 }} />
+                    <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3, marginBottom: 6 }]}>
+                      YOUR RECENT WATERINGS
+                    </Text>
+                    {hydration.events
+                      .slice(-4)
+                      .reverse()
+                      .map((e, i) => (
+                        <View key={e.at} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: i === 0 ? 0 : 8 }}>
+                          <Ionicons name="water" size={14} color={accent.verdant} />
+                          <Text style={[type.caption, { color: dark.ink, flex: 1 }]}>
+                            {new Date(e.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            {e.loggedMl != null ? ` · you logged ${e.loggedMl} ml` : e.estMl != null ? ` · ~${e.estMl} ml poured` : ''}
+                          </Text>
+                          <Text style={[type.micro, { color: dark.inkMuted }]}>
+                            {e.wateredEarly ? 'watered early' : e.lastedDays != null ? `lasted ${e.lastedDays}d` : 'drying…'}
+                          </Text>
+                        </View>
+                      ))}
+                  </>
+                )}
+
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 12, lineHeight: 15 }]}>
+                  {hydration.calibrated
+                    ? `Calibrated to your pot from ${hydration.calibrationPairs} logged pour${hydration.calibrationPairs === 1 ? '' : 's'} — the volume estimate is tuned to this exact plant.`
+                    : 'Volume is estimated from pot size. Log the amount when you water and Greenr locks the estimate to your real pot.'}
+                </Text>
               </Card>
             </>
           )}
@@ -1593,7 +1684,7 @@ export default function PlantDetail() {
             )}
 
             <Pressable
-              onPress={() => doLogWater(refillMl ?? plan.ml)}
+              onPress={() => doLogWater(efficientPour?.ml ?? refillMl ?? plan.ml)}
               style={{
                 minHeight: 48,
                 borderRadius: 12,
@@ -1604,11 +1695,18 @@ export default function PlantDetail() {
               }}
             >
               <Text style={[type.cardTitle, { color: '#fff', fontSize: 14 }]}>
-                {refillMl != null
-                  ? `Calculated refill — ${refillMl} ml`
-                  : `Calculated for this plant — ${plan.ml} ml`}
+                {efficientPour != null
+                  ? `Efficient pour — ${efficientPour.ml} ml (~${Math.round(efficientPour.lastsDays)} days)`
+                  : refillMl != null
+                    ? `Calculated refill — ${refillMl} ml`
+                    : `Calculated for this plant — ${plan.ml} ml`}
               </Text>
             </Pressable>
+            {efficientPour != null && (
+              <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 14, textAlign: 'center' }]}>
+                Learned from your plant&apos;s own drying curve
+              </Text>
+            )}
             <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 15 }]}>
               {sensored
                 ? 'The sensor verifies the pour on its next reading.'
