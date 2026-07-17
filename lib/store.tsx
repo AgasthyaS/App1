@@ -160,6 +160,8 @@ interface GreenrApi extends GreenrState {
   addTasks: (tasks: CareTask[]) => void;
   addPhoto: (plantId: string) => void;
   setPlantPhoto: (plantId: string, uri: string) => void;
+  /** Add a growth-journal entry (photo and/or height/leaf measurement + note). */
+  logGrowth: (plantId: string, entry: { photoUri?: string; heightCm?: number | null; leaves?: number | null; note?: string }) => void;
   renamePlant: (plantId: string, name: string) => void;
   readNow: (sensorId: string) => void;
   reassignSensor: (sensorId: string, plantId: string) => void;
@@ -554,6 +556,39 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
+  const logGrowth = useCallback(
+    (
+      plantId: string,
+      entry: { photoUri?: string; heightCm?: number | null; leaves?: number | null; note?: string },
+    ) => {
+      const now = Date.now();
+      const id = `gr-${now}`;
+      const bits: string[] = [];
+      if (entry.photoUri) bits.push('photo');
+      if (entry.heightCm != null) bits.push(`${entry.heightCm} cm tall`);
+      if (entry.leaves != null) bits.push(`${entry.leaves} leaves`);
+      const text = `Growth logged${bits.length ? ` — ${bits.join(', ')}` : ''}.`;
+      setState((s) => ({
+        ...s,
+        plants: s.plants.map((p) =>
+          p.id === plantId
+            ? {
+                ...p,
+                // newest photo becomes the cover; keep the last 60 entries
+                photoUri: entry.photoUri ?? p.photoUri,
+                growth: [...(p.growth ?? []), { id, at: new Date(now).toISOString(), ...entry }].slice(-60),
+                timeline: [
+                  { id: `tl-${now}`, daysAgo: 0, kind: entry.photoUri ? ('photo' as const) : ('care' as const), text },
+                  ...p.timeline,
+                ],
+              }
+            : p,
+        ),
+      }));
+    },
+    [],
+  );
+
   const renamePlant = useCallback((plantId: string, name: string) => {
     setState((s) => ({
       ...s,
@@ -769,6 +804,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       addTasks,
       addPhoto,
       setPlantPhoto,
+      logGrowth,
       renamePlant,
       readNow,
       reassignSensor,
@@ -782,7 +818,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, renamePlant, readNow, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, logGrowth, renamePlant, readNow, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

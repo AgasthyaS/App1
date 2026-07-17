@@ -54,6 +54,20 @@ export interface WaterEvent {
   ml: number | null; // null = amount unknown
 }
 
+/**
+ * One growth-journal entry — the OUTCOME dimension no sensor can read: how the
+ * plant is actually changing. A photo, an optional height/leaf-count
+ * measurement, and a note; any field may be omitted.
+ */
+export interface GrowthEntry {
+  id: string;
+  at: string; // ISO timestamp
+  photoUri?: string; // dated progress photo (data URI)
+  heightCm?: number | null; // measured height
+  leaves?: number | null; // leaf / frond count
+  note?: string;
+}
+
 export interface Plant {
   id: string;
   name: string;
@@ -75,6 +89,8 @@ export interface Plant {
   lastWateredAt?: string | null;
   /** logged waterings with amounts — sharpens the estimate cycle */
   waterLog?: WaterEvent[];
+  /** growth journal — dated photos + height/leaf measurements over time */
+  growth?: GrowthEntry[];
   score: number;
   estimate: boolean; // true = manual model (dashed ring, ± band)
   estimateBand: number; // the ± value when estimate

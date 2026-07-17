@@ -62,6 +62,7 @@ export default function RootLayout() {
           <Stack.Screen name="care-mode" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="diagnose/[id]" options={{ presentation: 'modal' }} />
           <Stack.Screen name="dashboard/[id]" />
+          <Stack.Screen name="growth/[id]" />
           <Stack.Screen name="autopsy/[id]" options={{ presentation: 'modal' }} />
           <Stack.Screen name="move/[id]" options={{ presentation: 'modal' }} />
           <Stack.Screen name="scan" options={{ presentation: 'modal' }} />

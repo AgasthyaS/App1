@@ -51,6 +51,24 @@ export default function YouTab() {
   const wateringsLogged = careEvents.length;
   const verifiedCare = careEvents.filter((e) => e.verified).length;
   const consistency = wateringsLogged ? Math.round((verifiedCare / wateringsLogged) * 100) : null;
+  // Care streak — consecutive weeks (incl. this one) with at least one logged
+  // action, from real timestamps (waterings, growth entries, care/photo events).
+  const careStreak = (() => {
+    const DAY = 86400000;
+    const now = Date.now();
+    const times: number[] = [];
+    plants.forEach((p) => {
+      (p.waterLog ?? []).forEach((w) => times.push(+new Date(w.at)));
+      (p.growth ?? []).forEach((g) => times.push(+new Date(g.at)));
+      p.timeline
+        .filter((e) => e.kind === 'care' || e.kind === 'photo')
+        .forEach((e) => times.push(now - e.daysAgo * DAY));
+    });
+    const weeks = new Set(times.map((t) => Math.floor((now - t) / (7 * DAY))));
+    let streak = 0;
+    while (weeks.has(streak)) streak++;
+    return streak;
+  })();
   const thrivingNow = plants.filter((p) => {
     const v = vitalityFor(
       p,
@@ -126,6 +144,18 @@ export default function YouTab() {
             {consistency != null
               ? `${verifiedCare} of ${wateringsLogged} waterings sensor-verified`
               : 'builds as you log and verify care'}
+          </Text>
+        </Card>
+        <Card style={{ width: 180 }}>
+          <Text style={[type.micro, { color: dark.inkMuted }]}>CARE STREAK</Text>
+          <Text style={[type.numHero as any, { fontSize: 32, color: careStreak > 0 ? accent.sage : dark.inkMuted, marginTop: 6 }]}>
+            {careStreak > 0 ? `${careStreak}` : '—'}
+            {careStreak > 0 ? <Text style={[type.micro, { color: dark.inkMuted }]}> wk</Text> : null}
+          </Text>
+          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 14 }]}>
+            {careStreak > 0
+              ? `${careStreak} week${careStreak === 1 ? '' : 's'} running with logged care — keep it going`
+              : 'log any care this week to start a streak'}
           </Text>
         </Card>
         <Card style={{ width: 200 }} onPress={() => router.push('/accuracy')}>

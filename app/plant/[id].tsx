@@ -22,6 +22,7 @@ import { insightsFor, lightBenchmark, dayLight, recentLightAvg, lightVerdict } f
 import { careProfileFor } from '@/lib/plantCare';
 import { computeHealth, vitalityFor, BASELINE_DAYS, type HealthComponent } from '@/lib/health';
 import { computeCareScore, type CareComponent } from '@/lib/careScore';
+import { growthHeadline, growthSummary } from '@/lib/growth';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { estimateWaterSchedule, qualitativeNeeds } from '@/lib/estimate';
 import type { Toxicity } from '@/lib/plants';
@@ -335,6 +336,8 @@ export default function PlantDetail() {
     lightAvg: lightAvg?.avg ?? null,
   });
   const batteryPct = calReading?.battery_pct;
+  const growth = useMemo(() => growthSummary(plant), [plant]);
+  const growthLine = growthHeadline(growth);
   // The diagnose camera is a Greenr+ feature — route non-subscribers to the sheet.
   const openDiagnose = () =>
     settings.plus
@@ -1261,6 +1264,26 @@ export default function PlantDetail() {
             </>
           )}
 
+          {/* ── Growth journal: the outcome dimension no sensor can read ── */}
+          <Card style={{ marginTop: 10 }} onPress={() => router.push(`/growth/${plant.id}` as any)}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Text style={{ fontSize: 22 }}>📈</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Growth journal</Text>
+                <Text style={[type.micro, { color: growthLine ? accent.sage : dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                  {growthLine ??
+                    (growth.entries.length > 0
+                      ? `${growth.entries.length} ${growth.entries.length === 1 ? 'entry' : 'entries'} logged`
+                      : 'Track height, leaves & progress photos over time.')}
+                </Text>
+              </View>
+              {growth.photos.length > 0 && (
+                <Text style={[type.micro, { color: dark.inkMuted }]}>{growth.photos.length} 📷</Text>
+              )}
+              <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
+            </View>
+          </Card>
+
           {/* ── Photo-check: for problems no sensor can see (pests, spots, yellowing) ── */}
           <Card style={{ marginTop: 10 }} onPress={openDiagnose}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -1514,6 +1537,7 @@ export default function PlantDetail() {
                 { icon: '✂️', label: 'Log pruning', run: () => logCare(plant.id, 'Pruned (logged)') },
                 { icon: '🪴', label: 'Log repotting', run: () => logCare(plant.id, 'Repotted (logged)') },
                 { icon: '📷', label: photoAdded ? 'Photo added ✓' : 'Add a photo', run: () => setShowCamera(true) },
+                { icon: '📈', label: 'Log growth', run: () => router.push(`/growth/${plant.id}` as any) },
                 { icon: '🔍', label: settings.plus ? 'Diagnose (photo-check)' : 'Diagnose · Greenr+', run: openDiagnose },
               ] as { icon: string; label: string; run: () => void }[]
             ).map((a) => (
