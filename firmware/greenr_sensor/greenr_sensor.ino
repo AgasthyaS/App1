@@ -1,8 +1,11 @@
-/*  greenr sensor — ESP32-C3 Super Mini  (v2: captive-portal WiFi)
+/*  greenr sensor — ESP32-C3 Super Mini  (v3: in-app Bluetooth WiFi setup)
  *
- *  Setup for the end user is now: plug in → phone joins the "greenr-setup"
- *  WiFi hotspot → pick home WiFi on the page that appears → done. No code, no
- *  computer. The WiFi is remembered across deep sleep.
+ *  Setup for the end user is now Ring-style: plug in → open the Greenr app →
+ *  "Find my sensor" → pick home WiFi and type the password IN THE APP → done.
+ *  No switching WiFi networks, no captive portal. The sensor advertises over
+ *  Bluetooth only while it has no saved WiFi; the app hands it the credentials,
+ *  the sensor joins, saves them to flash, and turns Bluetooth off. WiFi is
+ *  remembered across deep sleep, so this is a one-time step.
  *
  *  Reads light (LDR), soil (capacitive), temp/humidity (AHT10 on the C3 build,
  *  DHT22 on the legacy dev kit), keeps a running Daily Light Integral, uploads
@@ -10,10 +13,10 @@
  *  request an immediate reading (app "read now").
  *
  *  LIBRARIES (Arduino IDE → Library Manager):
- *    - "WiFiManager" by tzapu
  *    - "Adafruit AHTX0" (+ "Adafruit BusIO", "Adafruit Unified Sensor")  [C3 build]
  *    - "DHT sensor library" by Adafruit                                  [legacy dev-kit build]
- *  Board: "ESP32C3 Dev Module".
+ *  Bluetooth (BLE), WiFi, and Preferences are built into the ESP32 core — no
+ *  extra library to install. Board: "ESP32C3 Dev Module".
  *
  *  WIRING (ESP32-C3 Super Mini):
  *    LDR AO -> GPIO0 | Soil AOUT -> GPIO1 | AHT10 SDA -> GPIO4, SCL -> GPIO5
@@ -24,9 +27,14 @@
  *  flash each board, and generates that unit's QR sticker + registers it.
  */
 
-#include <WiFiManager.h>          // tzapu
+#include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <Preferences.h>          // save WiFi creds to flash (NVS)
+#include <BLEDevice.h>            // Ring-style BLE provisioning (built into ESP32 core)
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #include <time.h>
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
   // C3 build: AHT10 temp/humidity over I2C.
@@ -158,6 +166,121 @@ void readAndUpload(){
   }
 }
 
+// ================= Ring-style BLE Wi-Fi provisioning =================
+// UUIDs MUST match the app (lib/wifiSetupTypes.ts).
+#define PROV_SERVICE  "c0de0001-feed-4b1e-9d0b-c0ffee000001"
+#define CHAR_NETWORKS "c0de0002-feed-4b1e-9d0b-c0ffee000001"
+#define CHAR_CREDS    "c0de0003-feed-4b1e-9d0b-c0ffee000001"
+#define CHAR_STATUS   "c0de0004-feed-4b1e-9d0b-c0ffee000001"
+
+Preferences prefs;
+BLECharacteristic* statusChar = nullptr;
+volatile bool provDone = false;      // set once WiFi joins and creds are saved
+volatile bool credsReady = false;    // app just wrote a new ssid/password
+String pendingSsid, pendingPass;
+
+void notifyStatus(const char* s){
+  if (statusChar){ statusChar->setValue((uint8_t*)s, strlen(s)); statusChar->notify(); }
+  Serial.printf("prov status: %s\n", s);
+}
+
+// Try to join a network, blocking up to timeoutMs. Returns true on success.
+bool tryConnect(const String& ssid, const String& pass, uint32_t timeoutMs){
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) delay(250);
+  return WiFi.status() == WL_CONNECTED;
+}
+
+// Receives "ssid\npassword" from the app.
+class CredsCallback : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    String v = String(c->getValue().c_str());
+    int nl = v.indexOf('\n');
+    if (nl < 0) return;
+    pendingSsid = v.substring(0, nl);
+    pendingPass = v.substring(nl + 1);
+    credsReady = true;
+  }
+};
+
+// JSON array of nearby SSIDs (strongest first), for the app's network picker.
+String scanNetworksJson(){
+  int n = WiFi.scanNetworks();
+  String out = "[";
+  for (int i = 0; i < n && i < 12; i++){
+    if (i) out += ",";
+    String ss = WiFi.SSID(i);
+    ss.replace("\\", "\\\\"); ss.replace("\"", "\\\"");
+    out += "\"" + ss + "\"";
+  }
+  out += "]";
+  WiFi.scanDelete();
+  return out;
+}
+
+// Advertise over BLE until the app sends working credentials. Blocks until
+// WiFi is joined and saved (or naps after a 5-minute setup window).
+void runProvisioning(){
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  String netsJson = scanNetworksJson();
+
+  uint8_t mac[6]; WiFi.macAddress(mac);
+  char name[16]; snprintf(name, sizeof(name), "greenr-%02X%02X", mac[4], mac[5]);
+
+  BLEDevice::init(name);
+  BLEServer* server = BLEDevice::createServer();
+  BLEService* svc = server->createService(PROV_SERVICE);
+
+  BLECharacteristic* netChar =
+    svc->createCharacteristic(CHAR_NETWORKS, BLECharacteristic::PROPERTY_READ);
+  netChar->setValue(netsJson.c_str());
+
+  BLECharacteristic* credsChar =
+    svc->createCharacteristic(CHAR_CREDS, BLECharacteristic::PROPERTY_WRITE);
+  credsChar->setCallbacks(new CredsCallback());
+
+  statusChar = svc->createCharacteristic(CHAR_STATUS, BLECharacteristic::PROPERTY_NOTIFY);
+  statusChar->addDescriptor(new BLE2902());
+  statusChar->setValue("waiting");
+
+  svc->start();
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(PROV_SERVICE);
+  adv->setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.printf("BLE provisioning as %s — open the Greenr app to connect.\n", name);
+
+  uint32_t start = millis();
+  while (!provDone){
+    if (credsReady){
+      credsReady = false;
+      notifyStatus("connecting");
+      adv->stop();                              // free the radio for WiFi
+      bool ok = tryConnect(pendingSsid, pendingPass, 15000);
+      if (ok){
+        prefs.begin("greenr", false);
+        prefs.putString("ssid", pendingSsid);
+        prefs.putString("pass", pendingPass);
+        prefs.end();
+        notifyStatus("ok");
+        delay(700);                             // let the app read "ok"
+        provDone = true;
+      } else {
+        notifyStatus("fail");                   // wrong password → let them retry
+        WiFi.disconnect();
+        BLEDevice::startAdvertising();
+      }
+    }
+    if (millis() - start > 300000UL){ Serial.println("prov window closed"); goToSleep(300); }
+    delay(100);
+  }
+  BLEDevice::deinit(true);                       // release BLE; WiFi is up + saved
+}
+// =====================================================================
+
 void setup(){
   Serial.begin(115200); delay(50);
 
@@ -165,13 +288,16 @@ void setup(){
   // indicator even before Wi-Fi is configured.
   if (SENSOR_PWR >= 0){ pinMode(SENSOR_PWR, OUTPUT); digitalWrite(SENSOR_PWR, HIGH); }
 
-  // WiFi via captive portal (see header). No WiFi yet → nap, reopen setup.
-  WiFiManager wm;
-  wm.setConfigPortalTimeout(180);
-  if (!wm.autoConnect("greenr-setup")) {
-    Serial.println("No WiFi yet — sleeping, will reopen setup.");
-    goToSleep(300);
-  }
+  // WiFi: use saved credentials if we have them; otherwise run BLE provisioning
+  // so the user sets it up right inside the app (Ring-style). Saved creds
+  // survive deep sleep, so this only happens on first setup or a router change.
+  prefs.begin("greenr", true);
+  String savedSsid = prefs.getString("ssid", "");
+  String savedPass = prefs.getString("pass", "");
+  prefs.end();
+
+  bool connected = savedSsid.length() ? tryConnect(savedSsid, savedPass, 20000) : false;
+  if (!connected) runProvisioning();   // blocks until WiFi is joined + saved
 
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
   delay(50);                        // AHT10 wants ~40 ms after power-up
