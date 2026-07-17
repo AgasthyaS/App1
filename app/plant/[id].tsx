@@ -200,6 +200,8 @@ export default function PlantDetail() {
   const [careOpen, setCareOpen] = useState(false);
   const [signsOpen, setSignsOpen] = useState(false);
   const [waterOpen, setWaterOpen] = useState(false);
+  const [customMl, setCustomMl] = useState('');
+  const [waterLoggedMsg, setWaterLoggedMsg] = useState<string | null>(null);
   const [loggedCare, setLoggedCare] = useState<string | null>(null);
   const [filter, setFilter] = useState<TimelineFilter>('All');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -338,6 +340,26 @@ export default function PlantDetail() {
   const batteryPct = calReading?.battery_pct;
   const growth = useMemo(() => growthSummary(plant), [plant]);
   const growthLine = growthHeadline(growth);
+  // Most recent logged pour with a known amount — powers a one-tap "repeat".
+  const lastLoggedMl = useMemo(() => {
+    const withMl = (plant.waterLog ?? []).filter((w) => w.ml != null);
+    return withMl.length ? (withMl[withMl.length - 1].ml as number) : null;
+  }, [plant.waterLog]);
+
+  const doLogWater = (ml: number) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    logWaterAmount(plant.id, ml);
+    setWaterOpen(false);
+    setCustomMl('');
+    setWaterLoggedMsg(`Logged ${ml} ml 💧`);
+    setTimeout(() => setWaterLoggedMsg((m) => (m ? null : m)), 1800);
+  };
+
+  const logCustomWater = () => {
+    const ml = parseInt(customMl.replace(/[^0-9]/g, ''), 10);
+    if (!Number.isFinite(ml) || ml <= 0) return;
+    doLogWater(Math.min(ml, 5000));
+  };
   // The diagnose camera is a Greenr+ feature — route non-subscribers to the sheet.
   const openDiagnose = () =>
     settings.plus
@@ -1442,6 +1464,37 @@ export default function PlantDetail() {
       </ScrollView>
 
       {/* ── Water amount sheet: logging the amount is what makes reminders exact ── */}
+      {/* brief confirmation after any watering log */}
+      {waterLoggedMsg && (
+        <View
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: insets.bottom + 96,
+            alignItems: 'center',
+          }}
+          pointerEvents="none"
+        >
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              paddingHorizontal: 16,
+              paddingVertical: 10,
+              borderRadius: 22,
+              backgroundColor: dark.surface2,
+              borderWidth: 1,
+              borderColor: accent.sage,
+            }}
+          >
+            <Ionicons name="checkmark-circle" size={16} color={accent.sage} />
+            <Text style={[type.caption, { color: dark.ink }]}>{waterLoggedMsg}</Text>
+          </View>
+        </View>
+      )}
+
       {waterOpen && (
         <View
           style={{
@@ -1469,11 +1522,7 @@ export default function PlantDetail() {
               ].map((o) => (
                 <Pressable
                   key={o.label}
-                  onPress={() => {
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-                    logWaterAmount(plant.id, o.ml);
-                    setWaterOpen(false);
-                  }}
+                  onPress={() => doLogWater(o.ml)}
                   style={{
                     flex: 1,
                     minHeight: 56,
@@ -1489,12 +1538,62 @@ export default function PlantDetail() {
                 </Pressable>
               ))}
             </View>
+
+            {/* Custom amount — a gardener who measured their pour can log it exactly */}
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+              <View
+                style={{
+                  flex: 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  borderWidth: 1,
+                  borderColor: dark.hairline,
+                  borderRadius: 12,
+                  paddingHorizontal: 12,
+                  minHeight: 48,
+                }}
+              >
+                <TextInput
+                  value={customMl}
+                  onChangeText={(t) => setCustomMl(t.replace(/[^0-9]/g, ''))}
+                  keyboardType="number-pad"
+                  placeholder="Custom amount"
+                  placeholderTextColor={dark.inkMuted}
+                  onSubmitEditing={logCustomWater}
+                  returnKeyType="done"
+                  style={{ flex: 1, color: dark.ink, fontSize: 15 }}
+                />
+                <Text style={[type.caption, { color: dark.inkMuted }]}>ml</Text>
+              </View>
+              <Pressable
+                onPress={logCustomWater}
+                disabled={!customMl}
+                style={{
+                  paddingHorizontal: 18,
+                  minHeight: 48,
+                  borderRadius: 12,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: customMl ? accent.verdant : dark.surface2,
+                }}
+              >
+                <Text style={[type.cardTitle, { color: customMl ? '#08110B' : dark.inkMuted, fontSize: 14 }]}>Log</Text>
+              </Pressable>
+            </View>
+
+            {/* Repeat the last measured pour in one tap */}
+            {lastLoggedMl != null && (
+              <Pressable
+                onPress={() => doLogWater(lastLoggedMl)}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, minHeight: 32 }}
+              >
+                <Ionicons name="refresh" size={14} color={accent.verdant} />
+                <Text style={[type.caption, { color: accent.verdant }]}>Repeat last pour — {lastLoggedMl} ml</Text>
+              </Pressable>
+            )}
+
             <Pressable
-              onPress={() => {
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-                logWaterAmount(plant.id, refillMl ?? plan.ml);
-                setWaterOpen(false);
-              }}
+              onPress={() => doLogWater(refillMl ?? plan.ml)}
               style={{
                 minHeight: 48,
                 borderRadius: 12,
