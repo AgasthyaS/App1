@@ -1,4 +1,4 @@
-import type { Reading } from './devices';
+import { IDLE_WAKE_SECONDS, type Reading } from './devices';
 import type { PotMaterial, PotSize, WaterEvent } from './types';
 import { soilLiters } from './watering';
 
@@ -29,9 +29,12 @@ import { soilLiters } from './watering';
  */
 
 const DAY = 86400000;
+const HOUR = 3600000;
 const RISE_MIN = 10; // a moisture jump this big (%) marks a watering
 const PAIR_WINDOW_H = 18; // logged ml within this of a detected pour = the same event
 const SAT_CEIL = 95; // practical saturation — beyond this, water drains, not stores
+/** A reading gap this many times the normal spacing = the sensor was offline. */
+const OFFLINE_GAP_FACTOR = 2.5;
 
 export interface WateringEvent {
   /** peak (saturation) time, ms */
@@ -73,7 +76,9 @@ export interface HydrationModel {
   dryingPerDay: number | null;
   /** highest peak actually observed — the real saturation ceiling for this setup */
   saturationPct: number;
-  /** 0–1, grows with events + calibration pairs */
+  /** the reporting cadence measured from the data, in hours (≈3 h at idle) */
+  reportIntervalH: number;
+  /** 0–1, grows with events + calibration pairs; lower when sampling is coarse */
   confidence: number;
   /** ml to last `targetDays` starting from `fromMoisture`; null if drying unknown */
   mlForDays: (targetDays: number, fromMoisture: number, band: [number, number]) => EfficientPour | null;
@@ -91,6 +96,20 @@ const median = (xs: number[]): number => {
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
+
+/**
+ * The reporting cadence, MEASURED from the data (median gap between readings) —
+ * not assumed. wake_seconds is server-controlled, so a device might report every
+ * 3 h, or faster in watch mode, or slower; the model adapts to whatever it sees.
+ * Falls back to the idle default until there's enough history.
+ */
+function observedIntervalMs(soils: { t: number }[]): number {
+  if (soils.length < 3) return IDLE_WAKE_SECONDS * 1000;
+  const gaps: number[] = [];
+  for (let i = 1; i < soils.length; i++) gaps.push(soils[i].t - soils[i - 1].t);
+  const m = median(gaps);
+  return m > 0 ? m : IDLE_WAKE_SECONDS * 1000;
+}
 
 function slopePerDay(pts: { t: number; v: number }[]): number | null {
   if (pts.length < 3) return null;
@@ -116,8 +135,10 @@ function modelMlPerPct(pot: Pot): number {
   return liters * 10 * factor; // matches mlNeeded: ml = liters*10*rise*factor
 }
 
-/** Find watering events (moisture jumps) and characterise each one. */
-function detectEvents(soils: { t: number; v: number }[], lo: number): WateringEvent[] {
+/** Find watering events (moisture jumps) and characterise each one.
+ *  `offlineGapMs` is the span above which a reading gap means the sensor was
+ *  offline, so decay/duration must not be interpolated across it. */
+function detectEvents(soils: { t: number; v: number }[], lo: number, offlineGapMs: number): WateringEvent[] {
   const events: WateringEvent[] = [];
   let i = 1;
   while (i < soils.length) {
@@ -155,13 +176,24 @@ function detectEvents(soils: { t: number; v: number }[], lo: number): WateringEv
     const ev = events[e];
     const segEnd = e + 1 < events.length ? events[e + 1].at : Infinity;
     const seg = soils.filter((p) => p.t >= ev.at && p.t <= segEnd);
-    const slope = slopePerDay(seg);
+    // Fit the drying rate only over the contiguous run after the pour — stop at
+    // the first offline gap so a sleep period doesn't flatten or distort it.
+    const contig: { t: number; v: number }[] = [];
+    for (let k = 0; k < seg.length; k++) {
+      if (k > 0 && seg[k].t - seg[k - 1].t > offlineGapMs) break;
+      contig.push(seg[k]);
+    }
+    const slope = slopePerDay(contig);
     ev.dryingPerDay = slope != null && slope < 0 ? Math.round(-slope * 100) / 100 : null;
 
     // Duration: interpolate when the decaying series first crosses the band low.
+    // Never interpolate across an offline gap — if the crossing falls inside a
+    // stretch where the sensor was asleep, we genuinely don't know when it
+    // happened, so we don't invent a precise time.
     let lasted: number | null = null;
     for (let k = 1; k < seg.length; k++) {
       if (seg[k - 1].v >= lo && seg[k].v < lo) {
+        if (seg[k].t - seg[k - 1].t > offlineGapMs) break; // crossing hidden in a gap
         const frac = (seg[k - 1].v - lo) / (seg[k - 1].v - seg[k].v || 1);
         const crossT = seg[k - 1].t + frac * (seg[k].t - seg[k - 1].t);
         lasted = (crossT - ev.at) / DAY;
@@ -194,8 +226,13 @@ export function buildHydrationModel(
     .sort((a, b) => a.t - b.t);
   if (soils.length < 3) return null;
 
+  // The reporting cadence, measured from the data. A gap much larger than this
+  // means the sensor was offline — used to keep decay/duration honest.
+  const intervalMs = observedIntervalMs(soils);
+  const offlineGapMs = intervalMs * OFFLINE_GAP_FACTOR;
+
   const [lo] = band;
-  const events = detectEvents(soils, lo);
+  const events = detectEvents(soils, lo, offlineGapMs);
   if (events.length === 0) return null;
 
   // Calibrate volume↔rise: pair logged ml with the detected pour it belongs to.
@@ -233,9 +270,14 @@ export function buildHydrationModel(
 
   const saturationPct = Math.min(100, Math.max(SAT_CEIL, ...events.map((e) => e.peakMoisture)));
 
+  // Coarser sampling resolves the peak and drying curve less precisely, so it
+  // caps confidence: 1× at the nominal ~3 h cadence, tapering for slower reports.
+  const reportIntervalH = intervalMs / HOUR;
+  const cadenceFactor = Math.min(1, (IDLE_WAKE_SECONDS / 3600) / reportIntervalH);
   const confidence = Math.max(
     0,
-    Math.min(1, 0.2 + 0.12 * Math.min(events.length, 4) + 0.16 * Math.min(ratios.length, 2)),
+    Math.min(1, 0.2 + 0.12 * Math.min(events.length, 4) + 0.16 * Math.min(ratios.length, 2)) *
+      (0.7 + 0.3 * cadenceFactor),
   );
 
   const mlForDays = (targetDays: number, fromMoisture: number, b: [number, number]): EfficientPour | null => {
@@ -259,6 +301,7 @@ export function buildHydrationModel(
     calibrationPairs: ratios.length,
     dryingPerDay,
     saturationPct: Math.round(saturationPct),
+    reportIntervalH: Math.round(reportIntervalH * 10) / 10,
     confidence: Math.round(confidence * 100) / 100,
     mlForDays,
   };

@@ -167,6 +167,17 @@ export async function requestReadNow(deviceId?: string): Promise<void> {
  *  (battery-friendly). Server-controlled via devices.wake_seconds. */
 export const IDLE_WAKE_SECONDS = 10800;
 
+/** Nominal reporting interval in hours (the idle cadence). This is the DEFAULT —
+ *  wake_seconds is server-controlled and can change, so anything analysing the
+ *  reading series should prefer the interval OBSERVED in the data and use this
+ *  only as a fallback. */
+export const REPORT_INTERVAL_H = IDLE_WAKE_SECONDS / 3600;
+
+/** A gap longer than this (hours) means the sensor missed reports — i.e. it was
+ *  offline. Curve fitting must not bridge such gaps. Derived from the cadence
+ *  (1.5× a reporting cycle), not a magic number. */
+export const OFFLINE_GAP_H = REPORT_INTERVAL_H * 1.5;
+
 /** Set how often the device wakes to read (server-controlled; no reflash). */
 export async function setWakeInterval(deviceId: string, seconds: number): Promise<void> {
   if (!supabase) return;

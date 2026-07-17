@@ -1,4 +1,4 @@
-import type { Reading } from './devices';
+import { OFFLINE_GAP_H, type Reading } from './devices';
 import { idealsFor } from './plantStatus';
 
 /**
@@ -16,6 +16,9 @@ import { idealsFor } from './plantStatus';
 const DAY_START_H = 7;
 const DAY_END_H = 19;
 const MS_H = 3600000;
+/** Reading gaps beyond this (hours) mean the sensor was offline — derived from
+ *  the reporting cadence, not a magic number. */
+const GAP_H = OFFLINE_GAP_H;
 
 /** Milliseconds of [a, b] that fall inside any 07:00–19:00 local window. */
 function daytimeOverlap(a: number, b: number): number {
@@ -51,7 +54,7 @@ export function daytimeLightAvg(history: Reading[], now = Date.now()): DaytimeLi
   let weight = 0;
   for (let i = 1; i < pts.length; i++) {
     const gap = pts[i].t - pts[i - 1].t;
-    if (gap > 4.5 * MS_H) continue; // sensor was offline — don't invent hours
+    if (gap > GAP_H * MS_H) continue; // sensor was offline — don't invent hours
     const ov = daytimeOverlap(pts[i - 1].t, pts[i].t);
     if (ov <= 0) continue;
     weighted += ((pts[i - 1].v + pts[i].v) / 2) * ov;
@@ -110,14 +113,14 @@ export function dayLight(history: Reading[], within = Date.now()): DayLight | nu
     .filter((r) => r.light_lux != null)
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.light_lux as number }))
     // include a point just before midnight so the morning span has a left edge
-    .filter((p) => p.t >= from - 4.5 * MS_H && p.t < to)
+    .filter((p) => p.t >= from - GAP_H * MS_H && p.t < to)
     .sort((x, y) => x.t - y.t);
   if (pts.length < 2) return null;
 
   let weighted = 0;
   let weight = 0;
   for (let i = 1; i < pts.length; i++) {
-    if (pts[i].t - pts[i - 1].t > 4.5 * MS_H) continue; // offline gap — don't bridge
+    if (pts[i].t - pts[i - 1].t > GAP_H * MS_H) continue; // offline gap — don't bridge
     const a = Math.max(pts[i - 1].t, from);
     const b = Math.min(pts[i].t, to);
     const ov = daytimeOverlap(a, b);

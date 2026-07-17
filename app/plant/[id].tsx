@@ -808,6 +808,10 @@ export default function PlantDetail() {
                   . Greenr reads the size of each jump to estimate how much you poured — so a bigger drink
                   simply lasts longer.
                 </Text>
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+                  Built from readings about every {hydration.reportIntervalH} h — the more often the sensor
+                  reports, the sharper this gets. Stretches where it was offline aren&apos;t counted.
+                </Text>
 
                 {/* the efficient recommendation */}
                 {efficientPour && (
