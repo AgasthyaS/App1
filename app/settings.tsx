@@ -92,8 +92,8 @@ export default function SettingsScreen() {
       <SectionHeader>Reminders</SectionHeader>
       <Card>
         <Text style={[type.caption, { color: dark.inkMuted, lineHeight: 18 }]}>
-          A nudge when a plant needs watering, moving to better light, or feeding — scheduled from
-          each plant’s real cadence and kept out of your quiet hours.{' '}
+          A nudge when a plant needs watering, moving to better light, feeding, more humidity, or a
+          sensor recharge — scheduled from each plant’s real cadence and kept out of your quiet hours.{' '}
           {notifications.backgroundDelivery
             ? 'Delivered even when the app is closed.'
             : 'On the web these arrive while Greenr is open in a tab; install the phone app for reminders when it’s closed.'}
@@ -288,21 +288,8 @@ export default function SettingsScreen() {
       <Card>
         <Row title="Version" value={`2.0.0 · ${BUILD_STAMP}`} />
         <Row title="How Greenr calculates" value="→" onPress={() => router.push('/methodology')} />
-        <Row
-          title="Privacy policy"
-          value="→"
-          onPress={() =>
-            notify(
-              'Privacy',
-              'Your readings stay on this device in this build. The anonymized-research toggle controls whether outcomes would be shared, stripped of identity, in a release build.',
-            )
-          }
-        />
-        <Row
-          title="Terms"
-          value="→"
-          onPress={() => notify('Terms', 'Prototype build — terms ship with the release version.')}
-        />
+        <Row title="Privacy policy" value="→" onPress={() => router.push('/privacy' as any)} />
+        <Row title="Terms of Service" value="→" onPress={() => router.push('/terms' as any)} />
       </Card>
     </Screen>
   );

@@ -264,6 +264,17 @@ export default function SignIn() {
             ? 'Guest gardens stay on this device. Sign in to save yours to your account.'
             : 'Sign-in is stored on this device in this build — no account server yet.'}
         </Text>
+        <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 14, lineHeight: 16 }]}>
+          By continuing you agree to our{' '}
+          <Text style={{ color: accent.verdant }} onPress={() => router.push('/terms' as any)}>
+            Terms
+          </Text>{' '}
+          and{' '}
+          <Text style={{ color: accent.verdant }} onPress={() => router.push('/privacy' as any)}>
+            Privacy Policy
+          </Text>
+          .
+        </Text>
       </Screen>
     );
   }

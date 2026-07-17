@@ -15,7 +15,7 @@ import type { WeatherData } from './weather';
  * this returns.
  */
 
-export type ReminderKind = 'water' | 'move' | 'feed' | 'humidity';
+export type ReminderKind = 'water' | 'move' | 'feed' | 'humidity' | 'battery';
 
 export interface Reminder {
   /** stable per plant+kind so re-syncs replace rather than duplicate */
@@ -31,7 +31,9 @@ export interface Reminder {
 const MIN = 60000;
 const DAY = 86400000;
 
-const EMOJI: Record<ReminderKind, string> = { water: '💧', move: '☀️', feed: '🧪', humidity: '💨' };
+const EMOJI: Record<ReminderKind, string> = { water: '💧', move: '☀️', feed: '🧪', humidity: '💨', battery: '🔋' };
+/** Warn once the sensor battery drops below this. */
+const LOW_BATTERY_PCT = 20;
 
 /** Parse "9:00" → minutes since midnight. */
 function hmToMin(hm: string): number {
@@ -124,6 +126,21 @@ export function computeReminders(opts: {
     }
     // 'hold' (don't water) intentionally doesn't push a reminder.
   }
+
+  // Low sensor battery — a dead sensor means no readings, so nudge to recharge.
+  readings.forEach((r, plantId) => {
+    if (r?.battery_pct != null && r.battery_pct >= 0 && r.battery_pct < LOW_BATTERY_PCT) {
+      const p = plants.find((x) => x.id === plantId);
+      push({
+        id: `${plantId}-battery`,
+        plantId,
+        kind: 'battery',
+        title: `${EMOJI.battery} ${p?.name ?? 'Sensor'} battery is low`,
+        body: `The sensor is at ${Math.round(r.battery_pct)}% — recharge or swap batteries so it keeps reporting.`,
+        fireAt: slot,
+      });
+    }
+  });
 
   // Future watering: for plants not already flagged as due now, schedule the
   // next watering from the honest estimate cycle, at the reminder hour on that

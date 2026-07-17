@@ -67,6 +67,8 @@ export default function RootLayout() {
           <Stack.Screen name="move/[id]" options={{ presentation: 'modal' }} />
           <Stack.Screen name="scan" options={{ presentation: 'modal' }} />
           <Stack.Screen name="suggest" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="privacy" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="terms" options={{ presentation: 'modal' }} />
         </Stack>
         </GreenrProvider>
       </AuthProvider>

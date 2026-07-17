@@ -12,17 +12,19 @@ export default function AddPlantModal() {
   const { species, outdoor } = useLocalSearchParams<{ species?: string; outdoor?: string }>();
   const { addPlant, plants, settings } = useGreenr();
 
-  // Free covers 3 plants; sensored plants are exempt — a sensor is a seat (§10)
-  const seats = activePlants(plants).filter((p) => !p.sensorId).length;
-  if (!settings.plus && seats >= 3) {
+  // Free accounts can track up to 3 plants total. Greenr+ removes the limit.
+  const FREE_PLANT_LIMIT = 3;
+  const count = activePlants(plants).length;
+  if (!settings.plus && count >= FREE_PLANT_LIMIT) {
     return (
       <Screen scroll={false} style={{ justifyContent: 'center' }}>
-        <Text style={[type.screenTitle, { color: dark.ink, fontSize: 24 }]}>
-          Free covers 3 plants.
+        <Text style={{ fontSize: 40 }}>🌿</Text>
+        <Text style={[type.screenTitle, { color: dark.ink, fontSize: 24, marginTop: 12 }]}>
+          You&apos;ve reached 3 plants
         </Text>
         <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, lineHeight: 22 }]}>
-          Plants with a Greenr Sensor don&apos;t count against the limit — a sensor is a seat.
-          Greenr+ removes the limit entirely.
+          Free accounts can track up to {FREE_PLANT_LIMIT} plants. Upgrade to Greenr+ to grow your
+          garden without limits — plus photo diagnosis and more.
         </Text>
         <GButton title="See Greenr+" onPress={() => toTabsThen('/plus')} style={{ marginTop: 24 }} />
         <GButton title="Not now" kind="secondary" onPress={closeModal} style={{ marginTop: 10 }} />
