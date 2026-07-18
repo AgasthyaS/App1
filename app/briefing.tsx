@@ -8,6 +8,7 @@ import VitalityRing from '@/components/greenr/VitalityRing';
 import { light, type } from '@/constants/theme';
 import { calibrationFor } from '@/lib/calibration';
 import { careScoreValue } from '@/lib/careScore';
+import { eventDaysAgo } from '@/lib/format';
 import { deriveCareTasks } from '@/lib/careTasks';
 import { vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
@@ -50,7 +51,7 @@ export default function Briefing() {
   const changes = plants
     .flatMap((p) =>
       p.timeline
-        .filter((e) => e.daysAgo <= 7 && (e.kind === 'insight' || e.kind === 'diagnosis' || e.kind === 'band-change'))
+        .filter((e) => eventDaysAgo(e) <= 7 && (e.kind === 'insight' || e.kind === 'diagnosis' || e.kind === 'band-change'))
         .map((e) => ({ id: `${p.id}-${e.id}`, text: e.text })),
     )
     .slice(0, 3);

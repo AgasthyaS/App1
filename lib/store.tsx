@@ -340,7 +340,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
           forecast: { ...p.forecast, warnInDays: null, criticalInDays: null, action },
           timeline: [
             {
-              id: `tl-${Date.now()}`,
+              id: `tl-${Date.now()}`, at: new Date().toISOString(),
               daysAgo: 0,
               kind: (scoreDelta < 0 ? 'insight' : 'care') as 'insight' | 'care',
               text: note,
@@ -370,7 +370,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
           waterLog: [...(p.waterLog ?? []), { at, ml }].slice(-30),
           timeline: [
             {
-              id: `tl-${Date.now()}`,
+              id: `tl-${Date.now()}`, at: new Date().toISOString(),
               daysAgo: 0,
               kind: 'care' as const,
               text: ml != null ? `Watered ~${ml} ml (logged)` : 'Watered (logged)',
@@ -390,7 +390,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
           ? {
               ...p,
               timeline: [
-                { id: `tl-${Date.now()}`, daysAgo: 0, kind: 'care' as const, text: note },
+                { id: `tl-${Date.now()}`, at: new Date().toISOString(), daysAgo: 0, kind: 'care' as const, text: note },
                 ...p.timeline,
               ],
             }
@@ -472,7 +472,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
               spotId,
               timeline: [
                 {
-                  id: `tl-${Date.now()}`,
+                  id: `tl-${Date.now()}`, at: new Date().toISOString(),
                   daysAgo: 0,
                   kind: 'care' as const,
                   text: `Moved to ${s.spots.find((sp) => sp.id === spotId)?.name ?? 'a new spot'} — expectations re-baselined for 7 days.`,
@@ -503,7 +503,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
           ? {
               ...p,
               timeline: [
-                { id: `tl-${Date.now()}`, daysAgo: 0, kind: 'diagnosis' as const, text },
+                { id: `tl-${Date.now()}`, at: new Date().toISOString(), daysAgo: 0, kind: 'diagnosis' as const, text },
                 ...p.timeline,
               ],
             }
@@ -525,7 +525,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
               ...p,
               timeline: [
                 {
-                  id: `tl-${Date.now()}`,
+                  id: `tl-${Date.now()}`, at: new Date().toISOString(),
                   daysAgo: 0,
                   kind: 'photo' as const,
                   text: 'Photo added — aligned for the growth scrubber.',
@@ -547,7 +547,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
               ...p,
               photoUri: uri,
               timeline: [
-                { id: `tl-${Date.now()}`, daysAgo: 0, kind: 'photo' as const, text: 'Photo added.' },
+                { id: `tl-${Date.now()}`, at: new Date().toISOString(), daysAgo: 0, kind: 'photo' as const, text: 'Photo added.' },
                 ...p.timeline,
               ],
             }
@@ -578,7 +578,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
                 photoUri: entry.photoUri ?? p.photoUri,
                 growth: [...(p.growth ?? []), { id, at: new Date(now).toISOString(), ...entry }].slice(-60),
                 timeline: [
-                  { id: `tl-${now}`, daysAgo: 0, kind: entry.photoUri ? ('photo' as const) : ('care' as const), text },
+                  { id: `tl-${now}`, at: new Date(now).toISOString(), daysAgo: 0, kind: entry.photoUri ? ('photo' as const) : ('care' as const), text },
                   ...p.timeline,
                 ],
               }
@@ -630,7 +630,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
             estimateBand: 6,
             timeline: [
               {
-                id: `tl-${Date.now()}`,
+                id: `tl-${Date.now()}`, at: new Date().toISOString(),
                 daysAgo: 0,
                 kind: 'insight' as const,
                 text: 'Sensor moved — its stream is archived here; scores continue as estimates.',
@@ -727,7 +727,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
               estimateBand: 7,
               timeline: [
                 {
-                  id: `tl-${Date.now()}`,
+                  id: `tl-${Date.now()}`, at: new Date().toISOString(),
                   daysAgo: 0,
                   kind: 'insight' as const,
                   text: 'Sensor forgotten — history stays with this plant; scores continue as estimates.',

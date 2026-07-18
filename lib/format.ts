@@ -1,5 +1,25 @@
 /** Formatting rules (§1.7). */
 
+import type { TimelineEvent } from './types';
+
+/**
+ * The TRUE age of a timeline event in days. Events are written once with
+ * `daysAgo` frozen at creation (usually 0), so reading that field directly
+ * makes everything look like "today" forever — and breaks any "recent?" check
+ * built on it. This derives the real age from the creation timestamp: the `at`
+ * field when present, else the epoch-ms the app embeds in ids ("tl-<ms>"),
+ * else the stored daysAgo (seeded demo events carry authored ages).
+ */
+export function eventDaysAgo(e: TimelineEvent, now = Date.now()): number {
+  if (e.at) {
+    const t = new Date(e.at).getTime();
+    if (Number.isFinite(t)) return Math.max(0, (now - t) / 86400000);
+  }
+  const m = /^tl-(\d{12,})$/.exec(e.id);
+  if (m) return Math.max(0, (now - Number(m[1])) / 86400000);
+  return e.daysAgo;
+}
+
 export function relTime(minsAgo: number): string {
   if (minsAgo < 60) return `${Math.round(minsAgo)} min ago`;
   if (minsAgo < 24 * 60) return `${Math.round(minsAgo / 60)} h ago`;

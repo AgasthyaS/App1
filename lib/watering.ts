@@ -20,10 +20,21 @@ export function soilLiters(potSize: PotSize, potCm?: number | null): number {
 }
 
 /**
+ * How many ml of water raise 1 L of potting mix by ONE point on the sensor's
+ * 0–100 display scale. Derived from the app's own thorough-water baseline so
+ * every surface agrees: a thorough pour (~115 ml/L, see waterAmount) takes the
+ * display from around the water-at point to near saturation (~60 points), so
+ * 115/60 ≈ 1.9 ml per point per liter. (The display scale is NOT volumetric
+ * water content — the air→water calibration compresses the real 0–40% VWC
+ * range onto 0–100, which is why the naive "10 ml per %" figure over-poured
+ * by ~4×.) Hydration calibration from logged pours refines this per pot.
+ */
+export const ML_PER_PT_PER_LITER = 1.9;
+
+/**
  * How much water (ml) it takes to lift soil moisture from `fromPct` to
- * `toPct` in this pot. Roughly: 1% moisture in 1 L of mix ≈ 10 ml of water;
- * terracotta wicks some away, so it gets a little extra. Rounded to 25 ml —
- * an amount a person can actually measure with a cup.
+ * `toPct` (display %) in this pot. Terracotta wicks some away, so it gets a
+ * little extra. Rounded to 25 ml — an amount a person can actually measure.
  */
 export function mlNeeded(
   potSize: PotSize,
@@ -36,7 +47,7 @@ export function mlNeeded(
   if (rise === 0) return 0;
   const liters = soilLiters(potSize, potCm);
   const factor = potMaterial === 'Terracotta' ? 1.15 : potMaterial === 'Ceramic' ? 1.05 : 1;
-  const ml = liters * 10 * rise * factor;
+  const ml = liters * ML_PER_PT_PER_LITER * rise * factor;
   return Math.max(50, Math.round(ml / 25) * 25);
 }
 

@@ -42,7 +42,15 @@ export interface ForecastInfo {
 
 export interface TimelineEvent {
   id: string;
+  /**
+   * Age in days AT CREATION TIME — it does not update as time passes (events
+   * are stored once). Read ages through eventDaysAgo() in lib/format, which
+   * derives the true age from `at` (or the timestamp embedded in the id) so
+   * "today" doesn't stay "today" forever.
+   */
   daysAgo: number;
+  /** ISO creation timestamp (newer events; older ones embed it in the id) */
+  at?: string;
   kind: 'photo' | 'care' | 'insight' | 'diagnosis' | 'band-change';
   text: string;
   verified?: boolean;

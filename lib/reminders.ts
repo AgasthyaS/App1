@@ -149,7 +149,12 @@ export function computeReminders(opts: {
     if (plantWithWaterTaskNow.has(p.id)) continue;
     const est = estimateWaterSchedule(p, now);
     if (est.dueAt && est.dueAt.getTime() > now + 30 * MIN) {
-      const fire = outOfQuiet(atTime(est.dueAt, settings.briefingTime), settings.quietHours).getTime();
+      // Aim for the reminder hour on the due day — but if that hour has already
+      // passed (a watering due later today), fire at the due time itself instead
+      // of scheduling into the past (which would deliver immediately).
+      let fireDate = outOfQuiet(atTime(est.dueAt, settings.briefingTime), settings.quietHours);
+      if (fireDate.getTime() <= now) fireDate = outOfQuiet(est.dueAt, settings.quietHours);
+      const fire = fireDate.getTime();
       push({
         id: `${p.id}-water`,
         plantId: p.id,

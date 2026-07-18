@@ -12,7 +12,7 @@ import PlantAvatar from '@/components/greenr/PlantAvatar';
 import { Card, Chip, GButton, Hairline, SectionHeader } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, bandFor, dark, layout, type } from '@/constants/theme';
-import { daysAgoLabel } from '@/lib/format';
+import { daysAgoLabel, eventDaysAgo } from '@/lib/format';
 import { useGreenr } from '@/lib/store';
 import { useLiveReading } from '@/lib/useLiveReading';
 import { idealsFor, type Tone } from '@/lib/plantStatus';
@@ -1545,7 +1545,7 @@ export default function PlantDetail() {
                       <View style={{ flex: 1 }}>
                         <Text style={[type.body, { color: dark.ink, lineHeight: 20 }]}>{e.text}</Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3 }}>
-                          <Text style={[type.micro, { color: dark.inkMuted }]}>{daysAgoLabel(e.daysAgo)}</Text>
+                          <Text style={[type.micro, { color: dark.inkMuted }]}>{daysAgoLabel(eventDaysAgo(e))}</Text>
                           {e.verified && <Chip label="✓ verified" color={accent.sage} />}
                         </View>
                       </View>

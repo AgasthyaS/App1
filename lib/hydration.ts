@@ -1,6 +1,6 @@
 import { IDLE_WAKE_SECONDS, type Reading } from './devices';
 import type { PotMaterial, PotSize, WaterEvent } from './types';
-import { soilLiters } from './watering';
+import { ML_PER_PT_PER_LITER, soilLiters } from './watering';
 
 /**
  * Soil-hydration dynamics — inferring watering VOLUME and optimising it from the
@@ -128,11 +128,13 @@ function slopePerDay(pts: { t: number; v: number }[]): number | null {
   return den === 0 ? null : num / den;
 }
 
-/** ml per 1% moisture rise from the pot's soil volume + material (the generic model). */
+/** ml per 1 display-% rise from the pot's soil volume + material (the generic
+ *  model, same constant as mlNeeded so all app volumes agree; paired logged
+ *  pours replace this with the pot's own measured ratio). */
 function modelMlPerPct(pot: Pot): number {
   const liters = soilLiters(pot.size, pot.cm);
   const factor = pot.material === 'Terracotta' ? 1.15 : pot.material === 'Ceramic' ? 1.05 : 1;
-  return liters * 10 * factor; // matches mlNeeded: ml = liters*10*rise*factor
+  return liters * ML_PER_PT_PER_LITER * factor;
 }
 
 /** Find watering events (moisture jumps) and characterise each one.
@@ -240,10 +242,12 @@ export function buildHydrationModel(
     .filter((w) => w.ml != null && w.ml > 0)
     .map((w) => ({ t: new Date(w.at).getTime(), ml: w.ml as number }));
   const ratios: number[] = [];
+  const usedLogs = new Set<number>(); // each logged pour calibrates at most ONE event
   for (const ev of events) {
     let best: { t: number; ml: number } | null = null;
     let bestDt = PAIR_WINDOW_H * 3600000;
     for (const l of logs) {
+      if (usedLogs.has(l.t)) continue;
       const dt = Math.abs(l.t - ev.at);
       if (dt <= bestDt) {
         best = l;
@@ -251,6 +255,7 @@ export function buildHydrationModel(
       }
     }
     if (best && ev.rise > 0) {
+      usedLogs.add(best.t);
       ev.loggedMl = best.ml;
       ratios.push(best.ml / ev.rise); // ml per 1% rise, observed
     }

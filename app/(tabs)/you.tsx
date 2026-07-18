@@ -6,6 +6,7 @@ import { Card, Row, Screen, SectionHeader, StatusDot } from '@/components/greenr
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, type } from '@/constants/theme';
 import { calibrationFor } from '@/lib/calibration';
+import { eventDaysAgo } from '@/lib/format';
 import { careScoreValue } from '@/lib/careScore';
 import { connectionFrom } from '@/lib/devices';
 import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
@@ -62,7 +63,7 @@ export default function YouTab() {
       (p.growth ?? []).forEach((g) => times.push(+new Date(g.at)));
       p.timeline
         .filter((e) => e.kind === 'care' || e.kind === 'photo')
-        .forEach((e) => times.push(now - e.daysAgo * DAY));
+        .forEach((e) => times.push(now - eventDaysAgo(e) * DAY));
     });
     const weeks = new Set(times.map((t) => Math.floor((now - t) / (7 * DAY))));
     let streak = 0;

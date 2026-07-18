@@ -2,6 +2,7 @@ import { waterAmount } from './advice';
 import { applyCalibration, calibrationFor, type SensorCalibration } from './calibration';
 import type { Reading } from './devices';
 import { estimateWaterSchedule } from './estimate';
+import { eventDaysAgo } from './format';
 import { dayLight, lightVerdict, recentLightAvg, type DayLight } from './insights';
 import { idealsFor } from './plantStatus';
 import { currentSeason, SEASON_LABEL } from './season';
@@ -153,7 +154,7 @@ export function deriveCareTasks(opts: {
     const season = currentSeason();
     if (season === 'spring' || season === 'summer') {
       const fedRecently = p.timeline.some(
-        (e) => e.kind === 'care' && e.daysAgo <= 28 && /fertili/i.test(e.text),
+        (e) => e.kind === 'care' && eventDaysAgo(e) <= 28 && /fertili/i.test(e.text),
       );
       if (!fedRecently) {
         out.push({
