@@ -56,6 +56,7 @@ const DEFAULT_SETTINGS: Settings = {
   researchOptIn: true,
   plus: false,
   remindersEnabled: false,
+  bleGatewayEnabled: false,
 };
 
 /** Real users start with nothing — the garden is theirs to build. */

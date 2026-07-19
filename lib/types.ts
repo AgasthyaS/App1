@@ -195,4 +195,7 @@ export interface Settings {
   plus: boolean;
   /** local care reminders (water / move / feed) scheduled on-device */
   remindersEnabled: boolean;
+  /** phone-as-BLE-gateway: collect nearby sensors over Bluetooth to save their
+   *  Wi-Fi battery (native runs it in the background; web is manual-only) */
+  bleGatewayEnabled: boolean;
 }

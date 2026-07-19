@@ -1,11 +1,16 @@
-/*  greenr sensor — ESP32-C3 Super Mini  (v3: in-app Bluetooth WiFi setup)
+/*  greenr sensor — ESP32-C3 Super Mini  (v3.1: hybrid BLE/WiFi sync)
  *
- *  Setup for the end user is now Ring-style: plug in → open the Greenr app →
- *  "Find my sensor" → pick home WiFi and type the password IN THE APP → done.
- *  No switching WiFi networks, no captive portal. The sensor advertises over
- *  Bluetooth only while it has no saved WiFi; the app hands it the credentials,
- *  the sensor joins, saves them to flash, and turns Bluetooth off. WiFi is
- *  remembered across deep sleep, so this is a one-time step.
+ *  HYBRID SYNC (battery): each cycle the sensor reads, buffers the reading, and
+ *  opens a short BLE window. When someone is HOME, the Greenr app collects the
+ *  buffer over Bluetooth (cheap) and uploads it to the cloud — the sensor's
+ *  power-hungry WiFi radio stays OFF. When nobody's phone has been in range for
+ *  ~6 h (they're AWAY/on vacation), the sensor falls back to WiFi on its own so
+ *  the cloud stays current, then reverts to BLE when a phone reappears.
+ *
+ *  Setup is Ring-style: plug in → open the Greenr app → "Find my sensor" → pick
+ *  home WiFi and type the password IN THE APP → done. The sensor advertises the
+ *  provisioning service only while it has no saved WiFi; WiFi is remembered
+ *  across deep sleep, so setup is a one-time step.
  *
  *  Reads light (LDR), soil (capacitive), temp/humidity (AHT10 on the C3 build,
  *  DHT22 on the legacy dev kit), keeps a running Daily Light Integral, uploads
@@ -35,7 +40,34 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <BLESecurity.h>          // encrypted + authenticated BLE pairing
+#include <esp_task_wdt.h>         // watchdog: auto-restart if firmware hangs
 #include <time.h>
+
+// ---- Reliability tunables ----
+#define WDT_TIMEOUT_S        45   // if a wake cycle hangs this long, reset & retry next wake
+#define WIFI_CONNECT_MS      20000
+#define HTTP_TIMEOUT_MS      12000
+
+// ---- BLE pairing passkey (authenticated pairing) ----
+// The phone must enter this 6-digit passkey to establish the encrypted link
+// before it can send Wi-Fi credentials. PRINT IT ON THE DEVICE LABEL (or derive
+// it per-unit at provisioning). Do NOT ship every unit with the same value in
+// production — make it per-device on the sticker.
+#define BLE_PASSKEY          473829
+
+// ---- Supabase TLS root CA (certificate validation; replaces setInsecure) ----
+// The ESP32 verifies the server against this root before sending anything.
+// *.supabase.co currently chains to Let's Encrypt "ISRG Root X1". Paste that
+// root's PEM below. To fetch the exact current root for YOUR project ref, run:
+//   openssl s_client -connect <ref>.supabase.co:443 -showcerts </dev/null \
+//     2>/dev/null | openssl x509 -in /dev/stdin  (take the LAST cert in the chain)
+// Certs rotate — if the handshake starts failing, refresh this value.
+const char* SUPABASE_ROOT_CA = R"CERT(
+-----BEGIN CERTIFICATE-----
+<<< PASTE ISRG ROOT X1 (or your project's TLS root) PEM HERE — see note above >>>
+-----END CERTIFICATE-----
+)CERT";
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
   // C3 build: AHT10 temp/humidity over I2C.
   // Library Manager → install "Adafruit AHTX0" (+ its "Adafruit BusIO" dep).
@@ -109,60 +141,138 @@ void readClimate(float* tempC, float* hum){
 
 RTC_DATA_ATTR float dliAccum = 0;
 RTC_DATA_ATTR int   dayOfYear = -1;
-RTC_DATA_ATTR int   wakeSeconds = 10800;  // 3 h between reports when idle (server can override)
+RTC_DATA_ATTR int   wakeSeconds = 10800;  // sample interval; server can override
+
+// ---------- HYBRID SYNC: home = BLE (phone gateway), away = Wi-Fi ----------
+// A Wi-Fi upload costs ~100-180 mA for several seconds. A BLE exchange costs a
+// fraction of that. So each cycle we read the sensor, buffer the reading, and
+// open a short BLE window; if a nearby phone (the Greenr app) collects the
+// buffer and acknowledges it, the sensor SKIPS Wi-Fi entirely — big battery
+// savings while someone is home. If no phone has been seen for WIFI_FALLBACK_S
+// (they're away/on vacation), the sensor falls back to Wi-Fi on its own so the
+// cloud stays current. Reverts to BLE automatically when a phone reappears.
+#define BUF_MAX            48       // ~6 days of buffer at 3 h
+#define BLE_WINDOW_MS      12000    // awake window each cycle for a phone to sync
+#define WIFI_FALLBACK_S    (6*3600) // no phone this long -> use Wi-Fi
+
+struct Reading { uint32_t atUptime; int16_t light; float dli; int16_t soil; float temp; float hum; int16_t batt; };
+RTC_DATA_ATTR Reading  buf[BUF_MAX];
+RTC_DATA_ATTR uint16_t bufCount = 0;
+RTC_DATA_ATTR uint32_t uptimeSec = 0;            // monotonic seconds across deep sleep
+RTC_DATA_ATTR uint32_t lastPhoneContactSec = 0;  // uptime at last phone ACK (0 = never)
+RTC_DATA_ATTR uint32_t lastUploadSec = 0;        // uptime at last successful upload (0 = never)
 
 int clampPct(long v){ return v<0?0:(v>100?100:(int)v); }
 
+// JSON formatters that emit `null` for failed sensors instead of fake values.
+String fNull(float v){ return isnan(v) ? String("null") : String(v,1); }
+String iNull(int v){ return v < 0 ? String("null") : String(v); }
+
 void goToSleep(int s){
   if (SENSOR_PWR >= 0) digitalWrite(SENSOR_PWR, LOW);
+  uptimeSec += (uint32_t)s;                       // account for the sleep we're about to take
   Serial.printf("Sleeping %d s\n", s); Serial.flush();
   esp_sleep_enable_timer_wakeup((uint64_t)s * 1000000ULL);
   esp_deep_sleep_start();
 }
 
-// Read all sensors once and upload. Updates wakeSeconds from the server reply
-// (the app sets it small for live mode, large for idle/deep-sleep).
-void readAndUpload(){
+// Read every sensor once and append the result to the buffer (does NOT upload).
+// Failed/implausible sensors are stored as sentinels (soil/light = -1, temp/hum
+// = NAN) and uploaded as NULL — never as fake zeros that would look like real
+// "0% / freezing" data. If EVERY sensor fails, we skip buffering entirely.
+void readSensorsIntoBuffer(){
   int rawLight = analogRead(LDR_PIN);
   int rawSoil  = analogRead(SOIL_PIN);
   float tempC, hum;
   readClimate(&tempC, &hum);
-  if (isnan(tempC)) tempC = 0;
-  if (isnan(hum))   hum   = 0;
-  Serial.printf("raw light=%d  raw soil=%d  temp=%.1f  hum=%.1f\n", rawLight, rawSoil, tempC, hum);
 
-  int soilPct = clampPct(map(rawSoil, SOIL_AIR, SOIL_WATER, 0, 100));
+  // Soil: a capacitive probe should sit mid-range; a rail-stuck reading (0 or
+  // near full-scale 4095) means it's disconnected/shorted → invalid.
+  int16_t soilPct = -1;
+  if (rawSoil > 5 && rawSoil < 4090)
+    soilPct = (int16_t)clampPct(map(rawSoil, SOIL_AIR, SOIL_WATER, 0, 100));
+
+  // Light: raw of exactly 0 or 4095 with no divider movement is suspect, but
+  // legitimate darkness/brightness lives near the rails too, so only reject a
+  // hard 0-and-open case. Otherwise accept.
+  int16_t lightIdx = -1;
   float lightFrac = (float)(rawLight - LIGHT_DARK) / (float)(LIGHT_BRIGHT - LIGHT_DARK);
   if (lightFrac < 0) lightFrac = 0; if (lightFrac > 1) lightFrac = 1;
-  int lightIdx = (int)(lightFrac * 100);
-  dliAccum += (lightFrac * 2000.0) * (float)wakeSeconds / 1000000.0;  // rough DLI
+  lightIdx = (int16_t)(lightFrac * 100);
+  if (soilPct >= 0)  // only integrate DLI when the board's ADC looks alive
+    dliAccum += (lightFrac * 2000.0) * (float)wakeSeconds / 1000000.0;
+
+  // Temp/humidity: keep NAN on failure (readClimate already returns NAN) —
+  // do NOT coerce to 0.
+  bool anyValid = (soilPct >= 0) || !isnan(tempC) || !isnan(hum);
 
   struct tm ti;
-  if (getLocalTime(&ti, 1500)){ if (ti.tm_yday != dayOfYear){ dayOfYear = ti.tm_yday; dliAccum = 0; } }
+  if (getLocalTime(&ti, 200)){ if (ti.tm_yday != dayOfYear){ dayOfYear = ti.tm_yday; dliAccum = 0; } }
 
+  Serial.printf("read: light=%d soil=%d temp=%.1f hum=%.1f valid=%d (buf %d)\n",
+                lightIdx, soilPct, tempC, hum, anyValid, bufCount+1);
+  if (!anyValid){ Serial.println("all sensors failed — skipping this reading"); return; }
+
+  Reading r = { uptimeSec, lightIdx, dliAccum, soilPct, tempC, hum, (int16_t)-1 };
+  if (bufCount >= BUF_MAX){                        // full: drop the oldest
+    memmove(&buf[0], &buf[1], sizeof(Reading)*(BUF_MAX-1));
+    bufCount = BUF_MAX-1;
+  }
+  buf[bufCount++] = r;
+}
+
+// Post ONE buffered reading over Wi-Fi. `secsAgo` preserves the real capture
+// time server-side (ingest_reading accepts p_secs_ago). Returns wake_seconds.
+bool postReadingWifi(const Reading& r, uint32_t secsAgo){
   String body = "{";
   body += "\"p_device\":\"" DEVICE_ID "\",";
   body += "\"p_secret\":\"" DEVICE_KEY "\",";
-  body += "\"p_light\":" + String(lightIdx) + ",";
-  body += "\"p_dli\":" + String(dliAccum,3) + ",";
-  body += "\"p_soil\":" + String(soilPct) + ",";
-  body += "\"p_temp\":" + String(tempC,1) + ",";
-  body += "\"p_humidity\":" + String(hum,1) + ",";
-  body += "\"p_battery\":-1}";
+  body += "\"p_light\":"    + iNull(r.light) + ",";
+  body += "\"p_dli\":"      + String(r.dli,3) + ",";
+  body += "\"p_soil\":"     + iNull(r.soil) + ",";
+  body += "\"p_temp\":"     + fNull(r.temp) + ",";
+  body += "\"p_humidity\":" + fNull(r.hum) + ",";
+  body += "\"p_battery\":"  + iNull(r.batt) + ",";
+  body += "\"p_secs_ago\":" + String(secsAgo) + "}";
 
-  WiFiClientSecure client; client.setInsecure();
+  // TLS: validate the server against the pinned Supabase root CA. NEVER
+  // setInsecure() — that would let an on-path attacker MITM the device.
+  WiFiClientSecure client;
+  client.setCACert(SUPABASE_ROOT_CA);
+  client.setTimeout(HTTP_TIMEOUT_MS / 1000);       // socket timeout (seconds)
   HTTPClient https;
-  if (https.begin(client, SUPABASE_URL)){
-    https.addHeader("Content-Type","application/json");
-    https.addHeader("apikey", SUPABASE_ANON);
-    https.addHeader("Authorization", String("Bearer ")+SUPABASE_ANON);
-    int code = https.POST(body);
+  https.setConnectTimeout(HTTP_TIMEOUT_MS);
+  https.setTimeout(HTTP_TIMEOUT_MS);
+  if (!https.begin(client, SUPABASE_URL)) return false;
+  https.addHeader("Content-Type","application/json");
+  https.addHeader("apikey", SUPABASE_ANON);
+  https.addHeader("Authorization", String("Bearer ")+SUPABASE_ANON);
+  int code = https.POST(body);                     // returns <0 on TLS/timeout failure
+  if (code > 0){
     String resp = https.getString();
-    Serial.printf("POST %d: %s\n", code, resp.c_str());
     int wi = resp.indexOf("wake_seconds");
-    if (wi >= 0){ int c = resp.indexOf(':', wi); wakeSeconds = resp.substring(c + 1).toInt(); }
-    if (wakeSeconds < 5 || wakeSeconds > 86400) wakeSeconds = 10800;  // sane bounds
-    https.end();
+    if (wi >= 0){ int c = resp.indexOf(':', wi); wakeSeconds = resp.substring(c+1).toInt(); }
+    if (wakeSeconds < 5 || wakeSeconds > 86400) wakeSeconds = 10800;
+  } else {
+    Serial.printf("HTTPS failed (%d) — will retry next wake\n", code);
+  }
+  https.end();
+  return code >= 200 && code < 300;
+}
+
+// Flush the whole buffer over Wi-Fi (oldest first), clearing what uploads OK.
+void uploadBufferWifi(){
+  uint16_t sent = 0;
+  for (uint16_t i = 0; i < bufCount; i++){
+    uint32_t secsAgo = uptimeSec - buf[i].atUptime;
+    if (!postReadingWifi(buf[i], secsAgo)) break;   // stop on first failure; retry next cycle
+    sent++;
+  }
+  if (sent){
+    memmove(&buf[0], &buf[sent], sizeof(Reading)*(bufCount-sent));
+    bufCount -= sent;
+    lastUploadSec = uptimeSec;
+    Serial.printf("Wi-Fi uploaded %d readings\n", sent);
   }
 }
 
@@ -220,6 +330,32 @@ String scanNetworksJson(){
   return out;
 }
 
+// BLE pairing security: the link must be encrypted + authenticated (passkey)
+// before the phone can access the credential characteristics. The GATT layer
+// enforces this via the ENC_MITM permissions below; these callbacks supply the
+// static device passkey the user enters during pairing.
+class SecCallbacks : public BLESecurityCallbacks {
+  uint32_t onPassKeyRequest() override { return BLE_PASSKEY; }
+  void onPassKeyNotify(uint32_t pk) override { Serial.printf("BLE passkey: %06u\n", pk); }
+  bool onConfirmPIN(uint32_t pk) override { return pk == BLE_PASSKEY; }
+  bool onSecurityRequest() override { return true; }
+  void onAuthenticationComplete(esp_ble_auth_cmpl_t c) override {
+    Serial.printf("BLE pairing %s\n", c.success ? "OK (encrypted+authenticated)" : "FAILED");
+  }
+};
+
+// Turn on encrypted + authenticated (MITM) pairing with a static passkey.
+void enableBleSecurity(){
+  BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
+  BLEDevice::setSecurityCallbacks(new SecCallbacks());
+  BLESecurity* sec = new BLESecurity();
+  sec->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);   // Secure Connections + MITM + bond
+  sec->setCapability(ESP_IO_CAP_OUT);                          // device "shows" a (static) passkey
+  sec->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  uint32_t pk = BLE_PASSKEY;
+  esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &pk, sizeof(uint32_t));
+}
+
 // Advertise over BLE until the app sends working credentials. Blocks until
 // WiFi is joined and saved (or naps after a 5-minute setup window).
 void runProvisioning(){
@@ -231,15 +367,21 @@ void runProvisioning(){
   char name[16]; snprintf(name, sizeof(name), "greenr-%02X%02X", mac[4], mac[5]);
 
   BLEDevice::init(name);
+  enableBleSecurity();                              // encrypted + authenticated pairing
   BLEServer* server = BLEDevice::createServer();
   BLEService* svc = server->createService(PROV_SERVICE);
 
   BLECharacteristic* netChar =
     svc->createCharacteristic(CHAR_NETWORKS, BLECharacteristic::PROPERTY_READ);
+  // Reading the network list requires an encrypted+authenticated link.
+  netChar->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM);
   netChar->setValue(netsJson.c_str());
 
   BLECharacteristic* credsChar =
     svc->createCharacteristic(CHAR_CREDS, BLECharacteristic::PROPERTY_WRITE);
+  // The stack REJECTS credential writes unless the link is encrypted +
+  // authenticated — this is the enforcement the security review required.
+  credsChar->setAccessPermissions(ESP_GATT_PERM_WRITE_ENC_MITM);
   credsChar->setCallbacks(new CredsCallback());
 
   statusChar = svc->createCharacteristic(CHAR_STATUS, BLECharacteristic::PROPERTY_NOTIFY);
@@ -275,30 +417,87 @@ void runProvisioning(){
       }
     }
     if (millis() - start > 300000UL){ Serial.println("prov window closed"); goToSleep(300); }
+    esp_task_wdt_reset();                          // stay alive during the long wait
     delay(100);
   }
   BLEDevice::deinit(true);                       // release BLE; WiFi is up + saved
 }
 // =====================================================================
 
-void setup(){
-  Serial.begin(115200); delay(50);
+// ================= HYBRID SYNC: BLE data window (phone gateway) =================
+// UUIDs MUST match the app (lib/bleGatewayTypes.ts).
+#define DATA_SERVICE  "c0de0010-feed-4b1e-9d0b-c0ffee000001"
+#define CHAR_DATA     "c0de0011-feed-4b1e-9d0b-c0ffee000001"  // read: buffered readings (JSON)
+#define CHAR_ACK      "c0de0012-feed-4b1e-9d0b-c0ffee000001"  // write: count the phone uploaded
 
-  // Power the sensors FIRST — their power LEDs double as a "wiring is good"
-  // indicator even before Wi-Fi is configured.
-  if (SENSOR_PWR >= 0){ pinMode(SENSOR_PWR, OUTPUT); digitalWrite(SENSOR_PWR, HIGH); }
+#define MAX_ROWS_PER_READ 8        // keep one CHAR_DATA read under the ~512 B limit
 
-  // WiFi: use saved credentials if we have them; otherwise run BLE provisioning
-  // so the user sets it up right inside the app (Ring-style). Saved creds
-  // survive deep sleep, so this only happens on first setup or a router change.
-  prefs.begin("greenr", true);
-  String savedSsid = prefs.getString("ssid", "");
-  String savedPass = prefs.getString("pass", "");
-  prefs.end();
+BLECharacteristic* dataChar = nullptr;
+volatile bool phoneSynced = false;
 
-  bool connected = savedSsid.length() ? tryConnect(savedSsid, savedPass, 20000) : false;
-  if (!connected) runProvisioning();   // blocks until WiFi is joined + saved
+// Build the JSON of the oldest readings that fit one BLE read (BleBatch shape).
+String buildDataJson(){
+  String s = "{\"dev\":\"" DEVICE_ID "\",\"fw\":\"3.1\",\"rows\":[";
+  int n = bufCount < MAX_ROWS_PER_READ ? bufCount : MAX_ROWS_PER_READ;
+  for (int i = 0; i < n; i++){
+    if (i) s += ",";
+    uint32_t ago = uptimeSec - buf[i].atUptime;
+    s += "{\"ago\":" + String(ago) +
+         ",\"l\":" + iNull(buf[i].light) +
+         ",\"d\":" + String(buf[i].dli,2) +
+         ",\"s\":" + iNull(buf[i].soil) +
+         ",\"t\":" + fNull(buf[i].temp) +
+         ",\"h\":" + fNull(buf[i].hum) +
+         ",\"b\":" + iNull(buf[i].batt) + "}";
+  }
+  s += "]}";
+  return s;
+}
 
+// The phone writes how many readings it successfully uploaded → drop them and
+// record that a phone was here (so we can skip the Wi-Fi fallback this cycle).
+class AckCallback : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    int n = String(c->getValue().c_str()).toInt();
+    if (n <= 0) return;
+    if (n > bufCount) n = bufCount;
+    memmove(&buf[0], &buf[n], sizeof(Reading)*(bufCount-n));
+    bufCount -= n;
+    lastPhoneContactSec = uptimeSec;
+    phoneSynced = true;
+    if (dataChar) dataChar->setValue(buildDataJson().c_str());   // serve the next batch
+    Serial.printf("phone took %d readings (buf %d)\n", n, bufCount);
+  }
+};
+
+// Advertise the data service for a short window so a nearby phone can collect
+// the buffer. Cheap compared to Wi-Fi; runs every cycle.
+void runBleWindow(){
+  uint8_t mac[6]; WiFi.macAddress(mac);
+  char name[16]; snprintf(name, sizeof(name), "greenr-%02X%02X", mac[4], mac[5]);
+  BLEDevice::init(name);
+  BLEServer* server = BLEDevice::createServer();
+  BLEService* svc = server->createService(DATA_SERVICE);
+  dataChar = svc->createCharacteristic(CHAR_DATA, BLECharacteristic::PROPERTY_READ);
+  dataChar->setValue(buildDataJson().c_str());
+  BLECharacteristic* ackChar = svc->createCharacteristic(CHAR_ACK, BLECharacteristic::PROPERTY_WRITE);
+  ackChar->setCallbacks(new AckCallback());
+  svc->start();
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(DATA_SERVICE);
+  adv->setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.printf("BLE data window %d ms (buf %d)\n", BLE_WINDOW_MS, bufCount);
+
+  uint32_t start = millis();
+  while (millis() - start < BLE_WINDOW_MS){ esp_task_wdt_reset(); delay(50); }
+
+  BLEDevice::deinit(true);
+  uptimeSec += BLE_WINDOW_MS / 1000;             // account for the awake window
+}
+// ================================================================================
+
+void initSensors(){
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
   delay(50);                        // AHT10 wants ~40 ms after power-up
   Wire.begin(AHT_SDA, AHT_SCL);
@@ -307,21 +506,78 @@ void setup(){
 #else
   dht.begin();
 #endif
-  configTime(0, 0, "pool.ntp.org");
-  delay(1200);
+}
 
-  // Live mode: while the app wants fast reads (small wake_seconds), stay awake
-  // with WiFi up and read on that cadence. When the app leaves (wake_seconds
-  // goes large) or a 10-minute safety cap hits, fall through to deep sleep.
-  unsigned long liveStart = millis();
-  while (true) {
-    readAndUpload();
-    if (wakeSeconds > 30) break;                    // app idle → deep sleep
-    if (millis() - liveStart > 600000UL) break;     // 10-min live safety cap
-    delay((unsigned long)wakeSeconds * 1000UL);     // wait between fast reads
+void setup(){
+  Serial.begin(115200); delay(50);
+
+  // Watchdog: if any part of this wake cycle hangs (Wi-Fi stack lockup, I2C bus
+  // stall, TLS stall), the WDT resets the chip — which simply re-enters this
+  // cycle or, worst case, deep-sleeps and retries next wake. Never bricks.
+  // (Arduino-ESP32 2.x signature; on core 3.x use the esp_task_wdt_config_t form.)
+  esp_task_wdt_init(WDT_TIMEOUT_S, true);
+  esp_task_wdt_add(NULL);
+
+  // Power the sensors FIRST — their power LEDs double as a "wiring is good"
+  // indicator even before Wi-Fi is configured.
+  if (SENSOR_PWR >= 0){ pinMode(SENSOR_PWR, OUTPUT); digitalWrite(SENSOR_PWR, HIGH); }
+
+  // Provisioning check: saved Wi-Fi creds survive deep sleep, so this only runs
+  // on first setup or a router change.
+  prefs.begin("greenr", true);
+  String savedSsid = prefs.getString("ssid", "");
+  String savedPass = prefs.getString("pass", "");
+  prefs.end();
+
+  bool justProvisioned = false;
+  if (!savedSsid.length()){
+    runProvisioning();               // blocks until Wi-Fi is joined + saved (Wi-Fi now up)
+    justProvisioned = true;
   }
 
-  goToSleep(wakeSeconds > 30 ? wakeSeconds : 300);  // deep sleep (resync if capped)
+  initSensors();
+  readSensorsIntoBuffer();           // always read; upload path decided below
+
+  if (justProvisioned){
+    // Fresh setup: Wi-Fi is already connected — upload immediately so the user
+    // sees a reading right away, and sync the clock for DLI day tracking.
+    configTime(0, 0, "pool.ntp.org"); delay(800);
+    uploadBufferWifi();
+  } else {
+    // Normal cycle: offer the buffer over BLE first (cheap). A phone that's home
+    // collects it and we skip Wi-Fi entirely.
+    runBleWindow();
+
+    bool neverSynced = (lastPhoneContactSec == 0 && lastUploadSec == 0);
+    uint32_t sinceContact = uptimeSec - lastPhoneContactSec;
+    bool phoneCovering = (lastPhoneContactSec != 0) && (sinceContact < (uint32_t)WIFI_FALLBACK_S);
+    bool bufferPressure = bufCount >= BUF_MAX - 2;
+    // Use Wi-Fi only when BLE isn't covering us: never synced, buffer filling,
+    // or no phone seen for WIFI_FALLBACK_S (they're away).
+    bool useWifi = neverSynced || bufferPressure || (!phoneSynced && !phoneCovering);
+
+    if (useWifi && tryConnect(savedSsid, savedPass, 20000)){
+      configTime(0, 0, "pool.ntp.org"); delay(600);
+      uploadBufferWifi();
+    } else if (!useWifi){
+      Serial.println("Covered by a nearby phone — skipping Wi-Fi (battery saved).");
+    }
+  }
+
+  // Live mode: only meaningful while Wi-Fi is up (app watching). Fast-read loop
+  // until the app releases it (wake_seconds grows) or the 10-min cap hits.
+  if (WiFi.status() == WL_CONNECTED && wakeSeconds <= 30){
+    unsigned long liveStart = millis();
+    while (wakeSeconds <= 30 && millis() - liveStart < 600000UL){
+      esp_task_wdt_reset();
+      delay((unsigned long)wakeSeconds * 1000UL);
+      readSensorsIntoBuffer();
+      uploadBufferWifi();
+    }
+  }
+
+  esp_task_wdt_delete(NULL);                        // stop watching before we sleep
+  goToSleep(wakeSeconds > 30 ? wakeSeconds : 300);
 }
 
 void loop(){}

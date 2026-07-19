@@ -19,6 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { dark } from '@/constants/theme';
 import { AuthProvider } from '@/lib/auth';
 import { GreenrProvider } from '@/lib/store';
+import { BleGatewaySync } from '@/lib/useBleGateway';
 import { ReminderSync } from '@/lib/useReminders';
 
 export default function RootLayout() {
@@ -42,6 +43,7 @@ export default function RootLayout() {
       <AuthProvider>
         <GreenrProvider>
         <ReminderSync />
+        <BleGatewaySync />
         <StatusBar style="light" />
         <Stack
           screenOptions={{

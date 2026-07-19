@@ -7,6 +7,7 @@ import { Card, Row, Screen, SectionHeader } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
 import { BUILD_STAMP } from '@/lib/build';
+import * as bleGateway from '@/lib/bleGateway';
 import * as notifications from '@/lib/notifications';
 import { confirmAction, notify, shareContent } from '@/lib/platform';
 import { useGreenr } from '@/lib/store';
@@ -31,6 +32,30 @@ export default function SettingsScreen() {
 
   const [reminderNote, setReminderNote] = useState<string | null>(null);
   const supported = notifications.isSupported();
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  const syncNearby = async () => {
+    if (!bleGateway.isSupported) {
+      setSyncNote('This browser can’t use Bluetooth. Use the phone app for sensor sync.');
+      return;
+    }
+    setSyncing(true);
+    setSyncNote(null);
+    try {
+      const results = await bleGateway.syncNow();
+      const total = results.reduce((a, r) => a + r.uploaded, 0);
+      setSyncNote(
+        results.length === 0
+          ? 'No Greenr sensor found nearby in setup range.'
+          : `Synced ${results.length} sensor${results.length === 1 ? '' : 's'} · ${total} reading${total === 1 ? '' : 's'} uploaded.`,
+      );
+    } catch (e) {
+      setSyncNote(e instanceof Error && /cancel|NotFound/i.test(e.message) ? null : 'Couldn’t reach the sensor. Move closer and try again.');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const toggleReminders = async () => {
     if (settings.remindersEnabled) {
@@ -110,6 +135,29 @@ export default function SettingsScreen() {
           <Text style={[type.caption, { color: accent.clay, lineHeight: 18, marginTop: 6 }]}>
             {reminderNote}
           </Text>
+        )}
+      </Card>
+
+      <SectionHeader>Battery &amp; sync</SectionHeader>
+      <Card>
+        <Text style={[type.caption, { color: dark.inkMuted, lineHeight: 18 }]}>
+          Home Bluetooth sync saves your sensors&apos; battery: when you&apos;re home, your phone
+          collects readings over Bluetooth so the sensor&apos;s power-hungry Wi-Fi stays off. When
+          you&apos;re away, each sensor falls back to Wi-Fi on its own so your data stays current.
+          {bleGateway.supportsBackground
+            ? ' Runs automatically in the background.'
+            : ' On the web this is manual — the phone app does it automatically.'}
+        </Text>
+        {bleGateway.supportsBackground && (
+          <Row
+            title="Home Bluetooth sync"
+            value={settings.bleGatewayEnabled ? 'On' : 'Off'}
+            onPress={() => setSettings({ bleGatewayEnabled: !settings.bleGatewayEnabled })}
+          />
+        )}
+        <Row title={syncing ? 'Searching…' : 'Sync a nearby sensor now'} value="→" onPress={syncing ? undefined : syncNearby} />
+        {syncNote && (
+          <Text style={[type.caption, { color: accent.sage, lineHeight: 18, marginTop: 6 }]}>{syncNote}</Text>
         )}
       </Card>
 
