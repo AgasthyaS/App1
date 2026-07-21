@@ -65,11 +65,51 @@
 // Certs rotate — if the handshake starts failing, refresh this value.
 const char* SUPABASE_ROOT_CA = R"CERT(
 -----BEGIN CERTIFICATE-----
-<<< PASTE ISRG ROOT X1 (or your project's TLS root) PEM HERE — see note above >>>
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 -----END CERTIFICATE-----
+
 )CERT";
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
-  // C3 build: AHT10 temp/humidity over I2C.
+// ---- Climate sensor selection ----
+// The ESP32-C3 build always uses an AHT10. If you fitted an AHT10 to the
+// ORIGINAL ESP32 dev kit (instead of the DHT22), keep USE_AHT10 = 1.
+// Set it back to 0 only if that board still has a DHT22.
+#define USE_AHT10   1
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || USE_AHT10
+  #define CLIMATE_AHT10 1
+#else
+  #define CLIMATE_AHT10 0
+#endif
+
+#if CLIMATE_AHT10
+  // AHT10 temp/humidity over I2C.
   // Library Manager → install "Adafruit AHTX0" (+ its "Adafruit BusIO" dep).
   #include <Wire.h>
   #include <Adafruit_AHTX0.h>
@@ -105,29 +145,40 @@ const char* SUPABASE_ANON =
 
 // Pins differ by board. The right set is picked automatically from the board
 // you select in Arduino IDE (Tools → Board).
+// Pins differ by board. LDR + soil are analog; the climate sensor is either an
+// AHT10 (I2C, two pins) or a DHT22 (one digital pin).
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
-  // ESP32-C3 Super Mini: LDR + soil are analog; AHT10 rides the I2C bus.
+  // ESP32-C3 Super Mini
   #define LDR_PIN    0
   #define SOIL_PIN   1
   #define AHT_SDA    4    // AHT10 SDA
   #define AHT_SCL    5    // AHT10 SCL
   #define SENSOR_PWR 10
-  Adafruit_AHTX0 aht;
-  bool ahtOk = false;
 #else
   // Original ESP32 dev kit — matches the soldered wiring:
   #define LDR_PIN    34   // light sensor AO   (light VCC on 3V3)
   #define SOIL_PIN   39   // soil AOUT (the "VN" pin = GPIO39)
-  #define DHT_PIN    18   // DHT22 Out         (DHT VCC on 3V3)
   #define SENSOR_PWR 19   // soil VCC -> GPIO19: code powers the soil sensor here
-  #define DHTTYPE    DHT22
+  #if CLIMATE_AHT10
+    #define AHT_SDA  21   // AHT10 SDA — default ESP32 I2C pin
+    #define AHT_SCL  22   // AHT10 SCL — default ESP32 I2C pin
+  #else
+    #define DHT_PIN  18   // DHT22 Out (DHT VCC on 3V3)
+    #define DHTTYPE  DHT22
+  #endif
+#endif
+
+#if CLIMATE_AHT10
+  Adafruit_AHTX0 aht;
+  bool ahtOk = false;
+#else
   DHT dht(DHT_PIN, DHTTYPE);
 #endif
 
 // Temp (°C) + relative humidity (%), from whichever climate sensor this build
 // carries. Returns NAN on failure; caller decides what to send.
 void readClimate(float* tempC, float* hum){
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
+#if CLIMATE_AHT10
   *tempC = NAN; *hum = NAN;
   if (ahtOk){
     sensors_event_t h, t;
@@ -498,11 +549,11 @@ void runBleWindow(){
 // ================================================================================
 
 void initSensors(){
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
+#if CLIMATE_AHT10
   delay(50);                        // AHT10 wants ~40 ms after power-up
   Wire.begin(AHT_SDA, AHT_SCL);
   ahtOk = aht.begin();
-  if (!ahtOk) Serial.println("AHT10 not found — check SDA=4 / SCL=5 wiring");
+  if (!ahtOk) Serial.printf("AHT10 not found — check SDA=%d / SCL=%d wiring\n", AHT_SDA, AHT_SCL);
 #else
   dht.begin();
 #endif
