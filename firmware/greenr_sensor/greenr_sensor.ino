@@ -56,11 +56,15 @@
 #define FW_VERSION           31
 #define OTA_CHECK_EVERY_S    (24*3600)  // check for a new build about once a day
 
-// ---- BLE pairing passkey (authenticated pairing) ----
-// The phone must enter this 6-digit passkey to establish the encrypted link
-// before it can send Wi-Fi credentials. PRINT IT ON THE DEVICE LABEL (or derive
-// it per-unit at provisioning). Do NOT ship every unit with the same value in
-// production — make it per-device on the sticker.
+// ---- BLE pairing security ----
+// Encrypted + authenticated BLE pairing protects the Wi-Fi password during
+// setup. The API for it differs across ESP32 core versions and doesn't compile
+// as-is on core 3.x, so it's OFF by default (provisioning works plaintext, like
+// the original firmware). TLS/HTTPS security is unaffected and stays on.
+// Set to 1 once the security calls are matched to your exact core version.
+#define BLE_SECURE           0
+// If BLE_SECURE is on, the phone enters this 6-digit passkey to pair. Print it
+// on the device label; make it per-device in production.
 #define BLE_PASSKEY          473829
 
 // ---- Supabase TLS root CA (certificate validation; replaces setInsecure) ----
@@ -182,6 +186,10 @@ const char* SUPABASE_ANON =
   DHT dht(DHT_PIN, DHTTYPE);
 #endif
 
+// One buffered reading. Defined up here (before any function) so the Arduino
+// IDE's auto-generated prototypes, which it hoists to the top, can see the type.
+struct Reading { uint32_t atUptime; int16_t light; float dli; int16_t soil; float temp; float hum; int16_t batt; };
+
 // Temp (°C) + relative humidity (%), from whichever climate sensor this build
 // carries. Returns NAN on failure; caller decides what to send.
 void readClimate(float* tempC, float* hum){
@@ -213,7 +221,6 @@ RTC_DATA_ATTR int   wakeSeconds = 10800;  // sample interval; server can overrid
 #define BLE_WINDOW_MS      12000    // awake window each cycle for a phone to sync
 #define WIFI_FALLBACK_S    (6*3600) // no phone this long -> use Wi-Fi
 
-struct Reading { uint32_t atUptime; int16_t light; float dli; int16_t soil; float temp; float hum; int16_t batt; };
 RTC_DATA_ATTR Reading  buf[BUF_MAX];
 RTC_DATA_ATTR uint16_t bufCount = 0;
 RTC_DATA_ATTR uint32_t uptimeSec = 0;            // monotonic seconds across deep sleep
@@ -430,10 +437,11 @@ String scanNetworksJson(){
   return out;
 }
 
-// BLE pairing security: the link must be encrypted + authenticated (passkey)
-// before the phone can access the credential characteristics. The GATT layer
-// enforces this via the ENC_MITM permissions below; these callbacks supply the
-// static device passkey the user enters during pairing.
+#if BLE_SECURE
+// BLE pairing security (core-version-specific — enabled only when BLE_SECURE=1).
+// The link must be encrypted + authenticated (passkey) before the phone can
+// access the credential characteristics; the GATT ENC_MITM permissions enforce
+// it, and these callbacks supply the static passkey.
 class SecCallbacks : public BLESecurityCallbacks {
   uint32_t onPassKeyRequest() override { return BLE_PASSKEY; }
   void onPassKeyNotify(uint32_t pk) override { Serial.printf("BLE passkey: %06u\n", pk); }
@@ -444,17 +452,19 @@ class SecCallbacks : public BLESecurityCallbacks {
   }
 };
 
-// Turn on encrypted + authenticated (MITM) pairing with a static passkey.
 void enableBleSecurity(){
   BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
   BLEDevice::setSecurityCallbacks(new SecCallbacks());
   BLESecurity* sec = new BLESecurity();
-  sec->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);   // Secure Connections + MITM + bond
-  sec->setCapability(ESP_IO_CAP_OUT);                          // device "shows" a (static) passkey
+  sec->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
+  sec->setCapability(ESP_IO_CAP_OUT);
   sec->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
   uint32_t pk = BLE_PASSKEY;
   esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &pk, sizeof(uint32_t));
 }
+#else
+void enableBleSecurity(){ /* BLE encryption off — provisioning is plaintext */ }
+#endif
 
 // Advertise over BLE until the app sends working credentials. Blocks until
 // WiFi is joined and saved (or naps after a 5-minute setup window).
@@ -473,15 +483,19 @@ void runProvisioning(){
 
   BLECharacteristic* netChar =
     svc->createCharacteristic(CHAR_NETWORKS, BLECharacteristic::PROPERTY_READ);
+#if BLE_SECURE
   // Reading the network list requires an encrypted+authenticated link.
   netChar->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM);
+#endif
   netChar->setValue(netsJson.c_str());
 
   BLECharacteristic* credsChar =
     svc->createCharacteristic(CHAR_CREDS, BLECharacteristic::PROPERTY_WRITE);
+#if BLE_SECURE
   // The stack REJECTS credential writes unless the link is encrypted +
   // authenticated — this is the enforcement the security review required.
   credsChar->setAccessPermissions(ESP_GATT_PERM_WRITE_ENC_MITM);
+#endif
   credsChar->setCallbacks(new CredsCallback());
 
   statusChar = svc->createCharacteristic(CHAR_STATUS, BLECharacteristic::PROPERTY_NOTIFY);
@@ -614,8 +628,13 @@ void setup(){
   // Watchdog: if any part of this wake cycle hangs (Wi-Fi stack lockup, I2C bus
   // stall, TLS stall), the WDT resets the chip — which simply re-enters this
   // cycle or, worst case, deep-sleeps and retries next wake. Never bricks.
-  // (Arduino-ESP32 2.x signature; on core 3.x use the esp_task_wdt_config_t form.)
-  esp_task_wdt_init(WDT_TIMEOUT_S, true);
+  // The init API differs between ESP32 core 2.x and 3.x, so guard by version.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  esp_task_wdt_config_t wdtCfg = { .timeout_ms = (uint32_t)WDT_TIMEOUT_S * 1000, .idle_core_mask = 0, .trigger_panic = true };
+  esp_task_wdt_reconfigure(&wdtCfg);            // core 3.x already inits the TWDT
+#else
+  esp_task_wdt_init(WDT_TIMEOUT_S, true);       // core 2.x
+#endif
   esp_task_wdt_add(NULL);
 
   // Power the sensors FIRST — their power LEDs double as a "wiring is good"
