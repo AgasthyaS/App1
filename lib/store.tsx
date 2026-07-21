@@ -57,6 +57,7 @@ const DEFAULT_SETTINGS: Settings = {
   plus: false,
   remindersEnabled: false,
   bleGatewayEnabled: false,
+  mutedPlantIds: [],
 };
 
 /** Real users start with nothing — the garden is theirs to build. */

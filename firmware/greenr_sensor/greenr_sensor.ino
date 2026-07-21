@@ -35,6 +35,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <HTTPUpdate.h>           // over-the-air firmware updates
 #include <Preferences.h>          // save WiFi creds to flash (NVS)
 #include <BLEDevice.h>            // Ring-style BLE provisioning (built into ESP32 core)
 #include <BLEServer.h>
@@ -48,6 +49,12 @@
 #define WDT_TIMEOUT_S        45   // if a wake cycle hangs this long, reset & retry next wake
 #define WIFI_CONNECT_MS      20000
 #define HTTP_TIMEOUT_MS      12000
+
+// ---- Over-the-air updates ----
+// Bump this integer every time you publish a new build, and insert a matching
+// row in the `firmware` table (see supabase-firmware.sql). v3.1 = 31.
+#define FW_VERSION           31
+#define OTA_CHECK_EVERY_S    (24*3600)  // check for a new build about once a day
 
 // ---- BLE pairing passkey (authenticated pairing) ----
 // The phone must enter this 6-digit passkey to establish the encrypted link
@@ -212,6 +219,7 @@ RTC_DATA_ATTR uint16_t bufCount = 0;
 RTC_DATA_ATTR uint32_t uptimeSec = 0;            // monotonic seconds across deep sleep
 RTC_DATA_ATTR uint32_t lastPhoneContactSec = 0;  // uptime at last phone ACK (0 = never)
 RTC_DATA_ATTR uint32_t lastUploadSec = 0;        // uptime at last successful upload (0 = never)
+RTC_DATA_ATTR uint32_t lastOtaCheckSec = 0;      // uptime at last OTA check (0 = never)
 
 int clampPct(long v){ return v<0?0:(v>100?100:(int)v); }
 
@@ -309,6 +317,47 @@ bool postReadingWifi(const Reading& r, uint32_t secsAgo){
   }
   https.end();
   return code >= 200 && code < 300;
+}
+
+// Once a day, ask the server whether a newer build exists; if so, download and
+// flash it, then reboot into it. Runs only when Wi-Fi is already up.
+void maybeCheckOta(){
+  if (uptimeSec - lastOtaCheckSec < (uint32_t)OTA_CHECK_EVERY_S && lastOtaCheckSec != 0) return;
+  lastOtaCheckSec = uptimeSec;
+
+  const char* base = "https://knyymwvrqitptfzckyvf.supabase.co";
+  String manifest = String(base) +
+    "/rest/v1/firmware?select=version,url&channel=eq.stable&order=version.desc&limit=1";
+
+  WiFiClientSecure client; client.setCACert(SUPABASE_ROOT_CA);
+  HTTPClient https; https.setConnectTimeout(HTTP_TIMEOUT_MS); https.setTimeout(HTTP_TIMEOUT_MS);
+  if (!https.begin(client, manifest)) return;
+  https.addHeader("apikey", SUPABASE_ANON);
+  https.addHeader("Authorization", String("Bearer ")+SUPABASE_ANON);
+  int code = https.GET();
+  if (code != 200){ https.end(); return; }
+  String body = https.getString();
+  https.end();
+
+  // Cheap parse: [{"version":32,"url":"https://..."}]
+  int vi = body.indexOf("\"version\":");
+  int ui = body.indexOf("\"url\":\"");
+  if (vi < 0 || ui < 0) return;
+  int newVer = body.substring(vi + 10).toInt();
+  int us = ui + 7; int ue = body.indexOf('"', us);
+  String url = body.substring(us, ue);
+  if (newVer <= FW_VERSION || url.length() < 8) return;
+
+  Serial.printf("OTA: v%d available (have v%d) — updating from %s\n", newVer, FW_VERSION, url.c_str());
+  esp_task_wdt_delete(NULL);                         // the flash can take a while
+  WiFiClientSecure otaClient; otaClient.setCACert(SUPABASE_ROOT_CA);
+  httpUpdate.setLedPin(-1);
+  t_httpUpdate_return r = httpUpdate.update(otaClient, url);
+  if (r == HTTP_UPDATE_FAILED)
+    Serial.printf("OTA failed (%d): %s — will retry tomorrow\n",
+                  httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+  // On success the chip reboots into the new firmware automatically.
+  esp_task_wdt_add(NULL);
 }
 
 // Flush the whole buffer over Wi-Fi (oldest first), clearing what uploads OK.
@@ -594,6 +643,7 @@ void setup(){
     // sees a reading right away, and sync the clock for DLI day tracking.
     configTime(0, 0, "pool.ntp.org"); delay(800);
     uploadBufferWifi();
+    maybeCheckOta();
   } else {
     // Normal cycle: offer the buffer over BLE first (cheap). A phone that's home
     // collects it and we skip Wi-Fi entirely.
@@ -610,6 +660,7 @@ void setup(){
     if (useWifi && tryConnect(savedSsid, savedPass, 20000)){
       configTime(0, 0, "pool.ntp.org"); delay(600);
       uploadBufferWifi();
+      maybeCheckOta();
     } else if (!useWifi){
       Serial.println("Covered by a nearby phone — skipping Wi-Fi (battery saved).");
     }

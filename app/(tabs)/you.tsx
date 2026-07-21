@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
@@ -9,6 +10,7 @@ import { calibrationFor } from '@/lib/calibration';
 import { eventDaysAgo } from '@/lib/format';
 import { careScoreValue } from '@/lib/careScore';
 import { connectionFrom } from '@/lib/devices';
+import { shareContent } from '@/lib/platform';
 import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
 import { activePlants, useGreenr } from '@/lib/store';
@@ -264,10 +266,41 @@ export default function YouTab() {
         )}
       </Card>
 
+      {/* activity & devices */}
+      <SectionHeader>Activity &amp; care</SectionHeader>
+      <Card>
+        <Row title="Notifications" value="→" onPress={() => router.push('/notifications' as any)} />
+        <Row title="Garden report" value="→" onPress={() => router.push('/report' as any)} />
+        <Row title="Device health" value="→" onPress={() => router.push('/device-health' as any)} />
+      </Card>
+
+      {/* refer */}
+      <SectionHeader>Spread the word</SectionHeader>
+      <Card
+        onPress={() =>
+          shareContent({
+            message: `I'm growing healthier plants with Greenr 🌿 — it reads your soil, light, temperature and humidity and tells you exactly what each plant needs. Check it out: https://greenr-app.vercel.app`,
+            title: 'Greenr',
+          })
+        }
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <Text style={{ fontSize: 22 }}>🎁</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Refer a friend</Text>
+            <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>Share Greenr with a fellow plant parent</Text>
+          </View>
+          <Ionicons name="share-outline" size={18} color={accent.verdant} />
+        </View>
+      </Card>
+
       {/* settings */}
       <SectionHeader>Settings</SectionHeader>
       <Card>
         <Row title="Settings" value="→" onPress={() => router.push('/settings')} />
+        <Row title="Household & sharing" value="→" onPress={() => router.push('/household' as any)} />
+        <Row title="Security & privacy" value="→" onPress={() => router.push('/security' as any)} />
+        <Row title="Help & support" value="→" onPress={() => router.push('/help' as any)} />
         <Row title="How Greenr calculates" value="→" onPress={() => router.push('/methodology')} />
       </Card>
     </Screen>

@@ -71,6 +71,12 @@ export default function RootLayout() {
           <Stack.Screen name="suggest" options={{ presentation: 'modal' }} />
           <Stack.Screen name="privacy" options={{ presentation: 'modal' }} />
           <Stack.Screen name="terms" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="notifications" />
+          <Stack.Screen name="device-health" />
+          <Stack.Screen name="report" />
+          <Stack.Screen name="help" />
+          <Stack.Screen name="security" />
+          <Stack.Screen name="household" />
         </Stack>
         </GreenrProvider>
       </AuthProvider>

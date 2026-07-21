@@ -92,9 +92,10 @@ export function computeReminders(opts: {
   const nowDate = new Date(now);
   const out: Reminder[] = [];
   const seen = new Set<string>();
+  const muted = new Set(settings.mutedPlantIds ?? []);
 
   const push = (r: Reminder) => {
-    if (seen.has(r.id)) return;
+    if (seen.has(r.id) || muted.has(r.plantId)) return; // muted plants never notify
     seen.add(r.id);
     out.push(r);
   };
