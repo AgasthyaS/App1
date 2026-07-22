@@ -1,4 +1,11 @@
-/*  greenr sensor — ESP32-C3 Super Mini  (v3.1: hybrid BLE/WiFi sync)
+/*  greenr sensor — v3.1: hybrid BLE/WiFi sync
+ *
+ *  WORKS ON BOTH BOARDS — the code auto-detects which one you're compiling for
+ *  from Tools → Board and picks the right pins:
+ *    • "ESP32 Dev Module"   → original dev kit (LDR 34, soil 39, PWR 19,
+ *                             AHT10 on SDA 21 / SCL 22)   ← current unit
+ *    • "ESP32C3 Dev Module" → C3 Super Mini (LDR 0, soil 1, PWR 10,
+ *                             AHT10 on SDA 4 / SCL 5)
  *
  *  HYBRID SYNC (battery): each cycle the sensor reads, buffers the reading, and
  *  opens a short BLE window. When someone is HOME, the Greenr app collects the
@@ -21,11 +28,11 @@
  *    - "Adafruit AHTX0" (+ "Adafruit BusIO", "Adafruit Unified Sensor")  [C3 build]
  *    - "DHT sensor library" by Adafruit                                  [legacy dev-kit build]
  *  Bluetooth (BLE), WiFi, and Preferences are built into the ESP32 core — no
- *  extra library to install. Board: "ESP32C3 Dev Module".
+ *  extra library to install. Select YOUR board in Tools → Board (see above).
  *
- *  WIRING (ESP32-C3 Super Mini):
- *    LDR AO -> GPIO0 | Soil AOUT -> GPIO1 | AHT10 SDA -> GPIO4, SCL -> GPIO5
- *    All sensor VCC -> GPIO10 (switched power) | All GND -> GND
+ *  WIRING (original ESP32 dev kit — the current unit):
+ *    LDR AO -> GPIO34 | Soil AOUT -> GPIO39 ("VN") | soil VCC -> GPIO19
+ *    AHT10 SDA -> GPIO21, SCL -> GPIO22 | AHT10 VCC -> 3V3 | all GND -> GND
  *
  *  DEVICE_ID / DEVICE_KEY: these are unique per unit. The provisioning tool
  *  (scripts/provision-device.mjs) prints the two lines to paste here before you
@@ -437,34 +444,18 @@ String scanNetworksJson(){
   return out;
 }
 
-#if BLE_SECURE
-// BLE pairing security (core-version-specific — enabled only when BLE_SECURE=1).
-// The link must be encrypted + authenticated (passkey) before the phone can
-// access the credential characteristics; the GATT ENC_MITM permissions enforce
-// it, and these callbacks supply the static passkey.
-class SecCallbacks : public BLESecurityCallbacks {
-  uint32_t onPassKeyRequest() override { return BLE_PASSKEY; }
-  void onPassKeyNotify(uint32_t pk) override { Serial.printf("BLE passkey: %06u\n", pk); }
-  bool onConfirmPIN(uint32_t pk) override { return pk == BLE_PASSKEY; }
-  bool onSecurityRequest() override { return true; }
-  void onAuthenticationComplete(esp_ble_auth_cmpl_t c) override {
-    Serial.printf("BLE pairing %s\n", c.success ? "OK (encrypted+authenticated)" : "FAILED");
-  }
-};
-
+// Encrypted BLE pairing (Secure Connections) so the Wi-Fi password can't be
+// sniffed during setup. "Just Works" association: the phone pairs automatically
+// (no PIN prompt) and the link is encrypted, which protects against passive
+// eavesdropping. Written for ESP32 core 3.x (avoids the 2.x-only setEncryption-
+// Level / setSecurityCallbacks that don't exist there). The characteristic
+// permissions below (ENCRYPTED) are what force the link to encrypt.
 void enableBleSecurity(){
-  BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
-  BLEDevice::setSecurityCallbacks(new SecCallbacks());
   BLESecurity* sec = new BLESecurity();
-  sec->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
-  sec->setCapability(ESP_IO_CAP_OUT);
+  sec->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_BOND);   // Secure Connections + bonding
+  sec->setCapability(ESP_IO_CAP_NONE);                    // no display/keyboard → Just Works
   sec->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
-  uint32_t pk = BLE_PASSKEY;
-  esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &pk, sizeof(uint32_t));
 }
-#else
-void enableBleSecurity(){ /* BLE encryption off — provisioning is plaintext */ }
-#endif
 
 // Advertise over BLE until the app sends working credentials. Blocks until
 // WiFi is joined and saved (or naps after a 5-minute setup window).
@@ -483,19 +474,13 @@ void runProvisioning(){
 
   BLECharacteristic* netChar =
     svc->createCharacteristic(CHAR_NETWORKS, BLECharacteristic::PROPERTY_READ);
-#if BLE_SECURE
-  // Reading the network list requires an encrypted+authenticated link.
-  netChar->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM);
-#endif
+  netChar->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED);
   netChar->setValue(netsJson.c_str());
 
   BLECharacteristic* credsChar =
     svc->createCharacteristic(CHAR_CREDS, BLECharacteristic::PROPERTY_WRITE);
-#if BLE_SECURE
-  // The stack REJECTS credential writes unless the link is encrypted +
-  // authenticated — this is the enforcement the security review required.
-  credsChar->setAccessPermissions(ESP_GATT_PERM_WRITE_ENC_MITM);
-#endif
+  // The stack requires an ENCRYPTED link before it accepts the Wi-Fi password.
+  credsChar->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   credsChar->setCallbacks(new CredsCallback());
 
   statusChar = svc->createCharacteristic(CHAR_STATUS, BLECharacteristic::PROPERTY_NOTIFY);
