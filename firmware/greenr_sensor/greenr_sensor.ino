@@ -63,16 +63,13 @@
 #define FW_VERSION           31
 #define OTA_CHECK_EVERY_S    (24*3600)  // check for a new build about once a day
 
-// ---- BLE pairing security ----
-// Encrypted + authenticated BLE pairing protects the Wi-Fi password during
-// setup. The API for it differs across ESP32 core versions and doesn't compile
-// as-is on core 3.x, so it's OFF by default (provisioning works plaintext, like
-// the original firmware). TLS/HTTPS security is unaffected and stays on.
-// Set to 1 once the security calls are matched to your exact core version.
-#define BLE_SECURE           0
-// If BLE_SECURE is on, the phone enters this 6-digit passkey to pair. Print it
-// on the device label; make it per-device in production.
-#define BLE_PASSKEY          473829
+// ---- BLE security (always on) ----
+// Every BLE service (Wi-Fi setup AND data sync) requires an ENCRYPTED link:
+// LE Secure Connections pairing, enforced by ESP_GATT_PERM_*_ENCRYPTED on the
+// characteristics — the stack refuses reads/writes on an unencrypted link, so
+// the Wi-Fi password can't be sniffed in transit. Association is "Just Works"
+// (no PIN): strong against passive eavesdropping; a per-device passkey printed
+// on the label would additionally block active MITM — planned for production.
 
 // ---- Supabase TLS root CA (certificate validation; replaces setInsecure) ----
 // The ESP32 verifies the server against this root before sending anything.
@@ -575,11 +572,18 @@ void runBleWindow(){
   uint8_t mac[6]; WiFi.macAddress(mac);
   char name[16]; snprintf(name, sizeof(name), "greenr-%02X%02X", mac[4], mac[5]);
   BLEDevice::init(name);
+  enableBleSecurity();                              // same encryption as setup
   BLEServer* server = BLEDevice::createServer();
   BLEService* svc = server->createService(DATA_SERVICE);
   dataChar = svc->createCharacteristic(CHAR_DATA, BLECharacteristic::PROPERTY_READ);
+  // Readings only go to a phone that has paired (encrypted link) — a stranger
+  // nearby can't read your plant data.
+  dataChar->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED);
   dataChar->setValue(buildDataJson().c_str());
   BLECharacteristic* ackChar = svc->createCharacteristic(CHAR_ACK, BLECharacteristic::PROPERTY_WRITE);
+  // The ACK deletes buffered readings — without encryption, anyone in range
+  // could write a bogus count and silently destroy your data. Encrypted only.
+  ackChar->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   ackChar->setCallbacks(new AckCallback());
   svc->start();
   BLEAdvertising* adv = BLEDevice::getAdvertising();
