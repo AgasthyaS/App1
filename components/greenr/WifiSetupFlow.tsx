@@ -20,15 +20,17 @@ import {
  * theirs and types the password right here — the app hands the credentials to
  * the sensor, which connects and remembers them. No switching Wi-Fi networks.
  *
- * Fallback path (older/iOS-Safari, no in-browser Bluetooth): the classic
- * captive-portal steps, kept so every phone can still get a sensor online.
+ * Fallback path (no in-browser Bluetooth here — e.g. iOS Safari/Firefox):
+ * setup NEEDS Bluetooth, so the fallback explains where to get it. (Firmware
+ * v3+ no longer broadcasts a setup hotspot; the old captive-portal steps died
+ * with it.)
  */
 
 const MANUAL_STEPS: { icon: string; text: string }[] = [
-  { icon: 'power-outline', text: 'Plug the sensor in. For its first 3 minutes it broadcasts its own Wi-Fi network.' },
-  { icon: 'settings-outline', text: 'On your phone, open Settings → Wi-Fi and join the network called “greenr-setup”.' },
-  { icon: 'globe-outline', text: 'A setup page pops up by itself (like hotel Wi-Fi). Pick your home Wi-Fi and type its password.' },
-  { icon: 'checkmark-circle-outline', text: 'The page confirms, “greenr-setup” disappears, and your phone rejoins your own Wi-Fi. Come back here.' },
+  { icon: 'power-outline', text: 'Plug the sensor in and keep it near you. While it has no Wi-Fi saved, it waits in Bluetooth setup mode for a few minutes each time it wakes.' },
+  { icon: 'logo-chrome', text: 'Open greenr-app.vercel.app in Chrome or Edge (computer or Android) — those browsers can talk to the sensor over Bluetooth. On iPhone, use the Greenr app.' },
+  { icon: 'bluetooth-outline', text: 'Go to Wi-Fi setup there and tap “Find my sensor”, then pick your network and enter its password.' },
+  { icon: 'checkmark-circle-outline', text: 'The sensor saves your Wi-Fi permanently and starts reporting — this is a one-time step.' },
 ];
 
 type Phase = 'intro' | 'searching' | 'form' | 'sending' | 'success' | 'manual';
@@ -144,8 +146,8 @@ export function WifiSetupFlow({
           ))}
         </View>
         <Text style={[type.micro, { color: light.inkMuted, marginTop: 12, lineHeight: 16 }]}>
-          No “greenr-setup” network? Unplug the sensor and plug it back in to restart the 3-minute
-          window. If the page doesn’t pop up, open a browser and go to 192.168.4.1.
+          Sensor not showing up? Unplug it and plug it back in — that restarts its Bluetooth
+          setup window.
         </Text>
         <GButton title={doneCta} onPress={onDone} style={{ marginTop: 16 }} />
         {isWifiSetupSupported && (
@@ -263,7 +265,7 @@ export function WifiSetupFlow({
         {err && <Text style={[type.micro, { color: '#C0392B', marginTop: 10 }]}>{err}</Text>}
 
         <GButton title="Connect" onPress={connect} disabled={!chosen} style={{ marginTop: 16 }} />
-        <GButton title="Set up manually instead" kind="ghost" mode="light" onPress={() => setPhase('manual')} style={{ marginTop: 8 }} />
+        <GButton title="Can’t connect? See the checklist" kind="ghost" mode="light" onPress={() => setPhase('manual')} style={{ marginTop: 8 }} />
       </View>
     );
   }
@@ -293,7 +295,7 @@ export function WifiSetupFlow({
       {err && <Text style={[type.micro, { color: '#C0392B', marginTop: 12 }]}>{err}</Text>}
 
       <GButton title="Find my sensor" onPress={search} style={{ marginTop: 16 }} />
-      <GButton title="Set up manually instead" kind="ghost" mode="light" onPress={() => setPhase('manual')} style={{ marginTop: 8 }} />
+      <GButton title="Can’t connect? See the checklist" kind="ghost" mode="light" onPress={() => setPhase('manual')} style={{ marginTop: 8 }} />
       {onSkip && (
         <GButton title={skipLabel ?? 'Skip for now'} kind="ghost" mode="light" onPress={onSkip} style={{ marginTop: 8 }} />
       )}

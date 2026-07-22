@@ -13,6 +13,10 @@
 
 -- ── 1. ingest_reading: add p_secs_ago so buffered WiFi uploads keep real times ──
 -- (created_at = now() − secs_ago; existing callers omit it → 0 → now, unchanged.)
+-- Drop the legacy 8-arg signature first — leaving both makes every upload fail
+-- with an "ambiguous function" error.
+drop function if exists public.ingest_reading(uuid, text, numeric, numeric, numeric, numeric, numeric, int);
+
 create or replace function public.ingest_reading(
   p_device uuid, p_secret text,
   p_light numeric default null, p_dli numeric default null,

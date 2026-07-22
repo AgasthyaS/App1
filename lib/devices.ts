@@ -155,14 +155,6 @@ export async function releaseDevice(deviceId: string): Promise<{ error: string |
   return { error: null };
 }
 
-/** Ask the device to take a fresh reading on its next wake (app open / pull). */
-export async function requestReadNow(deviceId?: string): Promise<void> {
-  if (!supabase) return;
-  let q = supabase.from('devices').update({ read_now: true });
-  q = deviceId ? q.eq('id', deviceId) : q.not('id', 'is', null);
-  await q;
-}
-
 /** Idle cadence: the sensor wakes, reads, and deep-sleeps ~3 h between reports
  *  (battery-friendly). Server-controlled via devices.wake_seconds. */
 export const IDLE_WAKE_SECONDS = 10800;

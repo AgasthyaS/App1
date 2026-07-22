@@ -13,7 +13,6 @@ import {
   getLatestReading,
   parsePairing,
   registerDevice,
-  requestReadNow,
   type Reading,
 } from '@/lib/devices';
 import { useGreenr } from '@/lib/store';
@@ -48,7 +47,6 @@ export default function PairDevice() {
     const { error } = await registerDevice(parsed.id, parsed.key);
     if (error) { setError(error); setStep('scan'); return; }
     setDeviceId(parsed.id);
-    requestReadNow(parsed.id); // nudge it to report soon
     setStep('wifi');
   };
 
