@@ -80,11 +80,15 @@ export default function PairDevice() {
   if (step === 'scan') {
     return (
       <Screen mode="light" scroll={false} style={{ justifyContent: 'center' }}>
-        <Text style={[type.ritualTitle, { color: light.ink, textAlign: 'center' }]}>
+        <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', letterSpacing: 0.5 }]}>
+          STEP 1 OF 3 · LINK IT TO YOUR ACCOUNT
+        </Text>
+        <Text style={[type.ritualTitle, { color: light.ink, textAlign: 'center', marginTop: 6 }]}>
           Scan your sensor's QR code
         </Text>
         <Text style={[type.body, { color: light.inkMuted, textAlign: 'center', marginTop: 8 }]}>
-          It's on the device (or its box). This links the sensor to your account.
+          It's on the device (or its box). After this, step 2 connects it to your Wi-Fi
+          right here in the app, and step 3 picks which plant it lives with.
         </Text>
 
         <View style={{ height: 260, borderRadius: 20, overflow: 'hidden', marginTop: 22, backgroundColor: '#000' }}>
@@ -114,10 +118,16 @@ export default function PairDevice() {
         />
         {error && <Text style={[type.micro, { color: '#C0392B', marginTop: 10 }]}>{error}</Text>}
         <GButton title="Pair sensor" onPress={() => claim(manual)} disabled={!manual.trim()} style={{ marginTop: 12 }} />
-        <Pressable onPress={() => router.push('/wifi-setup' as any)} style={{ alignSelf: 'center', marginTop: 14, minHeight: 44, justifyContent: 'center' }}>
-          <Text style={[type.caption, { color: accent.verdant }]}>Sensor not on Wi-Fi yet? Set that up first</Text>
-        </Pressable>
-        <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', minHeight: 44, justifyContent: 'center' }}>
+        <GButton
+          title="Skip to Wi-Fi setup — Find my sensor"
+          kind="secondary"
+          onPress={() => router.push('/wifi-setup' as any)}
+          style={{ marginTop: 10 }}
+        />
+        <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 6, lineHeight: 15 }]}>
+          Already paired, or just need to get it online? Wi-Fi setup finds it over Bluetooth.
+        </Text>
+        <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', minHeight: 44, justifyContent: 'center', marginTop: 4 }}>
           <Text style={[type.body, { color: light.inkMuted }]}>Cancel</Text>
         </Pressable>
       </Screen>
@@ -137,7 +147,9 @@ export default function PairDevice() {
   if (step === 'wifi') {
     return (
       <Screen mode="light">
-        <Text style={[type.micro, { color: accent.sage, marginTop: 8 }]}>PAIRED TO YOUR ACCOUNT ✓</Text>
+        <Text style={[type.micro, { color: accent.sage, marginTop: 8 }]}>
+          PAIRED ✓ · STEP 2 OF 3 — CONNECT IT TO WI-FI
+        </Text>
         <WifiSetupFlow
           onDone={() => setStep('assign')}
           doneCta="Continue"
@@ -153,7 +165,10 @@ export default function PairDevice() {
     const active = plants.filter((p) => !p.archived);
     return (
       <Screen mode="light">
-        <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Almost done</Text>
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 8, letterSpacing: 0.5 }]}>
+          STEP 3 OF 3 · PICK ITS PLANT
+        </Text>
+        <Text style={[type.ritualTitle, { color: light.ink, marginTop: 6 }]}>Almost done</Text>
         <Text style={[type.body, { color: light.inkMuted, marginTop: 8 }]}>
           Which plant does this sensor live with?
         </Text>

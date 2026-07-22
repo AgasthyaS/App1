@@ -601,7 +601,7 @@ export default function PlantDetail() {
                   <Chip label={`${sensor.name} · soil ${sensor.latest.soilPct}%`} color={accent.verdant} />
                 </Pressable>
               ) : (
-                <Pressable onPress={() => router.push('/pair-sensor')} style={{ marginTop: 10 }}>
+                <Pressable onPress={() => router.push('/pair-device' as any)} style={{ marginTop: 10 }}>
                   <Chip label="Estimated — a sensor makes it exact" color={accent.sunbeamText} />
                 </Pressable>
               )}

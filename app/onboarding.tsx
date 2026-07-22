@@ -56,7 +56,7 @@ export default function Onboarding() {
             // jumps to pairing (§2.2 O1), which loops back into add-plant via Assign
             completeOnboarding();
             router.replace('/(tabs)');
-            router.push('/pair-sensor');
+            router.push('/pair-device' as any);
           }}
           style={{ marginTop: 14, minHeight: 44, justifyContent: 'center', alignSelf: 'center' }}
         >

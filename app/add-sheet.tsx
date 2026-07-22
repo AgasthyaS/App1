@@ -36,10 +36,10 @@ export default function AddSheet() {
     {
       icon: 'hardware-chip-outline',
       title: 'Add sensor',
-      sub: 'Connect, calibrate, assign — about two minutes',
+      sub: 'Scan its QR → Wi-Fi setup in-app → pick its plant',
       go: () => {
         router.back();
-        router.push('/pair-sensor');
+        router.push('/pair-device' as any);
       },
     },
     {

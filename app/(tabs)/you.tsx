@@ -188,7 +188,7 @@ export default function YouTab() {
           <Card
             elevated
             style={{ width: 200, justifyContent: 'center' }}
-            onPress={() => router.push('/pair-sensor')}
+            onPress={() => router.push('/pair-device' as any)}
           >
             <Text style={[type.micro, { color: accent.verdant }]}>GREENR SENSOR</Text>
             <Text style={[type.cardTitle, { color: dark.ink, marginTop: 6, lineHeight: 22 }]}>

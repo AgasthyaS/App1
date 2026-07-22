@@ -174,7 +174,7 @@ export default function SpotDetail() {
           <GButton
             title="Measure this spot exactly"
             kind="secondary"
-            onPress={() => router.push('/pair-sensor')}
+            onPress={() => router.push('/pair-device' as any)}
             style={{ marginTop: 20 }}
           />
           <Text style={[type.micro, { color: dark.inkMuted, textAlign: 'center', marginTop: 8 }]}>
