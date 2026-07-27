@@ -41,6 +41,11 @@ app-example
 # local secrets
 .env
 
+# Local tool config — records approved commands, which can capture secrets
+# (a Vercel token leaked to GitHub this way once). Keep it off the repo.
+.claude/settings.json
+.claude/settings.local.json
+
 # device QR codes contain secrets
 provisioned/
 Eastbay-Venture/

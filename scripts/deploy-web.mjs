@@ -11,11 +11,16 @@
 //   3. Pins the deploy to the correct Vercel project ("greenr").
 //
 // Usage:
-//   VERCEL_TOKEN=xxxxx node scripts/deploy-web.mjs
-//   (or run `npx vercel login` once, then omit the token)
+//   node scripts/deploy-web.mjs
+//
+// The Vercel token is read from .env.local (or .env) — both are gitignored.
+// NEVER pass it inline like `VERCEL_TOKEN=xxx node ...`: that command string can
+// be recorded in shell history and tool config, which is exactly how a previous
+// token ended up pushed to GitHub and auto-revoked. Alternatively run
+// `npx vercel login` once and omit the token entirely.
 
 import { execSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, writeFileSync, renameSync, readdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, writeFileSync, renameSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -24,7 +29,21 @@ const dist = join(root, 'dist');
 const SCOPE = 'agasthyas-projects-32cbb2f5';
 const PROJECT_ID = 'prj_lGbgr1czHUDtbHVtV4pwTwdOQ1ny';
 const ORG_ID = 'team_tyaSzhBpdrGPmGx2nvs4WhjH';
-const token = process.env.VERCEL_TOKEN;
+
+/** Read one key out of a local dotenv file, without printing it. */
+function fromEnvFile(name) {
+  for (const f of ['.env.local', '.env']) {
+    const p = join(root, f);
+    if (!existsSync(p)) continue;
+    for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m && m[1] === name) return m[2].replace(/^["']|["']$/g, '').trim();
+    }
+  }
+  return undefined;
+}
+
+const token = process.env.VERCEL_TOKEN || fromEnvFile('VERCEL_TOKEN');
 const run = (cmd) => execSync(cmd, { cwd: root, stdio: 'inherit' });
 
 console.log('\n▶ 1/4  Exporting static web build…');
