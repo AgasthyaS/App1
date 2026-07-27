@@ -86,14 +86,22 @@ export interface SyncResult {
   uploaded: number;
 }
 
+/** Rows the sensor packs into one BLE read (must match MAX_ROWS_PER_READ in
+ *  the firmware) — a short batch means we've drained the buffer. */
+export const ROWS_PER_READ = 8;
+
 /**
  * Upload a batch the phone collected over BLE. Authenticates as the signed-in
  * USER (who owns the device) via the ingest_batch RPC — the device secret never
  * travels over Bluetooth. Returns how many rows the server inserted.
+ *
+ * THROWS on any failure. That contract matters: the caller must only ACK the
+ * sensor (which makes it DELETE those buffered readings) after a genuine
+ * success. Returning 0 quietly here would destroy readings that never landed.
  */
 export async function uploadBatch(batch: BleBatch): Promise<number> {
   const { supabase } = await import('./supabase');
-  if (!supabase) return 0;
+  if (!supabase) throw new Error('Not signed in — cannot upload sensor readings.');
   const rows = batchToIngestRows(batch);
   if (!rows.length) return 0;
   const { data, error } = await supabase.rpc('ingest_batch', { p_device: batch.dev, p_rows: rows });
@@ -101,6 +109,7 @@ export async function uploadBatch(batch: BleBatch): Promise<number> {
   const inserted = data && typeof (data as { inserted?: number }).inserted === 'number'
     ? (data as { inserted: number }).inserted
     : rows.length;
+  if (inserted <= 0) throw new Error('Server accepted no readings — not clearing the sensor.');
   return inserted;
 }
 

@@ -283,6 +283,59 @@ export default function PlantDetail() {
   const effectiveScore = measured ? health!.total : pending ? 0 : careScore?.total ?? plant?.score ?? 0;
   const displayScore = useLiquidScore(effectiveScore);
 
+  // ── Every hook must run on EVERY render, so all of these sit above the
+  // "plant not found" return. (React counts hooks positionally: returning early
+  // while later hooks exist crashes with "rendered fewer/more hooks" the moment
+  // a plant loads in after hydration.) Each one tolerates a missing plant.
+  const ideal = idealsFor(plant?.species ?? '', plant?.comfortBand);
+  const envLight = calReading?.light_lux ?? null;
+  const envTemp = calReading?.temp_c ?? null;
+  const envRh = calReading?.humidity_pct ?? null;
+  const hasEnv = calReading != null;
+
+  // Soil-hydration dynamics: infer poured volume from each watering's moisture
+  // rise, learn the drying rate, and invert it into the efficient pour for the
+  // plant's ideal interval. Sensored only (needs the moisture curve).
+  const hydration = useMemo(
+    () =>
+      sensored && plant
+        ? buildHydrationModel(
+            calHistory,
+            plant.waterLog,
+            { size: plant.potSize, material: plant.potMaterial, cm: plant.potCm },
+            ideal.band,
+          )
+        : null,
+    [sensored, calHistory, plant, ideal.band],
+  );
+  const growth = useMemo(() => growthSummary(plant), [plant]);
+  // Most recent logged pour with a known amount — powers a one-tap "repeat".
+  const lastLoggedMl = useMemo(() => {
+    const withMl = (plant?.waterLog ?? []).filter((w) => w.ml != null);
+    return withMl.length ? (withMl[withMl.length - 1].ml as number) : null;
+  }, [plant?.waterLog]);
+  // Which species would thrive in THIS spot, from the sensor's real environment,
+  // scored by the Habitat Suitability model. Memoized — it scans the whole DB.
+  const spotMatches = useMemo(
+    () =>
+      hasEnv && plant
+        ? plantsForEnvironment(envLight, envTemp, envRh, 5).filter((m) => m.species.common !== plant.species)
+        : [],
+    [hasEnv, envLight, envTemp, envRh, plant],
+  );
+  // How well THIS plant scores in its own spot — same math, comparable number.
+  const selfMatch: Match | null = useMemo(
+    () => (hasEnv && plant ? scoreSpeciesForEnvironment(plant.species, envLight, envTemp, envRh) : null),
+    [hasEnv, envLight, envTemp, envRh, plant],
+  );
+  // The physically-grounded DLI estimate for this spot (log-photometry). Prefer
+  // the accumulated multi-day light average when we have it.
+  const dliHere = useMemo(() => {
+    if (lightAvg) return estimateDli(lightAvg.avg);
+    if (envLight != null) return estimateDli(envLight);
+    return null;
+  }, [lightAvg, envLight]);
+
   if (!plant) {
     return (
       <View style={{ flex: 1, backgroundColor: dark.bg, alignItems: 'center', justifyContent: 'center' }}>
@@ -292,7 +345,6 @@ export default function PlantDetail() {
   }
 
   const band = bandFor(effectiveScore);
-  const ideal = idealsFor(plant.species, plant.comfortBand);
   const toneColor = (t: Tone) =>
     t === 'good' ? accent.sage : t === 'warn' ? accent.sunbeam : t === 'bad' ? accent.clay : dark.inkMuted;
   const watering = liveDeviceId ? wateringAdvice(calHistory, ideal.band, plant.species) : null;
@@ -323,21 +375,6 @@ export default function PlantDetail() {
       ? mlNeeded(plant.potSize, plant.potMaterial, calReading.soil_pct, bandMid, plant.potCm)
       : null;
   const careProfile = careProfileFor(plant.species);
-  // Soil-hydration dynamics: infer poured volume from each watering's moisture
-  // rise, learn the drying rate, and invert it into the efficient pour for the
-  // plant's ideal interval. Sensored only (needs the moisture curve).
-  const hydration = useMemo(
-    () =>
-      sensored
-        ? buildHydrationModel(
-            calHistory,
-            plant.waterLog,
-            { size: plant.potSize, material: plant.potMaterial, cm: plant.potCm },
-            ideal.band,
-          )
-        : null,
-    [sensored, calHistory, plant.waterLog, plant.potSize, plant.potMaterial, plant.potCm, ideal.band],
-  );
   // Seasonal context + the personalized water plan (pot volume × species draw ×
   // measured climate × season — the real calculation, factors listed).
   const season = currentSeason();
@@ -359,13 +396,7 @@ export default function PlantDetail() {
   const efficientPour = hydration
     ? hydration.mlForDays(plan.intervalDays, calReading?.soil_pct ?? ideal.band[0], ideal.band)
     : null;
-  const growth = useMemo(() => growthSummary(plant), [plant]);
   const growthLine = growthHeadline(growth);
-  // Most recent logged pour with a known amount — powers a one-tap "repeat".
-  const lastLoggedMl = useMemo(() => {
-    const withMl = (plant.waterLog ?? []).filter((w) => w.ml != null);
-    return withMl.length ? (withMl[withMl.length - 1].ml as number) : null;
-  }, [plant.waterLog]);
 
   const doLogWater = (ml: number) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -389,33 +420,6 @@ export default function PlantDetail() {
   // Charts plot only real readings — a missing metric is skipped, never drawn as 0.
   const soilBars = calHistory.filter((r) => r.soil_pct != null);
   const lightBars = calHistory.filter((r) => r.light_lux != null);
-  // Which species would thrive in THIS spot, from the sensor's real environment,
-  // scored by the Habitat Suitability model (lib/compatibility). Memoized — the
-  // model scans the whole species database.
-  const envLight = calReading?.light_lux ?? null;
-  const envTemp = calReading?.temp_c ?? null;
-  const envRh = calReading?.humidity_pct ?? null;
-  const hasEnv = calReading != null;
-  const spotMatches = useMemo(
-    () =>
-      hasEnv
-        ? plantsForEnvironment(envLight, envTemp, envRh, 5).filter((m) => m.species.common !== plant.species)
-        : [],
-    [hasEnv, envLight, envTemp, envRh, plant.species],
-  );
-  // How well THIS plant scores in its own spot — same math, comparable number,
-  // named limiting factor.
-  const selfMatch: Match | null = useMemo(
-    () => (hasEnv ? scoreSpeciesForEnvironment(plant.species, envLight, envTemp, envRh) : null),
-    [hasEnv, envLight, envTemp, envRh, plant.species],
-  );
-  // The physically-grounded DLI estimate for this spot (log-photometry). Prefer
-  // the accumulated multi-day light average when we have it.
-  const dliHere = useMemo(() => {
-    if (lightAvg) return estimateDli(lightAvg.avg);
-    if (envLight != null) return estimateDli(envLight);
-    return null;
-  }, [lightAvg, envLight]);
   const events = plant.timeline.filter((e) => {
     if (filter === 'All') return true;
     if (filter === 'Photos') return e.kind === 'photo';

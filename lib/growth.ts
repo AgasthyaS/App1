@@ -1,4 +1,4 @@
-import type { GrowthEntry, Plant } from './types';
+import type { GrowthEntry } from './types';
 
 /**
  * Growth-journal analytics. Sensors measure the environment and the care score
@@ -49,8 +49,9 @@ function slopePerDay(points: Series[]): number | null {
   return den === 0 ? null : num / den;
 }
 
-export function growthSummary(plant: Plant): GrowthSummary {
-  const entries = [...(plant.growth ?? [])].sort((a, b) => +new Date(a.at) - +new Date(b.at));
+/** Takes just the growth log, so callers can pass a not-yet-loaded plant safely. */
+export function growthSummary(plant: { growth?: GrowthEntry[] } | null | undefined): GrowthSummary {
+  const entries = [...(plant?.growth ?? [])].sort((a, b) => +new Date(a.at) - +new Date(b.at));
   const photos = entries.filter((e) => e.photoUri);
 
   const heightSeries: Series[] = entries

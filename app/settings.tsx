@@ -25,7 +25,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const greenr = useGreenr();
   const { settings, setSettings, resetApp, profile, signOut } = greenr;
-  const { signOut: authSignOut, enabled: authEnabled, deleteAccount } = useAuth();
+  const { user, signOut: authSignOut, enabled: authEnabled, deleteAccount } = useAuth();
 
   const cycle = <T,>(list: readonly T[], current: T): T =>
     list[(list.findIndex((v) => JSON.stringify(v) === JSON.stringify(current)) + 1) % list.length];
@@ -38,6 +38,12 @@ export default function SettingsScreen() {
   const syncNearby = async () => {
     if (!bleGateway.isSupported) {
       setSyncNote('This browser can’t use Bluetooth. Use the phone app for sensor sync.');
+      return;
+    }
+    // Readings upload as the signed-in owner, so bail early with a clear reason
+    // rather than draining the sensor and failing at the upload step.
+    if (!user) {
+      setSyncNote('Sign in first — collected readings upload to your account.');
       return;
     }
     setSyncing(true);

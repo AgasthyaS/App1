@@ -2,6 +2,7 @@ import {
   CHAR_ACK,
   CHAR_DATA,
   DATA_SERVICE,
+  ROWS_PER_READ,
   parseBatch,
   uploadBatch,
   type SyncResult,
@@ -41,16 +42,21 @@ export async function syncNow(): Promise<SyncResult[]> {
   const dec = new TextDecoder();
   const enc = new TextEncoder();
 
-  // Drain in batches: read → upload → ACK (sensor then serves the next batch).
-  for (let i = 0; i < 16; i++) {
-    const batch = parseBatch(dec.decode(await dataChar.readValue()));
-    if (!batch || batch.rows.length === 0) break;
-    deviceId = batch.dev;
-    const n = await uploadBatch(batch);
-    await ackChar.writeValue(enc.encode(String(batch.rows.length)));
-    uploaded += n;
-    if (batch.rows.length < 8) break; // last (partial) batch
+  // Drain in batches: read → upload → ACK. The ACK makes the sensor DELETE
+  // those readings, so it must come strictly after a successful upload —
+  // uploadBatch throws on any failure, leaving the buffer intact to retry.
+  try {
+    for (let i = 0; i < 16; i++) {
+      const batch = parseBatch(dec.decode(await dataChar.readValue()));
+      if (!batch || batch.rows.length === 0) break;
+      deviceId = batch.dev;
+      const n = await uploadBatch(batch);
+      await ackChar.writeValue(enc.encode(String(batch.rows.length)));
+      uploaded += n;
+      if (batch.rows.length < ROWS_PER_READ) break; // last (partial) batch
+    }
+  } finally {
+    try { device.gatt?.disconnect(); } catch { /* already gone */ }
   }
-  try { device.gatt?.disconnect(); } catch { /* already gone */ }
   return deviceId ? [{ deviceId, uploaded }] : [];
 }

@@ -5,6 +5,7 @@ import {
   CHAR_ACK,
   CHAR_DATA,
   DATA_SERVICE,
+  ROWS_PER_READ,
   parseBatch,
   uploadBatch,
   type SyncResult,
@@ -49,18 +50,23 @@ async function drain(device: any): Promise<SyncResult | null> {
   await dev.discoverAllServicesAndCharacteristics();
   let uploaded = 0;
   let deviceId = '';
-  for (let i = 0; i < 16; i++) {
-    const ch = await dev.readCharacteristicForService(DATA_SERVICE, CHAR_DATA);
-    const batch = parseBatch(Buffer.from(ch.value ?? '', 'base64').toString('utf8'));
-    if (!batch || batch.rows.length === 0) break;
-    deviceId = batch.dev;
-    const n = await uploadBatch(batch);
-    const ack = Buffer.from(String(batch.rows.length), 'utf8').toString('base64');
-    await dev.writeCharacteristicWithResponseForService(DATA_SERVICE, CHAR_ACK, ack);
-    uploaded += n;
-    if (batch.rows.length < 8) break;
+  // ACK only after a successful upload — it makes the sensor delete those
+  // readings. uploadBatch throws on failure, so the buffer survives to retry.
+  try {
+    for (let i = 0; i < 16; i++) {
+      const ch = await dev.readCharacteristicForService(DATA_SERVICE, CHAR_DATA);
+      const batch = parseBatch(Buffer.from(ch.value ?? '', 'base64').toString('utf8'));
+      if (!batch || batch.rows.length === 0) break;
+      deviceId = batch.dev;
+      const n = await uploadBatch(batch);
+      const ack = Buffer.from(String(batch.rows.length), 'utf8').toString('base64');
+      await dev.writeCharacteristicWithResponseForService(DATA_SERVICE, CHAR_ACK, ack);
+      uploaded += n;
+      if (batch.rows.length < ROWS_PER_READ) break;
+    }
+  } finally {
+    await dev.cancelConnection().catch(() => {});
   }
-  await dev.cancelConnection().catch(() => {});
   return deviceId ? { deviceId, uploaded } : null;
 }
 

@@ -12,7 +12,7 @@ import { useGreenr } from '@/lib/store';
 type Health = 'good' | 'warn' | 'bad';
 interface Issue { tone: Health; text: string; fix?: string }
 
-function assess(d: EnrichedDevice, plantName: string | null): { health: Health; issues: Issue[]; battery: number | null } {
+function assess(d: EnrichedDevice): { health: Health; issues: Issue[]; battery: number | null } {
   const issues: Issue[] = [];
   const battery = d.latest?.battery_pct ?? d.device.battery_pct ?? null;
 
@@ -42,7 +42,7 @@ export default function DeviceHealth() {
 
   const rows = devices.map((d) => {
     const plant = plants.find((p) => p.id === d.device.plant_key);
-    return { d, plant: plant?.name ?? null, ...assess(d, plant?.name ?? null) };
+    return { d, plant: plant?.name ?? null, ...assess(d) };
   });
   const needAttention = rows.filter((r) => r.health !== 'good').length;
   const online = rows.filter((r) => r.d.connection.status === 'online').length;

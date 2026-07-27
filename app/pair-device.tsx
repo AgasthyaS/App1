@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { QRScanner } from '@/components/greenr/QRScanner';
@@ -27,7 +27,7 @@ type Step = 'scan' | 'linking' | 'wifi' | 'assign' | 'done';
 
 export default function PairDevice() {
   const router = useRouter();
-  const { enabled } = useAuth();
+  const { user, enabled, initializing } = useAuth();
   const { plants } = useGreenr();
 
   const [step, setStep] = useState<Step>('scan');
@@ -38,13 +38,20 @@ export default function PairDevice() {
   const [reading, setReading] = useState<Reading | null>(null);
   const [scanning, setScanning] = useState(false);
 
+  // The camera fires onScan repeatedly while the code is in frame, so a ref
+  // (not state, which updates a tick later) guards against claiming twice.
+  const claiming = useRef(false);
+
   const claim = async (raw: string) => {
-    setError(null);
+    if (claiming.current) return;
     const parsed = parsePairing(raw);
     if (!parsed) { setError("That doesn't look like a Greenr sensor code."); return; }
+    claiming.current = true;
+    setError(null);
     setScanning(false);
     setStep('linking');
     const { error } = await registerDevice(parsed.id, parsed.key);
+    claiming.current = false;
     if (error) { setError(error); setStep('scan'); return; }
     setDeviceId(parsed.id);
     setStep('wifi');
@@ -63,13 +70,25 @@ export default function PairDevice() {
     return () => { alive = false; clearInterval(iv); };
   }, [step, deviceId]);
 
-  if (!enabled) {
+  // A sensor is claimed BY an account, so a real signed-in user is required —
+  // not merely a configured backend. (Checking `enabled` alone let signed-out
+  // users reach the scanner and fail later with a raw database error.)
+  if (!initializing && (!enabled || !user)) {
     return (
       <Screen mode="light" scroll={false} style={{ justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={[type.body, { color: light.inkMuted, textAlign: 'center' }]}>
-          Sign in first to pair a sensor to your account.
+        <Ionicons name="person-circle-outline" size={44} color={light.inkMuted} />
+        <Text style={[type.ritualTitle, { color: light.ink, marginTop: 12, textAlign: 'center' }]}>
+          Sign in to pair a sensor
         </Text>
-        <GButton title="Go back" onPress={() => router.back()} style={{ marginTop: 16 }} />
+        <Text style={[type.body, { color: light.inkMuted, textAlign: 'center', marginTop: 8 }]}>
+          {enabled
+            ? 'Sensors are linked to your account so their readings follow you across devices.'
+            : 'Accounts aren’t configured in this build yet.'}
+        </Text>
+        {enabled && (
+          <GButton title="Sign in" onPress={() => router.replace('/signin')} style={{ marginTop: 18, alignSelf: 'stretch' }} />
+        )}
+        <GButton title="Go back" kind="secondary" onPress={() => router.back()} style={{ marginTop: 10, alignSelf: 'stretch' }} />
       </Screen>
     );
   }

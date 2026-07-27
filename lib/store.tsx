@@ -149,7 +149,6 @@ interface GreenrApi extends GreenrState {
   logWaterAmount: (plantId: string, ml: number | null) => void;
   /** Log non-watering care (fertilized, misted, repotted, …) to the plant's history. */
   logCare: (plantId: string, note: string) => void;
-  pairSensor: (plantId: string) => Sensor;
   completeTask: (taskId: string, verified: boolean) => void;
   skipTask: (taskId: string) => void;
   resetCareSession: () => void;
@@ -160,12 +159,10 @@ interface GreenrApi extends GreenrState {
   archivePlant: (plantId: string, cause?: string) => void;
   addDiagnosis: (plantId: string, text: string) => void;
   addTasks: (tasks: CareTask[]) => void;
-  addPhoto: (plantId: string) => void;
   setPlantPhoto: (plantId: string, uri: string) => void;
   /** Add a growth-journal entry (photo and/or height/leaf measurement + note). */
   logGrowth: (plantId: string, entry: { photoUri?: string; heightCm?: number | null; leaves?: number | null; note?: string }) => void;
   renamePlant: (plantId: string, name: string) => void;
-  readNow: (sensorId: string) => void;
   reassignSensor: (sensorId: string, plantId: string) => void;
   recalibrateSensor: (sensorId: string) => void;
   /** §8: record a per-metric calibration (offset = reference − measured) */
@@ -176,7 +173,6 @@ interface GreenrApi extends GreenrState {
   recordLightDay: (plantId: string, day: DayLight) => void;
   installFirmware: (sensorId: string) => void;
   forgetSensor: (sensorId: string) => void;
-  remeasureSpot: (spotId: string) => void;
   /** testing: load the seeded demo garden */
   loadDemoGarden: () => void;
   /** testing: wipe everything back to a fresh install */
@@ -401,35 +397,6 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const pairSensor = useCallback((plantId: string): Sensor => {
-    const hex = Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, '0');
-    const sensor: Sensor = {
-      id: `sn-${hex.toLowerCase()}`,
-      name: `Greenr-${hex}`,
-      plantId,
-      status: 'online',
-      batteryPct: 100,
-      batteryEta: '~6 months',
-      rssiDbm: -55,
-      lastReadingMinsAgo: 0,
-      wakeIntervalMins: 180,
-      firmware: 'v1.4.2',
-      updateAvailable: false,
-      calibratedOn: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      calDry: 2870,
-      calWet: 1180,
-      latest: { soilPct: 40, dli: 3.0, tempF: 72, rhPct: 55, rawAdc: 2100 },
-    };
-    setState((s) => ({
-      ...s,
-      sensors: [...s.sensors, sensor],
-      plants: s.plants.map((p) =>
-        p.id === plantId ? { ...p, sensorId: sensor.id, estimate: false, estimateBand: 0 } : p,
-      ),
-    }));
-    return sensor;
-  }, []);
-
   const completeTask = useCallback((taskId: string, verified: boolean) => {
     setState((s) => ({
       ...s,
@@ -518,28 +485,6 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({ ...s, tasks: [...s.tasks, ...newTasks] }));
   }, []);
 
-  const addPhoto = useCallback((plantId: string) => {
-    setState((s) => ({
-      ...s,
-      plants: s.plants.map((p) =>
-        p.id === plantId
-          ? {
-              ...p,
-              timeline: [
-                {
-                  id: `tl-${Date.now()}`, at: new Date().toISOString(),
-                  daysAgo: 0,
-                  kind: 'photo' as const,
-                  text: 'Photo added — aligned for the growth scrubber.',
-                },
-                ...p.timeline,
-              ],
-            }
-          : p,
-      ),
-    }));
-  }, []);
-
   const setPlantPhoto = useCallback((plantId: string, uri: string) => {
     setState((s) => ({
       ...s,
@@ -595,26 +540,6 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({
       ...s,
       plants: s.plants.map((p) => (p.id === plantId ? { ...p, name } : p)),
-    }));
-  }, []);
-
-  const readNow = useCallback((sensorId: string) => {
-    setState((s) => ({
-      ...s,
-      sensors: s.sensors.map((sn) =>
-        sn.id === sensorId
-          ? {
-              ...sn,
-              status: 'online' as const,
-              lastReadingMinsAgo: 0,
-              latest: {
-                ...sn.latest,
-                soilPct: Math.max(4, sn.latest.soilPct - 1),
-                rawAdc: sn.latest.rawAdc + 18,
-              },
-            }
-          : sn,
-      ),
     }));
   }, []);
 
@@ -742,17 +667,6 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const remeasureSpot = useCallback((spotId: string) => {
-    setState((s) => ({
-      ...s,
-      spots: s.spots.map((sp) =>
-        sp.id === spotId
-          ? { ...sp, dli: Math.round((sp.dli + (Math.random() - 0.45) * 0.4) * 10) / 10 }
-          : sp,
-      ),
-    }));
-  }, []);
-
   const loadDemoGarden = useCallback(() => {
     setState((s) => ({
       ...s,
@@ -793,7 +707,6 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       logWater,
       logWaterAmount,
       logCare,
-      pairSensor,
       completeTask,
       skipTask,
       resetCareSession,
@@ -804,11 +717,9 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       archivePlant,
       addDiagnosis,
       addTasks,
-      addPhoto,
       setPlantPhoto,
       logGrowth,
       renamePlant,
-      readNow,
       reassignSensor,
       recalibrateSensor,
       calibrateMetric,
@@ -816,11 +727,10 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       recordLightDay,
       installFirmware,
       forgetSensor,
-      remeasureSpot,
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, pairSensor, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, addPhoto, setPlantPhoto, logGrowth, renamePlant, readNow, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, remeasureSpot, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
