@@ -17,7 +17,11 @@ function assess(d: EnrichedDevice): { health: Health; issues: Issue[]; battery: 
   const battery = d.latest?.battery_pct ?? d.device.battery_pct ?? null;
 
   if (d.connection.status === 'offline') {
-    issues.push({ tone: 'bad', text: `Hasn't reported (${d.connection.sinceLabel})`, fix: 'Check it has power and your 2.4 GHz Wi-Fi is up.' });
+    issues.push({
+      tone: 'bad',
+      text: `Hasn't reported (${d.connection.sinceLabel})`,
+      fix: 'Check it has power and your 2.4 GHz Wi-Fi is up. Moved house or changed your router? It reopens Bluetooth setup on its own — run Wi-Fi setup to point it at the new network.',
+    });
   } else if (d.connection.status === 'idle') {
     issues.push({ tone: 'warn', text: `Late — last seen ${d.connection.sinceLabel}`, fix: 'Usually catches up on its next wake. If not, check power.' });
   }

@@ -46,6 +46,16 @@ const TOPICS: { group: string; items: Topic[] }[] = [
         cta: { label: 'Open device health', to: '/device-health' },
       },
       {
+        q: 'I moved house (or changed my router) — what happens?',
+        a: [
+          'Nothing is lost. The sensor keeps reading and storing measurements internally, and a nearby phone can still collect them over Bluetooth.',
+          'After a few failed attempts to reach the old network, it automatically reopens Bluetooth setup so you can point it at the new Wi-Fi.',
+          'Just plug it in at the new place, open Wi-Fi setup, tap “Find my sensor”, and pick the new network. Everything it stored while offline uploads once it reconnects.',
+          'A brief outage (router reboot) needs no action at all — it keeps the old network and reconnects by itself.',
+        ],
+        cta: { label: 'Open Wi-Fi setup', to: '/wifi-setup' },
+      },
+      {
         q: 'The readings look wrong (e.g. soil stuck at 0%)',
         a: [
           '0% means the probe is reading dry — in air, or the tip isn’t in moist soil. Push it into damp soil and it climbs.',

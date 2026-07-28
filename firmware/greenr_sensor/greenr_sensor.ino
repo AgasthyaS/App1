@@ -15,9 +15,15 @@
  *  the cloud stays current, then reverts to BLE when a phone reappears.
  *
  *  Setup is Ring-style: plug in → open the Greenr app → "Find my sensor" → pick
- *  home WiFi and type the password IN THE APP → done. The sensor advertises the
- *  provisioning service only while it has no saved WiFi; WiFi is remembered
- *  across deep sleep, so setup is a one-time step.
+ *  home WiFi and type the password IN THE APP → done. WiFi is remembered across
+ *  deep sleep, so setup is a one-time step.
+ *
+ *  MOVING / CHANGING ROUTERS: if the saved network fails WIFI_FAIL_RECOVERY
+ *  times in a row, the sensor automatically reopens Bluetooth setup for a short
+ *  window each wake so the app can point it at the new network. Old credentials
+ *  are kept until new ones are proven, so a brief outage self-heals instead of
+ *  dropping the device into setup mode. Readings keep buffering (and keep
+ *  syncing to a nearby phone over BLE) the whole time, so nothing is lost.
  *
  *  Reads light (LDR), soil (capacitive), temp/humidity (AHT10 on the C3 build,
  *  DHT22 on the legacy dev kit), keeps a running Daily Light Integral, uploads
@@ -231,6 +237,11 @@ RTC_DATA_ATTR uint32_t uptimeSec = 0;            // monotonic seconds across dee
 RTC_DATA_ATTR uint32_t lastPhoneContactSec = 0;  // uptime at last phone ACK (0 = never)
 RTC_DATA_ATTR uint32_t lastUploadSec = 0;        // uptime at last successful upload (0 = never)
 RTC_DATA_ATTR uint32_t lastOtaCheckSec = 0;      // uptime at last OTA check (0 = never)
+// Consecutive failed Wi-Fi joins. After WIFI_FAIL_RECOVERY of them the saved
+// network is presumed gone (moved house, new router, changed password) and the
+// sensor re-opens Bluetooth setup so the app can hand it new credentials.
+RTC_DATA_ATTR uint8_t  wifiFailStreak = 0;
+#define WIFI_FAIL_RECOVERY 3
 
 int clampPct(long v){ return v<0?0:(v>100?100:(int)v); }
 
@@ -454,9 +465,18 @@ void enableBleSecurity(){
   sec->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 }
 
-// Advertise over BLE until the app sends working credentials. Blocks until
-// WiFi is joined and saved (or naps after a 5-minute setup window).
-void runProvisioning(){
+// Advertise over BLE so the app can hand over Wi-Fi credentials.
+//   recovery = false : FIRST setup. Blocks until credentials work, then naps and
+//                      reopens setup next wake — the sensor is useless without them.
+//   recovery = true  : the saved network stopped working (moved house, new
+//                      router, changed password). Opens a SHORT window so the
+//                      user can re-configure, then returns false and carries on
+//                      with normal BLE/Wi-Fi operation so a temporary outage
+//                      doesn't strand the device in setup mode.
+// Returns true when new credentials were accepted and saved.
+bool runProvisioning(bool recovery){
+  provDone = false;
+  credsReady = false;
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   String netsJson = scanNetworksJson();
@@ -505,6 +525,7 @@ void runProvisioning(){
         prefs.end();
         notifyStatus("ok");
         delay(700);                             // let the app read "ok"
+        wifiFailStreak = 0;                     // the new network works
         provDone = true;
       } else {
         notifyStatus("fail");                   // wrong password → let them retry
@@ -512,11 +533,19 @@ void runProvisioning(){
         BLEDevice::startAdvertising();
       }
     }
-    if (millis() - start > 300000UL){ Serial.println("prov window closed"); goToSleep(300); }
+    // Recovery windows are short so a brief router outage can't strand the
+    // sensor in setup mode; first-time setup waits the full five minutes.
+    if (millis() - start > (recovery ? 90000UL : 300000UL)){
+      Serial.println("prov window closed");
+      BLEDevice::deinit(true);
+      if (recovery) return false;               // carry on with normal operation
+      goToSleep(300);                           // no Wi-Fi ever set — nap, reopen setup
+    }
     esp_task_wdt_reset();                          // stay alive during the long wait
     delay(100);
   }
   BLEDevice::deinit(true);                       // release BLE; WiFi is up + saved
+  return true;
 }
 // =====================================================================
 
@@ -639,8 +668,22 @@ void setup(){
 
   bool justProvisioned = false;
   if (!savedSsid.length()){
-    runProvisioning();               // blocks until Wi-Fi is joined + saved (Wi-Fi now up)
+    // First-time setup: blocks until Wi-Fi is joined + saved (Wi-Fi now up).
+    runProvisioning(false);
     justProvisioned = true;
+  } else if (wifiFailStreak >= WIFI_FAIL_RECOVERY){
+    // The saved network has failed repeatedly — most likely the sensor moved to
+    // a new home, the router changed, or the password was updated. Re-open
+    // Bluetooth setup so the app can hand over new credentials. The old ones are
+    // KEPT until new ones are proven, so a temporary outage self-heals.
+    Serial.printf("Wi-Fi failed %u times — reopening Bluetooth setup.\n", wifiFailStreak);
+    if (runProvisioning(true)){
+      prefs.begin("greenr", true);
+      savedSsid = prefs.getString("ssid", "");
+      savedPass = prefs.getString("pass", "");
+      prefs.end();
+      justProvisioned = true;        // new network is live — upload straight away
+    }
   }
 
   initSensors();
@@ -665,11 +708,19 @@ void setup(){
     // or no phone seen for WIFI_FALLBACK_S (they're away).
     bool useWifi = neverSynced || bufferPressure || (!phoneSynced && !phoneCovering);
 
-    if (useWifi && tryConnect(savedSsid, savedPass, 20000)){
-      configTime(0, 0, "pool.ntp.org"); delay(600);
-      uploadBufferWifi();
-      maybeCheckOta();
-    } else if (!useWifi){
+    if (useWifi){
+      if (tryConnect(savedSsid, savedPass, WIFI_CONNECT_MS)){
+        wifiFailStreak = 0;                      // network is healthy again
+        configTime(0, 0, "pool.ntp.org"); delay(600);
+        uploadBufferWifi();
+        maybeCheckOta();
+      } else if (wifiFailStreak < 255) {
+        // Count the miss. Enough of them and the next wake reopens Bluetooth
+        // setup so the sensor can be pointed at a different network.
+        wifiFailStreak++;
+        Serial.printf("Wi-Fi join failed (%u in a row). Readings stay buffered.\n", wifiFailStreak);
+      }
+    } else {
       Serial.println("Covered by a nearby phone — skipping Wi-Fi (battery saved).");
     }
   }

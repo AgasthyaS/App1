@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import Breathing from '@/components/greenr/Breathing';
 import CameraCapture from '@/components/greenr/CameraCapture';
+import { LogFab } from '@/components/greenr/LogFab';
 import PlantAvatar from '@/components/greenr/PlantAvatar';
 import { Card, Chip, GButton, Hairline, SectionHeader } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
@@ -210,7 +211,6 @@ export default function PlantDetail() {
   const [renameText, setRenameText] = useState('');
   const [photoAdded, setPhotoAdded] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
-  const [fabOpen, setFabOpen] = useState(false);
 
   const spot = useMemo(() => spots.find((s) => s.id === plant?.spotId), [spots, plant]);
   const sensor = useMemo(() => sensors.find((s) => s.id === plant?.sensorId), [sensors, plant]);
@@ -1725,79 +1725,24 @@ export default function PlantDetail() {
       )}
 
       {/* ── Log FAB: one unmissable button, every loggable action inside ── */}
-      {fabOpen && (
-        <Pressable
-          onPress={() => setFabOpen(false)}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.55)' }}
-        />
-      )}
-      <View style={{ position: 'absolute', right: 16, bottom: insets.bottom + 18, alignItems: 'flex-end' }}>
-        {fabOpen && (
-          <View style={{ marginBottom: 12, gap: 8, alignItems: 'flex-end' }}>
-            {(
-              [
-                { icon: '💧', label: 'Log watering', run: () => setWaterOpen(true) },
-                { icon: '🧪', label: 'Log fertilizing', run: () => logCare(plant.id, 'Fertilized (logged)') },
-                { icon: '💨', label: 'Log misting', run: () => logCare(plant.id, 'Misted (logged)') },
-                { icon: '✂️', label: 'Log pruning', run: () => logCare(plant.id, 'Pruned (logged)') },
-                { icon: '🪴', label: 'Log repotting', run: () => logCare(plant.id, 'Repotted (logged)') },
-                { icon: '📷', label: photoAdded ? 'Photo added ✓' : 'Add a photo', run: () => setShowCamera(true) },
-                { icon: '📈', label: 'Log growth', run: () => router.push(`/growth/${plant.id}` as any) },
-                { icon: '🔍', label: settings.plus ? 'Diagnose (photo-check)' : 'Diagnose · Greenr+', run: openDiagnose },
-              ] as { icon: string; label: string; run: () => void }[]
-            ).map((a) => (
-              <Pressable
-                key={a.label}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-                  setFabOpen(false);
-                  a.run();
-                }}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 10,
-                  minHeight: 46,
-                  paddingLeft: 16,
-                  paddingRight: 14,
-                  borderRadius: 23,
-                  backgroundColor: dark.surface2,
-                  borderWidth: 1,
-                  borderColor: dark.hairline,
-                }}
-              >
-                <Text style={[type.body, { color: dark.ink }]}>{a.label}</Text>
-                <Text style={{ fontSize: 18 }}>{a.icon}</Text>
-              </Pressable>
-            ))}
-          </View>
-        )}
-        <Pressable
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-            setFabOpen(!fabOpen);
-          }}
-          style={{
-            width: 60,
-            height: 60,
-            borderRadius: 30,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: accent.verdant,
-            shadowColor: '#000',
-            shadowOpacity: 0.35,
-            shadowRadius: 10,
-            shadowOffset: { width: 0, height: 4 },
-            elevation: 8,
-          }}
-        >
-          <Ionicons name={fabOpen ? 'close' : 'add'} size={30} color="#08110B" />
-        </Pressable>
-        {!fabOpen && (
-          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, textAlign: 'center', alignSelf: 'center' }]}>
-            Log
-          </Text>
-        )}
+      <View
+        style={{ position: 'absolute', right: 16, bottom: insets.bottom + 18, left: 0, top: 0 }}
+        pointerEvents="box-none"
+      >
+        <View style={{ position: 'absolute', right: 0, bottom: 0 }}>
+          <LogFab
+            actions={[
+              { icon: '💧', label: 'Log watering', run: () => setWaterOpen(true) },
+              { icon: '🧪', label: 'Log fertilizing', run: () => logCare(plant.id, 'Fertilized (logged)') },
+              { icon: '💨', label: 'Log misting', run: () => logCare(plant.id, 'Misted (logged)') },
+              { icon: '✂️', label: 'Log pruning', run: () => logCare(plant.id, 'Pruned (logged)') },
+              { icon: '🪴', label: 'Log repotting', run: () => logCare(plant.id, 'Repotted (logged)') },
+              { icon: '📷', label: photoAdded ? 'Photo added ✓' : 'Add a photo', run: () => setShowCamera(true) },
+              { icon: '📈', label: 'Log growth', run: () => router.push(`/growth/${plant.id}` as any) },
+              { icon: '🔍', label: settings.plus ? 'Diagnose (photo-check)' : 'Diagnose · Greenr+', run: openDiagnose },
+            ]}
+          />
+        </View>
       </View>
     </View>
   );
