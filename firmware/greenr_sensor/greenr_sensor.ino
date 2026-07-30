@@ -59,7 +59,11 @@
 #include <time.h>
 
 // ---- Reliability tunables ----
-#define WDT_TIMEOUT_S        45   // if a wake cycle hangs this long, reset & retry next wake
+// The watchdog must outlast a LEGITIMATE slow cycle (20 s Wi-Fi join + 12 s
+// clock sync + a dozen TLS uploads), or it reboots the device mid-upload and it
+// never gets anything out. Every long-running loop feeds it; this is the
+// backstop for a genuine hang.
+#define WDT_TIMEOUT_S        180
 #define WIFI_CONNECT_MS      20000
 #define HTTP_TIMEOUT_MS      12000
 
@@ -334,8 +338,13 @@ bool postReadingWifi(const Reading& r, uint32_t secsAgo){
     int wi = resp.indexOf("wake_seconds");
     if (wi >= 0){ int c = resp.indexOf(':', wi); wakeSeconds = resp.substring(c+1).toInt(); }
     if (wakeSeconds < 5 || wakeSeconds > 86400) wakeSeconds = 10800;
+    if (code < 200 || code >= 300)
+      Serial.printf("Server rejected the reading (HTTP %d): %s\n", code, resp.c_str());
   } else {
-    Serial.printf("HTTPS failed (%d) — will retry next wake\n", code);
+    // Negative codes are client-side: -1 connection refused, -5 connection lost.
+    // The usual cause here is a TLS failure (wrong clock or stale root CA).
+    Serial.printf("HTTPS failed (%d: %s). Clock=%lu. Will retry next wake.\n",
+                  code, HTTPClient::errorToString(code).c_str(), (unsigned long)time(nullptr));
   }
   https.end();
   return code >= 200 && code < 300;
@@ -382,19 +391,27 @@ void maybeCheckOta(){
   esp_task_wdt_add(NULL);
 }
 
-// Flush the whole buffer over Wi-Fi (oldest first), clearing what uploads OK.
+// Flush the buffer over Wi-Fi (oldest first), clearing what uploads OK.
+// Each reading is its own TLS handshake, so a full 48-reading backlog would keep
+// the radio up for minutes; MAX_UPLOADS_PER_WAKE bounds one wake's work and the
+// rest goes out next cycle. Feeds the watchdog between posts.
+#define MAX_UPLOADS_PER_WAKE 12
 void uploadBufferWifi(){
   uint16_t sent = 0;
-  for (uint16_t i = 0; i < bufCount; i++){
+  uint16_t limit = bufCount < MAX_UPLOADS_PER_WAKE ? bufCount : MAX_UPLOADS_PER_WAKE;
+  for (uint16_t i = 0; i < limit; i++){
+    esp_task_wdt_reset();                          // each POST can take seconds
     uint32_t secsAgo = uptimeSec - buf[i].atUptime;
-    if (!postReadingWifi(buf[i], secsAgo)) break;   // stop on first failure; retry next cycle
+    if (!postReadingWifi(buf[i], secsAgo)) break;  // stop on first failure; retry next cycle
     sent++;
   }
   if (sent){
     memmove(&buf[0], &buf[sent], sizeof(Reading)*(bufCount-sent));
     bufCount -= sent;
     lastUploadSec = uptimeSec;
-    Serial.printf("Wi-Fi uploaded %d readings\n", sent);
+    Serial.printf("Wi-Fi uploaded %d readings (%d still buffered)\n", sent, bufCount);
+  } else {
+    Serial.printf("Uploaded nothing this wake (%d readings still buffered)\n", bufCount);
   }
 }
 
@@ -417,12 +434,46 @@ void notifyStatus(const char* s){
 }
 
 // Try to join a network, blocking up to timeoutMs. Returns true on success.
+// Feeds the watchdog while it waits — this loop can run 20 s, and without
+// feeding it the WDT fires mid-connect and reboots the device in a loop.
 bool tryConnect(const String& ssid, const String& pass, uint32_t timeoutMs){
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
   uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) delay(250);
-  return WiFi.status() == WL_CONNECTED;
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs){
+    esp_task_wdt_reset();
+    delay(250);
+  }
+  bool ok = WiFi.status() == WL_CONNECTED;
+  Serial.printf("Wi-Fi %s (%lu ms)\n", ok ? "connected" : "FAILED", (unsigned long)(millis() - start));
+  return ok;
+}
+
+/**
+ * Set the clock from NTP and WAIT for it to actually land.
+ *
+ * This is REQUIRED before any HTTPS request: validating the Supabase
+ * certificate compares its validity dates against the system clock, and a
+ * freshly powered board starts in 1970 — so the certificate looks "not yet
+ * valid" and EVERY upload fails with a TLS error. (The old firmware used
+ * setInsecure(), which skipped validation and therefore never needed the time;
+ * that is why uploads stopped when certificate checking was turned on.)
+ *
+ * The RTC keeps running through deep sleep, so this normally only has to do
+ * real work on the first boot after power-up.
+ */
+bool syncClock(uint32_t timeoutMs = 12000){
+  if (time(nullptr) > 1700000000UL) return true;      // already sane (kept across deep sleep)
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  uint32_t start = millis();
+  while (time(nullptr) < 1700000000UL && millis() - start < timeoutMs){
+    esp_task_wdt_reset();
+    delay(250);
+  }
+  bool ok = time(nullptr) > 1700000000UL;
+  if (ok) Serial.printf("Clock synced (%lu ms)\n", (unsigned long)(millis() - start));
+  else    Serial.println("Clock NOT synced — HTTPS will fail certificate checks. Check the network allows NTP (UDP 123).");
+  return ok;
 }
 
 // Receives "ssid\npassword" from the app.
@@ -641,7 +692,11 @@ void initSensors(){
 }
 
 void setup(){
-  Serial.begin(115200); delay(50);
+  Serial.begin(115200); delay(300);
+  // Boot banner — the first thing to check when a sensor goes quiet. `reset`
+  // repeatedly showing TASK_WDT or PANIC means it is rebooting, not sleeping.
+  Serial.printf("\n=== greenr v%d boot | reset=%d | buffered=%u | wifiFails=%u ===\n",
+                FW_VERSION, (int)esp_reset_reason(), bufCount, wifiFailStreak);
 
   // Watchdog: if any part of this wake cycle hangs (Wi-Fi stack lockup, I2C bus
   // stall, TLS stall), the WDT resets the chip — which simply re-enters this
@@ -691,8 +746,9 @@ void setup(){
 
   if (justProvisioned){
     // Fresh setup: Wi-Fi is already connected — upload immediately so the user
-    // sees a reading right away, and sync the clock for DLI day tracking.
-    configTime(0, 0, "pool.ntp.org"); delay(800);
+    // sees a reading right away. The clock MUST be set before HTTPS or the
+    // certificate check fails (see syncClock).
+    syncClock();
     uploadBufferWifi();
     maybeCheckOta();
   } else {
@@ -711,7 +767,7 @@ void setup(){
     if (useWifi){
       if (tryConnect(savedSsid, savedPass, WIFI_CONNECT_MS)){
         wifiFailStreak = 0;                      // network is healthy again
-        configTime(0, 0, "pool.ntp.org"); delay(600);
+        syncClock();                             // required before any HTTPS
         uploadBufferWifi();
         maybeCheckOta();
       } else if (wifiFailStreak < 255) {

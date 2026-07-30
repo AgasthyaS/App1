@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, Pressable, Text, View } from 'react-native';
 
 import { accent, dark, type } from '@/constants/theme';
 
@@ -13,17 +13,20 @@ export interface FabAction {
 
 /**
  * The plant screen's log button. Opening it should feel like the app is
- * unfolding, not popping: the button springs and rotates its + into an ×, the
- * scrim fades, and the actions stagger upward one after another (each with its
- * own spring), so the eye follows the sequence. Closing reverses it quickly.
- * Every press carries a haptic tick so the motion is felt as well as seen.
- * Honours reduced-motion by keeping durations tiny rather than removing states.
+ * unfolding, not popping: the button springs and rotates its + into an ×, and
+ * the actions stagger upward one after another (each with its own spring), so
+ * the eye follows the sequence. Closing reverses it quickly. Every press carries
+ * a haptic tick so the motion is felt as well as seen.
+ *
+ * The page behind is NOT dimmed — the action pills are opaque and legible on
+ * their own, and keeping the plant visible makes the menu feel like part of the
+ * screen rather than a modal over it. A transparent full-screen catcher still
+ * closes the menu on an outside tap.
  */
 export function LogFab({ actions }: { actions: FabAction[] }) {
   const [open, setOpen] = useState(false);
   // Kept mounted through the closing animation so items animate out, not vanish.
   const [visible, setVisible] = useState(false);
-  const { height } = useWindowDimensions();
 
   const progress = useRef(new Animated.Value(0)).current; // 0 closed → 1 open
   const press = useRef(new Animated.Value(0)).current; // 0 idle → 1 pressed
@@ -75,21 +78,14 @@ export function LogFab({ actions }: { actions: FabAction[] }) {
 
   return (
     <>
-      {/* Scrim — fades in with the menu and closes it on tap. */}
+      {/* Invisible catcher: tapping anywhere off the menu closes it. Deliberately
+          NOT dimmed — the page stays fully visible behind the actions. */}
       {visible && (
-        <Animated.View
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: '#000',
-            opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] }),
-          }}
-        >
-          <Pressable style={{ flex: 1 }} onPress={toggle} accessibilityLabel="Close log menu" />
-        </Animated.View>
+        <Pressable
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+          onPress={toggle}
+          accessibilityLabel="Close log menu"
+        />
       )}
 
       <View style={{ alignItems: 'flex-end' }} pointerEvents="box-none">
