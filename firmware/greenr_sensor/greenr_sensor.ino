@@ -24,6 +24,12 @@
  *  customer can put batteries in, place the sensor, and open the app whenever
  *  they like. Unplugging and replugging always returns it to the fast cadence.
  *
+ *  STATUS LIGHT (STATUS_LED_PIN, default GPIO2 = the onboard LED on most kits):
+ *    slow blink = waiting for setup, open the app   |  steady = talking to Wi-Fi
+ *    fast blink = hold-to-reset in progress         |  solid 1.5 s = success
+ *  Optional SETUP BUTTON (SETUP_BTN_PIN, off by default) reproduces Ring's reset
+ *  gesture: hold it 3 s while awake to forget Wi-Fi and return to setup mode.
+ *
  *  MOVING / CHANGING ROUTERS: if the saved network fails WIFI_FAIL_RECOVERY
  *  times in a row, the sensor automatically reopens Bluetooth setup for a short
  *  window each wake so the app can point it at the new network. Old credentials
@@ -267,11 +273,84 @@ RTC_DATA_ATTR uint8_t  wifiFailStreak = 0;
 // RTC memory is wiped by a power cycle, so UNPLUGGING AND REPLUGGING always
 // returns the device to the snappy phase — a natural "I'm setting it up now"
 // gesture we can tell users about.
+// ---------- STATUS LIGHT + SETUP BUTTON (Ring-style physical feedback) ----------
+// A sensor with no light is a black box: you cannot tell "waiting for setup"
+// from "connected" from "dead". The LED makes the state visible the way a Ring
+// device does.
+//   slow blink  = waiting for setup (open the app)
+//   fast blink  = connecting / uploading
+//   solid 2 s   = success
+// Most ESP32 dev kits have an LED on GPIO2. Set to -1 if yours doesn't (nothing
+// breaks either way — an unused pin just toggles harmlessly).
+#define STATUS_LED_PIN       2
+
+// OPTIONAL hardware reset button, like Ring's setup button. Wire a momentary
+// button between the chosen pin and GND, then hold it while the sensor is awake
+// to forget Wi-Fi and return to setup mode.
+//   -1  = no button fitted (default; the automatic recovery already covers
+//         moving house, so a button is a convenience, not a requirement)
+//   33  = a good free RTC-capable pin on this build (34/39/19/21/22 are taken)
+// Do NOT use GPIO0 — it is the boot-mode strapping pin and holding it low at
+// power-on drops the chip into firmware-download mode instead.
+#define SETUP_BTN_PIN        -1
+#define SETUP_BTN_HOLD_MS    3000
+
 #define SETUP_WINDOW_MS      45000    // how long each Bluetooth offer lasts
 #define SETUP_FAST_TRIES     20       // tries kept on the snappy cadence
 #define SETUP_NAP_FAST_S     30
 #define SETUP_NAP_SLOW_S     300
 RTC_DATA_ATTR uint16_t setupAttempts = 0;
+
+// ---- Status light ----------------------------------------------------------
+// ledTick() is non-blocking: call it inside the loops that already run (they
+// delay in small steps anyway) and it toggles on its own schedule.
+void ledInit(){
+  if (STATUS_LED_PIN >= 0){ pinMode(STATUS_LED_PIN, OUTPUT); digitalWrite(STATUS_LED_PIN, LOW); }
+}
+void ledSet(bool on){
+  if (STATUS_LED_PIN >= 0) digitalWrite(STATUS_LED_PIN, on ? HIGH : LOW);
+}
+void ledTick(uint32_t periodMs){
+  if (STATUS_LED_PIN < 0) return;
+  ledSet(((millis() / periodMs) % 2) == 0);
+}
+/** Solid for a beat — used to confirm success in a way you can see across a room. */
+void ledSuccess(){
+  if (STATUS_LED_PIN < 0) return;
+  ledSet(true); delay(1500); ledSet(false);
+}
+
+/** True while the optional setup button is held down (active-low to GND). */
+bool setupButtonHeld(){
+  if (SETUP_BTN_PIN < 0) return false;
+  return digitalRead(SETUP_BTN_PIN) == LOW;
+}
+
+/**
+ * Ring-style manual reset: hold the setup button and the sensor forgets its
+ * Wi-Fi and returns to setup mode. Only reachable while the device is awake,
+ * which is every wake cycle — and the LED confirms it took.
+ */
+bool checkSetupButton(Preferences& p){
+  if (SETUP_BTN_PIN < 0 || !setupButtonHeld()) return false;
+  Serial.println("Setup button held — keep holding to forget Wi-Fi...");
+  uint32_t start = millis();
+  while (setupButtonHeld()){
+    ledTick(120);                                   // fast blink = "keep holding"
+    esp_task_wdt_reset();
+    delay(50);
+    if (millis() - start >= SETUP_BTN_HOLD_MS){
+      p.begin("greenr", false);
+      p.remove("ssid"); p.remove("pass");
+      p.end();
+      Serial.println("Wi-Fi forgotten — returning to setup mode.");
+      ledSuccess();
+      return true;
+    }
+  }
+  ledSet(false);
+  return false;
+}
 
 int clampPct(long v){ return v<0?0:(v>100?100:(int)v); }
 
@@ -595,6 +674,7 @@ bool runProvisioning(bool recovery){
     if (credsReady){
       credsReady = false;
       notifyStatus("connecting");
+      ledSet(true);                             // steady while it joins
       adv->stop();                              // free the radio for WiFi
       bool ok = tryConnect(pendingSsid, pendingPass, 15000);
       if (ok){
@@ -606,8 +686,10 @@ bool runProvisioning(bool recovery){
         delay(700);                             // let the app read "ok"
         wifiFailStreak = 0;                     // the new network works
         provDone = true;
+        ledSuccess();                           // visible "you're connected"
       } else {
         notifyStatus("fail");                   // wrong password → let them retry
+        ledSet(false);
         WiFi.disconnect();
         BLEDevice::startAdvertising();
       }
@@ -617,8 +699,10 @@ bool runProvisioning(bool recovery){
     if (millis() - start > (recovery ? 90000UL : SETUP_WINDOW_MS)){
       Serial.println("Setup window closed — nobody connected. Will offer again shortly.");
       BLEDevice::deinit(true);
+      ledSet(false);
       return false;
     }
+    ledTick(700);                                  // slow blink = waiting for the app
     esp_task_wdt_reset();                          // stay alive during the long wait
     delay(100);
   }
@@ -740,6 +824,12 @@ void setup(){
   // Power the sensors FIRST — their power LEDs double as a "wiring is good"
   // indicator even before Wi-Fi is configured.
   if (SENSOR_PWR >= 0){ pinMode(SENSOR_PWR, OUTPUT); digitalWrite(SENSOR_PWR, HIGH); }
+  ledInit();
+  if (SETUP_BTN_PIN >= 0) pinMode(SETUP_BTN_PIN, INPUT_PULLUP);
+
+  // Held setup button = "forget my Wi-Fi and start over" (Ring's reset gesture).
+  bool forced = checkSetupButton(prefs);
+  if (forced) setupAttempts = 0;                 // treat it as a fresh setup
 
   // Provisioning check: saved Wi-Fi creds survive deep sleep, so this only runs
   // on first setup or a router change.
@@ -811,9 +901,11 @@ void setup(){
     if (useWifi){
       if (tryConnect(savedSsid, savedPass, WIFI_CONNECT_MS)){
         wifiFailStreak = 0;                      // network is healthy again
+        ledSet(true);                            // lit while it talks to the cloud
         syncClock();                             // required before any HTTPS
         uploadBufferWifi();
         maybeCheckOta();
+        ledSet(false);
       } else if (wifiFailStreak < 255) {
         // Count the miss. Enough of them and the next wake reopens Bluetooth
         // setup so the sensor can be pointed at a different network.
