@@ -16,12 +16,20 @@ const TOPICS: { group: string; items: Topic[] }[] = [
       {
         q: "The app can't find my sensor over Bluetooth",
         a: [
-          'Make sure the sensor is plugged in and within a few feet of your phone.',
-          'It only advertises over Bluetooth for its first few minutes — unplug it and plug it back in to restart that window.',
+          'Make sure the sensor has power and is within a few feet of your phone.',
+          'A brand-new sensor offers itself in short bursts rather than continuously, so it can take up to ~30 seconds to appear. Unplugging and plugging it back in wakes it into fast setup mode.',
           'On the web, use Chrome or Edge (Safari can’t do in-app Bluetooth). On iPhone, use the Greenr app.',
-          'When your phone asks to pair, enter the passkey printed on the sensor.',
+          'If your phone asks to pair, accept — that’s the encryption that protects your Wi-Fi password.',
         ],
         cta: { label: 'Set up Wi-Fi', to: '/wifi-setup' },
+      },
+      {
+        q: 'Do I have to set it up right when I power it on?',
+        a: [
+          'No. The sensor waits for you — it keeps taking readings and keeps offering Bluetooth setup indefinitely.',
+          'It checks often for the first half hour (so setup feels instant if you do it right away), then settles into a low-power rhythm while staying findable.',
+          'Whenever you are ready, open Wi-Fi setup and tap “Find my sensor”. Readings it took before setup upload too, with their real timestamps.',
+        ],
       },
       {
         q: 'It won’t join my Wi-Fi',

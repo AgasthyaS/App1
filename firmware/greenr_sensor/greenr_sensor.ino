@@ -18,6 +18,12 @@
  *  home WiFi and type the password IN THE APP → done. WiFi is remembered across
  *  deep sleep, so setup is a one-time step.
  *
+ *  SETUP IS PATIENT — the device never demands attention at power-on. Until it
+ *  has WiFi it keeps taking readings and re-offering a Bluetooth setup window
+ *  (~every 30 s for the first half hour, then every ~5 min, forever). So a
+ *  customer can put batteries in, place the sensor, and open the app whenever
+ *  they like. Unplugging and replugging always returns it to the fast cadence.
+ *
  *  MOVING / CHANGING ROUTERS: if the saved network fails WIFI_FAIL_RECOVERY
  *  times in a row, the sensor automatically reopens Bluetooth setup for a short
  *  window each wake so the app can point it at the new network. Old credentials
@@ -246,6 +252,26 @@ RTC_DATA_ATTR uint32_t lastOtaCheckSec = 0;      // uptime at last OTA check (0 
 // sensor re-opens Bluetooth setup so the app can hand it new credentials.
 RTC_DATA_ATTR uint8_t  wifiFailStreak = 0;
 #define WIFI_FAIL_RECOVERY 3
+
+// ---------- PATIENT SETUP MODE (before Wi-Fi is ever configured) ----------
+// A customer powers the device on, puts it in a pot, and opens the app whenever
+// they get around to it — maybe in a minute, maybe tomorrow. So an unconfigured
+// sensor NEVER blocks waiting for the app. It takes a reading, advertises over
+// Bluetooth for a window, naps, and repeats — staying findable indefinitely.
+//
+// The cadence backs off so it is snappy exactly when someone is likely setting
+// up, then sips power afterwards:
+//   first ~20 tries (~30 min) : offer every ~30 s   — feels instant
+//   after that               : offer every ~5 min  — still findable, low drain
+//
+// RTC memory is wiped by a power cycle, so UNPLUGGING AND REPLUGGING always
+// returns the device to the snappy phase — a natural "I'm setting it up now"
+// gesture we can tell users about.
+#define SETUP_WINDOW_MS      45000    // how long each Bluetooth offer lasts
+#define SETUP_FAST_TRIES     20       // tries kept on the snappy cadence
+#define SETUP_NAP_FAST_S     30
+#define SETUP_NAP_SLOW_S     300
+RTC_DATA_ATTR uint16_t setupAttempts = 0;
 
 int clampPct(long v){ return v<0?0:(v>100?100:(int)v); }
 
@@ -516,15 +542,17 @@ void enableBleSecurity(){
   sec->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 }
 
-// Advertise over BLE so the app can hand over Wi-Fi credentials.
-//   recovery = false : FIRST setup. Blocks until credentials work, then naps and
-//                      reopens setup next wake — the sensor is useless without them.
+// Advertise over BLE so the app can hand over Wi-Fi credentials, for ONE window.
+// Returns true if credentials were accepted, false if the window simply expired.
+//
+// It never blocks indefinitely and never sleeps by itself — the caller decides
+// what to do next. That is what lets a customer power the device on, walk away,
+// and set it up whenever they get to the app: the sensor just keeps offering
+// itself at a sensible cadence instead of demanding attention right now.
+//   recovery = false : first-time setup window.
 //   recovery = true  : the saved network stopped working (moved house, new
-//                      router, changed password). Opens a SHORT window so the
-//                      user can re-configure, then returns false and carries on
-//                      with normal BLE/Wi-Fi operation so a temporary outage
-//                      doesn't strand the device in setup mode.
-// Returns true when new credentials were accepted and saved.
+//                      router, changed password) — a shorter re-configure window
+//                      so a brief outage can't strand the device in setup mode.
 bool runProvisioning(bool recovery){
   provDone = false;
   credsReady = false;
@@ -584,13 +612,12 @@ bool runProvisioning(bool recovery){
         BLEDevice::startAdvertising();
       }
     }
-    // Recovery windows are short so a brief router outage can't strand the
-    // sensor in setup mode; first-time setup waits the full five minutes.
-    if (millis() - start > (recovery ? 90000UL : 300000UL)){
-      Serial.println("prov window closed");
+    // Window expired with nobody connecting. Hand control back to the caller —
+    // never sleep from in here, so setup can be retried on a sane schedule.
+    if (millis() - start > (recovery ? 90000UL : SETUP_WINDOW_MS)){
+      Serial.println("Setup window closed — nobody connected. Will offer again shortly.");
       BLEDevice::deinit(true);
-      if (recovery) return false;               // carry on with normal operation
-      goToSleep(300);                           // no Wi-Fi ever set — nap, reopen setup
+      return false;
     }
     esp_task_wdt_reset();                          // stay alive during the long wait
     delay(100);
@@ -721,11 +748,31 @@ void setup(){
   String savedPass = prefs.getString("pass", "");
   prefs.end();
 
+  initSensors();
+  readSensorsIntoBuffer();           // always measure — even before it's set up,
+                                     // so history exists from the moment of power-on
+
   bool justProvisioned = false;
   if (!savedSsid.length()){
-    // First-time setup: blocks until Wi-Fi is joined + saved (Wi-Fi now up).
-    runProvisioning(false);
-    justProvisioned = true;
+    // NOT SET UP YET. Offer a Bluetooth setup window, then nap and offer again.
+    // Never blocks — the user can open the app whenever they like.
+    setupAttempts++;
+    Serial.printf("Not set up yet (offer #%u). Open Greenr and tap \"Find my sensor\".\n", setupAttempts);
+    if (runProvisioning(false)){
+      prefs.begin("greenr", true);
+      savedSsid = prefs.getString("ssid", "");
+      savedPass = prefs.getString("pass", "");
+      prefs.end();
+      setupAttempts = 0;
+      justProvisioned = true;
+    } else {
+      // Nobody connected this time. Nap and try again — snappy at first, then
+      // backing off to save power while staying discoverable indefinitely.
+      int nap = setupAttempts <= SETUP_FAST_TRIES ? SETUP_NAP_FAST_S : SETUP_NAP_SLOW_S;
+      Serial.printf("Next Bluetooth offer in %d s. (Unplug and replug for fast setup.)\n", nap);
+      esp_task_wdt_delete(NULL);
+      goToSleep(nap);
+    }
   } else if (wifiFailStreak >= WIFI_FAIL_RECOVERY){
     // The saved network has failed repeatedly — most likely the sensor moved to
     // a new home, the router changed, or the password was updated. Re-open
@@ -740,9 +787,6 @@ void setup(){
       justProvisioned = true;        // new network is live — upload straight away
     }
   }
-
-  initSensors();
-  readSensorsIntoBuffer();           // always read; upload path decided below
 
   if (justProvisioned){
     // Fresh setup: Wi-Fi is already connected — upload immediately so the user

@@ -27,7 +27,7 @@ import {
  */
 
 const MANUAL_STEPS: { icon: string; text: string }[] = [
-  { icon: 'power-outline', text: 'Plug the sensor in and keep it near you. While it has no Wi-Fi saved, it waits in Bluetooth setup mode for a few minutes each time it wakes.' },
+  { icon: 'power-outline', text: 'Give the sensor power and keep it near you. Until it has Wi-Fi it keeps offering itself over Bluetooth — there’s no time limit, so set it up whenever suits you.' },
   { icon: 'logo-chrome', text: 'Open greenr-app.vercel.app in Chrome or Edge (computer or Android) — those browsers can talk to the sensor over Bluetooth. On iPhone, use the Greenr app.' },
   { icon: 'bluetooth-outline', text: 'Go to Wi-Fi setup there and tap “Find my sensor”, then pick your network and enter its password.' },
   { icon: 'checkmark-circle-outline', text: 'The sensor saves your Wi-Fi permanently and starts reporting — this is a one-time step.' },
@@ -169,7 +169,8 @@ export function WifiSetupFlow({
           Looking for your sensor…
         </Text>
         <Text style={[type.micro, { color: light.inkMuted, marginTop: 8, textAlign: 'center', lineHeight: 16 }]}>
-          Keep it plugged in and close to your phone.
+          Keep it powered and close to your phone. If it doesn’t appear, unplug it and plug it back
+          in — that wakes it into fast setup mode.
         </Text>
       </View>
     );
@@ -275,8 +276,8 @@ export function WifiSetupFlow({
     <View>
       <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Connect it to your Wi-Fi</Text>
       <Text style={[type.body, { color: light.inkMuted, marginTop: 6, lineHeight: 22 }]}>
-        Set it up right here — no switching Wi-Fi networks. Plug the sensor in, keep it close, and
-        we’ll find it over Bluetooth.
+        Set it up right here — no switching Wi-Fi networks. Give the sensor power, keep it close,
+        and we’ll find it over Bluetooth. There’s no rush: it stays findable until you’re ready.
       </Text>
 
       <Card mode="light" style={{ marginTop: 16, gap: 10 }}>
