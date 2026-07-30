@@ -26,11 +26,56 @@ export function startWifiSetup(): Promise<WifiSetupSession> {
   return startWeb();
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The device from the previous session. Chrome keeps GATT state per device, so
+ * starting a second setup without tearing the first one down throws
+ * "Connection already in progress" and the retry silently fails.
+ */
+let activeDevice: any = null;
+
+/** Drop any previous link and give the browser a moment to release it. */
+async function releaseActive(): Promise<void> {
+  if (!activeDevice) return;
+  try {
+    if (activeDevice.gatt?.connected) activeDevice.gatt.disconnect();
+  } catch {
+    /* already gone */
+  }
+  activeDevice = null;
+  await sleep(400); // Chrome needs a beat before it will accept a new connect
+}
+
+/**
+ * Connect, tolerating the two states a retry runs into: a link that is already
+ * open (reuse it) and one that is still tearing down ("already in progress" →
+ * wait and try again).
+ */
+async function connectGatt(device: any): Promise<any> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (device.gatt?.connected) return device.gatt;
+    try {
+      return await device.gatt.connect();
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      const busy = /already in progress|in progress|InvalidState/i.test(msg);
+      if (!busy || attempt === 3) throw e;
+      await sleep(600 * (attempt + 1));
+    }
+  }
+  throw new Error('Could not open a Bluetooth connection to the sensor.');
+}
+
 async function startWeb(): Promise<WifiSetupSession> {
+  await releaseActive(); // never stack a new session on a stale one
+
   const device = await g.navigator.bluetooth.requestDevice({
     filters: [{ services: [PROV_SERVICE] }],
   });
-  const server = await device.gatt.connect();
+  activeDevice = device;
+
+  const server = await connectGatt(device);
   const svc = await server.getPrimaryService(PROV_SERVICE);
 
   const netChar = await svc.getCharacteristic(CHAR_NETWORKS);
@@ -60,6 +105,7 @@ async function startWeb(): Promise<WifiSetupSession> {
       } catch {
         /* already gone */
       }
+      if (activeDevice === device) activeDevice = null;
     },
   };
 }

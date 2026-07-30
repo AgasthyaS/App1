@@ -123,6 +123,12 @@ export function WifiSetupFlow({
 
   const search = async () => {
     setErr(null);
+    setStatus(null);
+    // Always tear down a previous link first — a lingering one makes the browser
+    // refuse the next connect with "Connection already in progress".
+    try { sessionRef.current?.disconnect(); } catch { /* already gone */ }
+    sessionRef.current = null;
+    setSession(null);
     setPhase('searching');
     try {
       const s = await startWifiSetup();
@@ -136,7 +142,12 @@ export function WifiSetupFlow({
       if (isChooserCancelled(e)) {
         setPhase('intro'); // user closed the picker — no error, just back
       } else {
-        setErr(e instanceof Error ? e.message : 'Could not reach the sensor. Make sure it’s plugged in and nearby.');
+        const msg = e instanceof Error ? e.message : '';
+        setErr(
+          /in progress|InvalidState/i.test(msg)
+            ? 'The last Bluetooth connection is still closing. Wait a few seconds and tap “Find my sensor” again — or reload this page if it keeps happening.'
+            : msg || 'Could not reach the sensor. Make sure it has power and is nearby.',
+        );
         setPhase('intro');
       }
     }
@@ -276,11 +287,10 @@ export function WifiSetupFlow({
         <GButton
           title="Try Wi-Fi setup again"
           kind="secondary"
-          onPress={() => {
-            setStatus(null);
-            setErr(null);
-            setPhase(session ? 'form' : 'intro');
-          }}
+          // Start over from a clean link — the old one is almost certainly dead
+          // (the sensor dropped it when it switched to Wi-Fi), and reusing it is
+          // what produces "Connection already in progress".
+          onPress={search}
           style={{ marginTop: 10 }}
         />
       </View>
