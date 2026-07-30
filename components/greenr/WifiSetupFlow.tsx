@@ -33,19 +33,29 @@ const MANUAL_STEPS: { icon: string; text: string }[] = [
   { icon: 'checkmark-circle-outline', text: 'The sensor saves your Wi-Fi permanently and starts reporting — this is a one-time step.' },
 ];
 
-type Phase = 'intro' | 'searching' | 'form' | 'sending' | 'success' | 'manual';
+type Phase = 'intro' | 'searching' | 'form' | 'sending' | 'success' | 'unsure' | 'manual';
+
+/** How long to wait for confirmation before offering a way forward. */
+const CONFIRM_TIMEOUT_MS = 45000;
 
 export function WifiSetupFlow({
   onDone,
   doneCta,
   onSkip,
   skipLabel,
+  verify,
 }: {
   onDone: () => void;
   /** Label of the confirm button on the manual/instruction path. */
   doneCta: string;
   onSkip?: () => void;
   skipLabel?: string;
+  /**
+   * Optional independent success check — resolves true once the sensor has
+   * actually reported to the cloud. Far more reliable than the Bluetooth "ok",
+   * which is frequently lost when the sensor powers up its Wi-Fi radio.
+   */
+  verify?: () => Promise<boolean>;
 }) {
   // No in-app Bluetooth here (e.g. iOS Safari) → go straight to the manual steps.
   const [phase, setPhase] = useState<Phase>(isWifiSetupSupported ? 'intro' : 'manual');
@@ -75,6 +85,41 @@ export function WifiSetupFlow({
       setPhase('form');
     }
   }, [status, onDone]);
+
+  /**
+   * While waiting, confirm success the reliable way — by asking the cloud
+   * whether the sensor has reported — and NEVER wait forever. The Bluetooth
+   * "ok" is often lost because bringing up Wi-Fi drops the BLE link, which
+   * previously left this screen spinning with no way out.
+   */
+  useEffect(() => {
+    if (phase !== 'sending') return;
+    let alive = true;
+    const startedAt = Date.now();
+
+    const poll = setInterval(async () => {
+      if (!alive) return;
+      if (verify) {
+        try {
+          if (await verify()) {
+            if (!alive) return;
+            sessionRef.current?.disconnect();
+            setPhase('success');
+            setTimeout(onDone, 1200);
+            return;
+          }
+        } catch {
+          // network hiccup — keep waiting, the timeout below is the backstop
+        }
+      }
+      if (alive && Date.now() - startedAt > CONFIRM_TIMEOUT_MS) setPhase('unsure');
+    }, 3000);
+
+    return () => {
+      alive = false;
+      clearInterval(poll);
+    };
+  }, [phase, verify, onDone]);
 
   const search = async () => {
     setErr(null);
@@ -185,8 +230,59 @@ export function WifiSetupFlow({
           Connecting your sensor…
         </Text>
         <Text style={[type.body, { color: light.inkMuted, marginTop: 8, textAlign: 'center' }]}>
-          Handing it the Wi-Fi and waiting for it to join. This takes a few seconds.
+          Handing it the Wi-Fi and waiting for it to join, then checking that it reached the
+          cloud. This usually takes 10–30 seconds.
         </Text>
+        <GButton
+          title="Continue anyway"
+          kind="ghost"
+          mode="light"
+          onPress={() => {
+            sessionRef.current?.disconnect();
+            onDone();
+          }}
+          style={{ marginTop: 22 }}
+        />
+      </View>
+    );
+  }
+
+  // ── Couldn't confirm: never leave the user stuck ──
+  if (phase === 'unsure') {
+    return (
+      <View style={{ paddingTop: 20 }}>
+        <View style={{ alignItems: 'center' }}>
+          <Ionicons name="help-circle-outline" size={48} color={accent.sunbeamText} />
+          <Text style={[type.ritualTitle, { color: light.ink, marginTop: 12, textAlign: 'center' }]}>
+            Couldn’t confirm it yet
+          </Text>
+        </View>
+        <Text style={[type.body, { color: light.inkMuted, marginTop: 10, lineHeight: 22 }]}>
+          Your sensor may well be connected — the Bluetooth link often drops the moment it powers
+          up its Wi-Fi radio, so we lose the confirmation even when setup worked.
+        </Text>
+        <Text style={[type.body, { color: light.inkMuted, marginTop: 10, lineHeight: 22 }]}>
+          Carry on with setup and check Device health in a few minutes. If it still hasn’t
+          reported, run Wi-Fi setup again and double-check the password.
+        </Text>
+        <GButton
+          title="Continue"
+          onPress={() => {
+            sessionRef.current?.disconnect();
+            onDone();
+          }}
+          style={{ marginTop: 18 }}
+        />
+        <GButton
+          title="Try Wi-Fi setup again"
+          kind="secondary"
+          onPress={() => {
+            setStatus(null);
+            setErr(null);
+            setPhase(session ? 'form' : 'intro');
+          }}
+          style={{ marginTop: 10 }}
+        />
       </View>
     );
   }

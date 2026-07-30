@@ -10,6 +10,7 @@ import { accent, light, type } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
 import {
   assignDeviceToPlant,
+  deviceSeenSince,
   getLatestReading,
   parsePairing,
   registerDevice,
@@ -37,6 +38,9 @@ export default function PairDevice() {
   const [plantId, setPlantId] = useState<string | null>(null);
   const [reading, setReading] = useState<Reading | null>(null);
   const [scanning, setScanning] = useState(false);
+  // When the Wi-Fi step began — anything the device reports after this proves
+  // the new credentials took (rather than an older, pre-setup report).
+  const [wifiStartedAt, setWifiStartedAt] = useState(() => Date.now());
 
   // The camera fires onScan repeatedly while the code is in frame, so a ref
   // (not state, which updates a tick later) guards against claiming twice.
@@ -54,6 +58,7 @@ export default function PairDevice() {
     claiming.current = false;
     if (error) { setError(error); setStep('scan'); return; }
     setDeviceId(parsed.id);
+    setWifiStartedAt(Date.now());     // baseline for confirming the sensor reports
     setStep('wifi');
   };
 
@@ -172,6 +177,10 @@ export default function PairDevice() {
           doneCta="Continue"
           onSkip={() => setStep('assign')}
           skipLabel="Already on Wi-Fi — skip"
+          // Confirm from the cloud, not just Bluetooth: the sensor uploads the
+          // moment it joins, so a fresh last_seen proves setup worked even if
+          // the BLE link dropped before it could report back.
+          verify={deviceId ? () => deviceSeenSince(deviceId, wifiStartedAt) : undefined}
         />
       </Screen>
     );

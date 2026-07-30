@@ -102,6 +102,24 @@ export async function getReadingsSince(deviceId: string, sinceMs: number): Promi
   return (data as Reading[]) ?? [];
 }
 
+/**
+ * Has this device reported to the cloud since `sinceMs`? Used to CONFIRM Wi-Fi
+ * setup independently of Bluetooth: the sensor uploads as soon as it joins, so
+ * a fresh `last_seen` proves it is online even when the BLE link dropped before
+ * it could send its "ok" (starting Wi-Fi often kills the BLE connection — they
+ * share one radio).
+ */
+export async function deviceSeenSince(deviceId: string, sinceMs: number): Promise<boolean> {
+  if (!supabase) return false;
+  const { data } = await supabase
+    .from('devices')
+    .select('last_seen')
+    .eq('id', deviceId)
+    .maybeSingle();
+  const seen = (data as { last_seen?: string } | null)?.last_seen;
+  return !!seen && new Date(seen).getTime() >= sinceMs;
+}
+
 /** The device paired to a plant, if any. */
 export async function getDeviceIdForPlant(plantKey: string): Promise<string | null> {
   if (!supabase) return null;
