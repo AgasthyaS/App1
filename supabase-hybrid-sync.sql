@@ -50,6 +50,13 @@ begin
   );
 end; $$;
 
+-- The device posts with the public anon key + its own secret (checked inside),
+-- so anon MUST be able to execute the new 9-arg signature. Dropping the old
+-- 8-arg above discards its grant, so re-establish it explicitly on this one —
+-- otherwise every WiFi upload comes back "permission denied for function".
+revoke all on function public.ingest_reading(uuid,text,numeric,numeric,numeric,numeric,numeric,int,int) from public;
+grant execute on function public.ingest_reading(uuid,text,numeric,numeric,numeric,numeric,numeric,int,int) to anon, authenticated;
+
 -- ── 2. ingest_batch: the phone uploads a batch on behalf of a device it owns ──
 -- p_rows is a JSON array of:
 --   { "at": ISO-timestamp, "light_lux": n, "dli": n, "soil_pct": n,
