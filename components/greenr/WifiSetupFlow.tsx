@@ -5,12 +5,12 @@ import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-nativ
 import { Card, GButton } from '@/components/greenr/UI';
 import { accent, light, type } from '@/constants/theme';
 import {
-  isChooserCancelled,
   isWifiSetupSupported,
   startWifiSetup,
   type SetupStatus,
   type WifiSetupSession,
 } from '@/lib/wifiSetup';
+import { isAlreadyConfigured, isChooserCancelled } from '@/lib/wifiSetupTypes';
 
 /**
  * Sensor Wi-Fi setup.
@@ -139,16 +139,25 @@ export function WifiSetupFlow({
       else setUseOther(true);
       setPhase('form');
     } catch (e) {
-      if (isChooserCancelled(e)) {
-        setPhase('intro'); // user closed the picker — no error, just back
-      } else {
-        const msg = e instanceof Error ? e.message : '';
+      setPhase('intro');
+      const msg = e instanceof Error ? e.message : '';
+      if (isAlreadyConfigured(e)) {
+        // Not a failure — the sensor is up and running on Wi-Fi already.
         setErr(
-          /in progress|InvalidState/i.test(msg)
-            ? 'The last Bluetooth connection is still closing. Wait a few seconds and tap “Find my sensor” again — or reload this page if it keeps happening.'
-            : msg || 'Could not reach the sensor. Make sure it has power and is nearby.',
+          'That sensor is already set up and running, so it isn’t offering Wi-Fi setup. Check Device health to see its latest report. To move it to a different network, let it fail to connect a few times (it reopens setup automatically) or hold its setup button if fitted.',
         );
-        setPhase('intro');
+      } else if (isChooserCancelled(e)) {
+        // Chrome throws NotFoundError both for "you cancelled" and "nothing
+        // matched". Saying nothing here is what made this look broken.
+        setErr(
+          'No sensor appeared. A sensor that already has Wi-Fi only shows up briefly, and a new one advertises in short bursts — unplug it, plug it back in, and tap “Find my sensor” within about 30 seconds.',
+        );
+      } else if (/in progress|InvalidState/i.test(msg)) {
+        setErr(
+          'Bluetooth is busy with an earlier connection. Wait ~10 seconds and try again. If it persists, remove “greenr-…” from your computer’s Bluetooth settings, then retry.',
+        );
+      } else {
+        setErr(msg || 'Could not reach the sensor. Make sure it has power and is nearby.');
       }
     }
   };

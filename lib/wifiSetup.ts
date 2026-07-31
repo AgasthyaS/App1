@@ -1,4 +1,6 @@
+import { DATA_SERVICE } from './bleGatewayTypes';
 import {
+  ALREADY_CONFIGURED,
   CHAR_CREDS,
   CHAR_NETWORKS,
   CHAR_STATUS,
@@ -70,13 +72,27 @@ async function connectGatt(device: any): Promise<any> {
 async function startWeb(): Promise<WifiSetupSession> {
   await releaseActive(); // never stack a new session on a stale one
 
+  // Match the sensor in EITHER mode. A sensor that already has Wi-Fi advertises
+  // only its data service, so filtering on the provisioning service alone made a
+  // working sensor invisible here — the chooser came up empty and setup looked
+  // like it did nothing.
   const device = await g.navigator.bluetooth.requestDevice({
-    filters: [{ services: [PROV_SERVICE] }],
+    filters: [{ services: [PROV_SERVICE] }, { services: [DATA_SERVICE] }],
+    optionalServices: [PROV_SERVICE, DATA_SERVICE],
   });
   activeDevice = device;
 
   const server = await connectGatt(device);
-  const svc = await server.getPrimaryService(PROV_SERVICE);
+
+  let svc: any;
+  try {
+    svc = await server.getPrimaryService(PROV_SERVICE);
+  } catch {
+    // Reached it, but it isn't offering setup — it's already configured.
+    try { device.gatt?.disconnect(); } catch { /* already gone */ }
+    activeDevice = null;
+    throw new Error(ALREADY_CONFIGURED);
+  }
 
   const netChar = await svc.getCharacteristic(CHAR_NETWORKS);
   const networks = parseNetworks(new TextDecoder().decode(await netChar.readValue()));

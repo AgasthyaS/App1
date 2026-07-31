@@ -40,3 +40,13 @@ export function parseNetworks(raw: string): string[] {
 export function isChooserCancelled(err: unknown): boolean {
   return (err as { name?: string } | null)?.name === 'NotFoundError';
 }
+
+/**
+ * Thrown when we DID reach the sensor but it isn't offering setup — i.e. it is
+ * already on Wi-Fi and running normally, so it only advertises its data service.
+ * The UI turns this into an explanation rather than a failure.
+ */
+export const ALREADY_CONFIGURED = 'GREENR_ALREADY_CONFIGURED';
+export function isAlreadyConfigured(err: unknown): boolean {
+  return (err as { message?: string } | null)?.message === ALREADY_CONFIGURED;
+}

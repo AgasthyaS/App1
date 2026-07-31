@@ -776,15 +776,56 @@ void runBleWindow(){
   // could write a bogus count and silently destroy your data. Encrypted only.
   ackChar->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   ackChar->setCallbacks(new AckCallback());
+  // Also offer the PROVISIONING service here, so an already-configured sensor
+  // can still be pointed at a new network while it is awake. Without this a
+  // working sensor advertises only its data service and the app's "Find my
+  // sensor" cannot see it at all.
+  BLEService* prov = server->createService(PROV_SERVICE);
+  BLECharacteristic* pNet = prov->createCharacteristic(CHAR_NETWORKS, BLECharacteristic::PROPERTY_READ);
+  pNet->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED);
+  pNet->setValue("[]");                              // no scan here; app offers manual entry
+  BLECharacteristic* pCreds = prov->createCharacteristic(CHAR_CREDS, BLECharacteristic::PROPERTY_WRITE);
+  pCreds->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
+  pCreds->setCallbacks(new CredsCallback());
+  statusChar = prov->createCharacteristic(CHAR_STATUS, BLECharacteristic::PROPERTY_NOTIFY);
+  statusChar->addDescriptor(new BLE2902());
+  statusChar->setValue("waiting");
+  prov->start();
+
   svc->start();
   BLEAdvertising* adv = BLEDevice::getAdvertising();
   adv->addServiceUUID(DATA_SERVICE);
+  adv->addServiceUUID(PROV_SERVICE);
   adv->setScanResponse(true);
   BLEDevice::startAdvertising();
-  Serial.printf("BLE data window %d ms (buf %d)\n", BLE_WINDOW_MS, bufCount);
+  Serial.printf("BLE window %d ms (buf %d) — data + setup both offered\n", BLE_WINDOW_MS, bufCount);
 
   uint32_t start = millis();
-  while (millis() - start < BLE_WINDOW_MS){ esp_task_wdt_reset(); delay(50); }
+  credsReady = false;
+  while (millis() - start < BLE_WINDOW_MS && !credsReady){ esp_task_wdt_reset(); delay(50); }
+
+  // The app pushed new Wi-Fi during this window — try it, and keep it if it works.
+  if (credsReady){
+    credsReady = false;
+    Serial.println("New Wi-Fi received while awake — switching networks.");
+    notifyStatus("connecting");
+    ledSet(true);
+    BLEDevice::stopAdvertising();
+    if (tryConnect(pendingSsid, pendingPass, 15000)){
+      prefs.begin("greenr", false);
+      prefs.putString("ssid", pendingSsid);
+      prefs.putString("pass", pendingPass);
+      prefs.end();
+      wifiFailStreak = 0;
+      notifyStatus("ok");
+      delay(700);
+      ledSuccess();
+    } else {
+      notifyStatus("fail");
+      ledSet(false);
+      WiFi.disconnect();
+    }
+  }
 
   BLEDevice::deinit(true);
   uptimeSec += BLE_WINDOW_MS / 1000;             // account for the awake window
