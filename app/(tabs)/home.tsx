@@ -17,9 +17,10 @@ import { BASELINE_DAYS, gardenVitalityAvg, vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
 import { idealsFor, lightStatus, soilStatus, tempStatus } from '@/lib/plantStatus';
 import { activePlants, useGreenr } from '@/lib/store';
-import { useAllLiveReadings } from '@/lib/useLiveReading';
+import { soilDynamics, wateredSinceLastReading, wateringDidNotRegister } from '@/lib/soilDynamics';
+import { refreshReadings, useAllLiveReadings, useAllReadingHistories, useReadingsRefreshing } from '@/lib/useLiveReading';
 import { useWeather } from '@/lib/useWeather';
-import { mlNeeded } from '@/lib/watering';
+import { waterAction } from '@/lib/waterAction';
 import { cToF } from '@/lib/weather';
 import { Plant, Spot } from '@/lib/types';
 
@@ -39,6 +40,8 @@ export default function HomeTab() {
   const { plants: allPlants, spots, settings, calibrations, lightDaily } = useGreenr();
   const plants = useMemo(() => activePlants(allPlants), [allPlants]);
   const liveReadings = useAllLiveReadings();
+  const histories = useAllReadingHistories();   // needed to tell "draining" from "over-watered"
+  const readingsRefreshing = useReadingsRefreshing();
   const weather = useWeather();
   const insets = useSafeAreaInsets();
 
@@ -76,21 +79,43 @@ export default function HomeTab() {
       if (!liveReadings.has(p.id)) return;
       const outdoor = !!spots.find((s) => s.id === p.spotId)?.outdoor;
       const raw = liveReadings.get(p.id) ?? null;
+      const hist = (histories.get(p.id) ?? []).map((h) => applyCalibration(h, calFor(p)));
+      const cal = raw ? applyCalibration(raw, calFor(p)) : null;
+      // One decision, one number — the alert must not recompute its own.
+      const act = waterAction({ plant: p, reading: cal, history: hist });
       notificationsFor({
         plantName: p.name,
         species: p.species,
         band: p.comfortBand,
         // Alerts judge the calibration-corrected reading (incl. flipped light).
         reading: raw ? applyCalibration(raw, calFor(p)) : raw,
+        // Keeps "over-watered" quiet while a pot is simply draining after a drink.
+        soilDyn: hist.length ? soilDynamics(p, hist, p.comfortBand) : null,
+        // Mute "water me" between logging a pour and the sensor confirming it.
+        justWatered: wateredSinceLastReading(p, raw),
+        // …and speak up if the sensor DID report and the soil never moved.
+        wateringMiss: hist.length ? wateringDidNotRegister(p, hist, p.comfortBand) : null,
+        pourMl: act.ml > 0 ? act.ml : null,
         outdoor,
         weather: weather.weather,
-        pot: { size: p.potSize, material: p.potMaterial, cm: p.potCm },
+        // Every field the watering model reads — omitting any of them makes this
+        // alert quote a different amount from the plant screen.
+        pot: {
+          size: p.potSize,
+          material: p.potMaterial,
+          cm: p.potCm,
+          heightCm: p.potHeightCm,
+          shape: p.potShape,
+          soilMix: p.soilMix,
+          soilRetention: p.soilRetention,
+          hasDrainage: p.hasDrainage,
+        },
       }).forEach((a, i) => items.push({ id: `${p.id}-${i}`, level: a.level, text: a.text }));
     });
     const order: Record<AlertLevel, number> = { bad: 0, warn: 1, info: 2 };
     return items.sort((a, b) => order[a.level] - order[b.level]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plants, liveReadings, spots, weather.weather, calibrations]);
+  }, [plants, liveReadings, histories, spots, weather.weather, calibrations]);
 
   const byRoom = useMemo(() => {
     const rooms = new Map<string, Spot[]>();
@@ -115,12 +140,16 @@ export default function HomeTab() {
     const reading = applyCalibration(liveReadings.get(p.id)!, calFor(p));
     const ideal = idealsFor(p.species, p.comfortBand);
     const soil = soilStatus(reading.soil_pct, ideal.band);
-    if (reading.soil_pct != null && reading.soil_pct < ideal.band[0]) {
-      const ml = mlNeeded(p.potSize, p.potMaterial, reading.soil_pct, Math.round((ideal.band[0] + ideal.band[1]) / 2), p.potCm);
-      return { text: `Water now — soil ${Math.round(reading.soil_pct)}% · add ~${ml} ml`, tone: accent.clay };
-    }
-    if (reading.soil_pct != null && reading.soil_pct > ideal.band[1])
-      return { text: `Let it dry — soil ${Math.round(reading.soil_pct)}%`, tone: accent.sunbeam };
+    // The SAME decision the plant screen makes — see lib/waterAction. Home used
+    // to re-derive it here and drifted: it could say a plant was fine while the
+    // plant screen told you to add a litre, or quote a full soak where the plant
+    // screen quoted a trial dose.
+    const hist = (histories.get(p.id) ?? []).map((h) => applyCalibration(h, calFor(p)));
+    const act = waterAction({ plant: p, reading, history: hist });
+    if (act.kind === 'retry') return { text: act.line, tone: accent.clay };
+    if (act.kind === 'waiting') return { text: act.line, tone: dark.inkMuted };
+    if (act.kind === 'water') return { text: act.line, tone: accent.clay };
+    if (act.kind === 'hold') return { text: act.line, tone: accent.sunbeam };
     const light = lightStatus(reading.light_lux, ideal.dli);
     const temp = tempStatus(reading.temp_c, ideal.temp);
     return { text: `Soil ${soil.label} · ${light.label} · ${temp.label}`, tone: dark.inkMuted };
@@ -140,7 +169,16 @@ export default function HomeTab() {
     <ScrollView
       style={{ flex: 1, backgroundColor: dark.bg }}
       contentContainerStyle={{ paddingHorizontal: layout.margin, paddingTop: insets.top + 8, paddingBottom: 32 }}
-      refreshControl={<RefreshControl refreshing={false} onRefresh={() => weather.refresh()} tintColor={accent.verdant} />}
+      // Pulling to refresh used to reload the WEATHER and nothing else, so the
+      // one gesture people use when a reading looks stale was the one gesture
+      // that could not update it.
+      refreshControl={
+        <RefreshControl
+          refreshing={readingsRefreshing}
+          onRefresh={() => { void refreshReadings(); weather.refresh(); }}
+          tintColor={accent.verdant}
+        />
+      }
       showsVerticalScrollIndicator={false}
     >
       {/* header */}

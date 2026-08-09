@@ -1,7 +1,8 @@
 import type { Reading } from './devices';
 import { idealsFor } from './plantStatus';
-import type { PotMaterial, PotSize } from './types';
-import { mlNeeded } from './watering';
+import type { SoilDynamics, WateringMiss } from './soilDynamics';
+import type { PotMaterial, PotShape, PotSize, SoilMix, SoilRetention } from './types';
+import { recommendedPourMl } from './watering';
 import { weatherWateringImpact, type WeatherData } from './weather';
 
 /**
@@ -36,16 +37,57 @@ export interface NotifyContext {
   history?: Reading[];
   outdoor?: boolean;
   weather?: WeatherData | null;
-  /** pot info — lets the water alert say exactly how many ml to add */
-  pot?: { size: PotSize; material: PotMaterial; cm?: number | null };
+  /**
+   * Pot info — lets the water alert say exactly how many ml to add.
+   *
+   * This MUST carry every field the watering model reads. It used to stop at
+   * size/material/width/height, so Home silently recomputed the amount without
+   * the pot's shape, mix, retention or drainage and could differ from the plant
+   * screen by over 100%.
+   */
+  pot?: {
+    size: PotSize;
+    material: PotMaterial;
+    cm?: number | null;
+    heightCm?: number | null;
+    shape?: PotShape;
+    soilMix?: SoilMix | null;
+    soilRetention?: SoilRetention | null;
+    hasDrainage?: boolean;
+  };
+  /** soil behaviour — suppresses "over-watered" while a pot is normally draining */
+  soilDyn?: SoilDynamics | null;
+  /** a watering was logged after the latest reading — mute "needs water" until confirmed */
+  justWatered?: boolean;
+  /** a logged pour that the sensor has since failed to see in the soil */
+  wateringMiss?: WateringMiss | null;
+  /**
+   * The dose the rest of the app is showing. Supplied so the alert quotes the
+   * SAME number — including a trial dose while the pot is still being calibrated,
+   * which `recommendedPourMl` alone knows nothing about.
+   */
+  pourMl?: number | null;
 }
 
 const DAY = 86400000;
 const rank: Record<AlertLevel, number> = { bad: 0, warn: 1, info: 2 };
 
 export function notificationsFor(ctx: NotifyContext): Alert[] {
-  const { plantName, species, band, reading, history = [], outdoor = false, weather = null, pot } = ctx;
-  if (!reading) return [];
+  const { plantName, species, band, reading: rawReading, history = [], outdoor = false, weather = null, pot } = ctx;
+  if (!rawReading) return [];
+  // Readings come off a physical sensor over the network. A malformed value used
+  // to reach the user as literal text — "Soil is Infinity%" — so anything
+  // non-finite is dropped here rather than formatted.
+  const finite = (v: number | null | undefined): number | null =>
+    v != null && Number.isFinite(v) ? v : null;
+  const reading = {
+    ...rawReading,
+    soil_pct: finite(rawReading.soil_pct),
+    temp_c: finite(rawReading.temp_c),
+    humidity_pct: finite(rawReading.humidity_pct),
+    light_lux: finite(rawReading.light_lux),
+    battery_pct: finite(rawReading.battery_pct),
+  };
   const ideal = idealsFor(species, band);
   const [lo, hi] = band;
   const span = Math.max(8, hi - lo);
@@ -53,24 +95,63 @@ export function notificationsFor(ctx: NotifyContext): Alert[] {
 
   // Soil moisture — below the recommended minimum. With pot info the alert says
   // exactly how much to pour to land mid-band.
-  if (reading.soil_pct != null && reading.soil_pct < lo) {
+  // A logged watering the sensor hasn't seen yet mutes the "water me" alert.
+  // A pour the sensor never saw outranks "soil is low": the soil IS low, but
+  // telling someone to water again when their last watering didn't reach the
+  // roots just repeats the failure. Say what went wrong instead.
+  if (ctx.wateringMiss) {
+    out.push({
+      level: 'bad',
+      key: 'water-missed',
+      title: `${plantName}'s watering didn't reach the soil`,
+      text: ctx.wateringMiss.text,
+    });
+  } else if (ctx.justWatered) {
+    // fall through — no watering alerts until the next reading confirms
+  } else if (reading.soil_pct != null && reading.soil_pct < lo) {
     const target = Math.round((lo + hi) / 2);
-    const ml = pot ? mlNeeded(pot.size, pot.material, reading.soil_pct, target, pot.cm) : null;
+    // Same figure as every other surface — see recommendedPourMl.
+    const ml = ctx.pourMl != null ? ctx.pourMl : pot ? recommendedPourMl(
+      {
+        species,
+        potSize: pot.size,
+        potMaterial: pot.material,
+        potCm: pot.cm,
+        potHeightCm: pot.heightCm,
+        potShape: pot.shape,
+        soilMix: pot.soilMix,
+        soilRetention: pot.soilRetention,
+        hasDrainage: pot.hasDrainage,
+      },
+      { tempC: reading.temp_c, humidityPct: reading.humidity_pct, soilPct: reading.soil_pct, targetPct: target },
+    ) : null;
     out.push({
       level: 'bad',
       key: 'soil-low',
       title: `Water ${plantName}`,
       text: `Soil moisture has fallen to ${Math.round(reading.soil_pct)}%, below ${plantName}'s recommended minimum (${lo}%).${
-        ml ? ` Add about ${ml} ml to bring it back to ~${target}%.` : ''
+        ml ? ` Pour about ${ml} ml slowly until it runs from the drainage holes, then empty the saucer.` : ''
       }`,
     });
   } else if (reading.soil_pct != null && reading.soil_pct > hi + span * 0.4) {
-    out.push({
-      level: 'warn',
-      key: 'soil-high',
-      title: `${plantName} is over-watered`,
-      text: `Soil is ${Math.round(reading.soil_pct)}%, above ${plantName}'s ${hi}% ideal — hold off watering so the roots don't sit wet.`,
-    });
+    // Saturated soil right after watering is the watering working — the app must
+    // not cry "over-watered" at someone who just did the right thing. Only flag
+    // it once the pot is past the window in which it should have drained.
+    if (ctx.soilDyn?.drainageProblem) {
+      out.push({
+        level: 'bad',
+        key: 'soil-waterlogged',
+        title: `${plantName}'s soil isn't draining`,
+        text: `Soil has been above ${hi}% far longer than this pot should take to drain. Check the drainage holes and empty the saucer — roots sitting in water rot.`,
+      });
+    } else if (!ctx.soilDyn?.draining) {
+      out.push({
+        level: 'warn',
+        key: 'soil-high',
+        title: `${plantName} is over-watered`,
+        text: `Soil is ${Math.round(reading.soil_pct)}%, above ${plantName}'s ${hi}% ideal — hold off watering so the roots don't sit wet.`,
+      });
+    }
   }
 
   // Temperature — outside the comfort band by a clear margin.

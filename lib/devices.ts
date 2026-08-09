@@ -77,6 +77,86 @@ export async function getMyDevices(): Promise<Device[]> {
   return (data as Device[]) ?? [];
 }
 
+/**
+ * The firmware sends RAW ADC values for soil & light (it never converts or
+ * decides a sensor is "disconnected" — it just reports what it read). The APP
+ * owns the conversion to %/index here, so calibration can be tuned without
+ * re-flashing. Temp/humidity already arrive as real units and pass through.
+ *
+ * Raw soil/light span ~0–4095; a converted %/index is 0–100. Applied at every
+ * fetch, so the whole app sees clean 0–100 values and the existing per-sensor
+ * calibration (offsets, reversed-light flip) still layers on top unchanged.
+ */
+/**
+ * SOIL CALIBRATION — the endpoints that turn raw ADC into 0–100 %.
+ *
+ * DRY is the raw value with the probe held in OPEN AIR. It was set at 3150,
+ * which made air read ~7–8 % instead of 0 — a small error, but it shifts every
+ * reading and makes "bone dry" look like "nearly dry". Corrected to 3020 so
+ * air lands on 0.
+ *
+ * IMPORTANT — INSERTION DEPTH. A capacitive probe senses along its whole blade,
+ * so it reports the AVERAGE moisture over however much of it is buried. Pushed
+ * in only an inch, most of the blade is measuring air and the pot reads far too
+ * dry (which is why the same pot jumped from "needs water" to "fine" when the
+ * probe went all the way in). These endpoints assume the probe is inserted to
+ * the WHITE LINE — the depth the blade is designed for. Because water drains
+ * downward, that depth also samples the upper root zone, which is exactly the
+ * layer that dries first and should drive watering decisions.
+ */
+const SOIL_DRY_ADC = 3020; // raw in open air        → 0 %
+const SOIL_WET_ADC = 1400; // raw sitting in water   → 100 %
+/**
+ * Above this raw value the probe is reading mostly air — either it's barely
+ * inserted or it isn't in soil at all. Even bone-dry potting mix holds enough
+ * moisture to read below this, so it's a reliable "not properly inserted" flag.
+ */
+export const SOIL_NOT_INSERTED_ADC = 3120;
+
+/** True when the reading suggests the probe isn't buried to the white line. */
+export function looksNotInserted(rawOrPct: number | null | undefined): boolean {
+  if (rawOrPct == null) return false;
+  return rawOrPct > 100 && rawOrPct >= SOIL_NOT_INSERTED_ADC;
+}
+// These LDR modules are REVERSED — they read HIGH in the dark and LOW in bright
+// light — so the dark endpoint is the high raw value. (Keep the app's "Reversed
+// light sensor" calibration toggle OFF; the reversal is already handled here.)
+const LIGHT_DARK_ADC = 3200; // raw in the dark     → 0
+const LIGHT_BRIGHT_ADC = 200; // raw in bright light → 100
+
+function rawToPct(raw: number, lo: number, hi: number): number {
+  const v = Math.round(((raw - lo) / (hi - lo)) * 100);
+  return Math.max(0, Math.min(100, v));
+}
+
+/**
+ * SOIL only: rows written by older firmware already hold a 0–100 percentage,
+ * while current firmware sends the raw ADC. Converting a converted value again
+ * produces nonsense, so values inside 0–100 are passed through. That test is
+ * safe here because a capacitive probe never legitimately reads below ~800 raw.
+ */
+function maybeRawToPct(v: number, lo: number, hi: number): number {
+  if (v <= 100) return v;
+  return rawToPct(v, lo, hi);
+}
+
+/**
+ * LIGHT is ALWAYS converted — the same "looks like a percentage" shortcut is a
+ * bug here. These LDR modules read LOW in bright light (the bright endpoint is
+ * ~200 raw), so strong sunlight legitimately produces raw values near or below
+ * 100. Passing those through untouched reported brilliant light as almost dark:
+ * raw 20 (dazzling) rendered as "20/100". Since the firmware always sends raw,
+ * converting unconditionally is correct; any pre-raw rows age out of the reading
+ * window within a day or so.
+ */
+export function normalizeReading(r: Reading): Reading {
+  return {
+    ...r,
+    soil_pct: r.soil_pct == null ? r.soil_pct : maybeRawToPct(r.soil_pct, SOIL_DRY_ADC, SOIL_WET_ADC),
+    light_lux: r.light_lux == null ? r.light_lux : rawToPct(r.light_lux, LIGHT_DARK_ADC, LIGHT_BRIGHT_ADC),
+  };
+}
+
 /** Recent readings for a device, oldest→newest, for history charts. */
 export async function getReadingHistory(deviceId: string, limit = 48): Promise<Reading[]> {
   if (!supabase) return [];
@@ -86,7 +166,7 @@ export async function getReadingHistory(deviceId: string, limit = 48): Promise<R
     .eq('device_id', deviceId)
     .order('created_at', { ascending: false })
     .limit(limit);
-  return ((data as Reading[]) ?? []).slice().reverse();
+  return ((data as Reading[]) ?? []).slice().reverse().map(normalizeReading);
 }
 
 /** All readings since a given time (for the analytics dashboard windows). */
@@ -99,7 +179,7 @@ export async function getReadingsSince(deviceId: string, sinceMs: number): Promi
     .gte('created_at', new Date(sinceMs).toISOString())
     .order('created_at', { ascending: true })
     .limit(2000);
-  return (data as Reading[]) ?? [];
+  return ((data as Reading[]) ?? []).map(normalizeReading);
 }
 
 /**
@@ -120,10 +200,16 @@ export async function deviceSeenSince(deviceId: string, sinceMs: number): Promis
   return !!seen && new Date(seen).getTime() >= sinceMs;
 }
 
-/** The device paired to a plant, if any. */
+/** The device paired to a plant, if any — the most recently reporting one when
+ *  several are assigned (an old sensor must never mask the live one). */
 export async function getDeviceIdForPlant(plantKey: string): Promise<string | null> {
   if (!supabase) return null;
-  const { data } = await supabase.from('devices').select('id').eq('plant_key', plantKey).limit(1);
+  const { data } = await supabase
+    .from('devices')
+    .select('id,last_seen')
+    .eq('plant_key', plantKey)
+    .order('last_seen', { ascending: false, nullsFirst: false })
+    .limit(1);
   return (data?.[0]?.id as string) ?? null;
 }
 
@@ -137,13 +223,25 @@ export async function getLatestReading(deviceId: string): Promise<Reading | null
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  return (data as Reading) ?? null;
+  return data ? normalizeReading(data as Reading) : null;
 }
 
-/** Map a paired device to one of the user's plants. */
-export async function assignDeviceToPlant(deviceId: string, plantKey: string): Promise<void> {
-  if (!supabase) return;
-  await supabase.from('devices').update({ plant_key: plantKey }).eq('id', deviceId);
+/** Map a paired device to one of the user's plants. Returns an error string on
+ *  failure (e.g. RLS/network) so callers can surface it instead of silently
+ *  leaving the sensor unlinked — which is why a plant showed no readings.
+ *
+ *  A plant has exactly ONE sensor: any other device pointing at this plant is
+ *  unassigned first. Otherwise an old sensor lingers on the same plant and the
+ *  screens disagree about which device to read (the live one vs the dead one). */
+export async function assignDeviceToPlant(deviceId: string, plantKey: string): Promise<{ error: string | null }> {
+  if (!supabase) return { error: 'Not configured.' };
+  await supabase
+    .from('devices')
+    .update({ plant_key: null })
+    .eq('plant_key', plantKey)
+    .neq('id', deviceId);
+  const { error } = await supabase.from('devices').update({ plant_key: plantKey }).eq('id', deviceId);
+  return { error: error?.message ?? null };
 }
 
 /** Unassign a device from its plant (keeps it on the account). */

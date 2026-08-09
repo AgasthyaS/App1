@@ -1,4 +1,6 @@
 import { estimateDli } from './lightModel';
+import { outdoorViability, parseHardiness } from './areaClimate';
+import { blendBand } from './empirical';
 import { ALL_SPECIES, nicheFor, type PlantSpecies } from './plants';
 
 /**
@@ -41,8 +43,29 @@ export interface FactorScore {
 
 export interface Match {
   species: PlantSpecies;
-  /** 0–100 HSI */
+  /**
+   * 0–100 HSI, carried at FULL precision (two decimals are meaningful because
+   * every factor is a continuous Gaussian — rounding to an integer used to make
+   * genuinely different plants tie at "85%").
+   */
   score: number;
+  /**
+   * Honest error bar on that score, in points. Two decimals are only worth
+   * showing next to this: the ranking is finely resolved, but the inputs (an
+   * uncalibrated light index, book-value bands) carry real uncertainty.
+   */
+  margin: number;
+  /** where it can live in THIS climate — null when the local climate is unknown */
+  outdoor?: import('./areaClimate').OutdoorViability | null;
+  /**
+   * What the numbers rest on. 'measured' = real sensor data from plants of this
+   * species (the moat); 'verified' = a curated profile; 'category' = the shared
+   * baseline for its plant family. Species on 'category' data legitimately tie
+   * with each other — pretending otherwise with extra decimals would be fake.
+   */
+  basis: 'measured' | 'verified' | 'category';
+  /** how many real plants of this species informed the numbers (0 = none yet) */
+  samplePlants: number;
   verdict: 'Thrives' | 'Suitable' | 'Survives' | 'Avoid';
   why: string;
   factors: FactorScore[];
@@ -95,6 +118,9 @@ export function plantsForEnvironment(
   tempC: number | null,
   humidity: number | null,
   limit = 6,
+  /** measured bands per species (lib/empirical) — when present they REPLACE the
+   *  book values in proportion to how much evidence stands behind them */
+  empirical?: Map<string, import('./empirical').EmpiricalBands> | null,
 ): Match[] {
   const dliEst = lightIdx != null ? estimateDli(lightIdx) : null;
   const tempF = tempC != null ? (tempC * 9) / 5 + 32 : null;
@@ -112,6 +138,11 @@ export function plantsForEnvironment(
     const factors: FactorScore[] = [];
     const parts: { f: number; w: number }[] = [];
 
+    // Measured reality beats the textbook once enough plants back it up.
+    const empS = empirical?.get(s.common);
+    const tempBand = blendBand(s.temp, empS?.temp, empS?.samplePlants ?? 0).band;
+    const rhFloor = empS?.humidity ? blendBand([s.rhFloor, 100], empS.humidity, empS.samplePlants).band[0] : s.rhFloor;
+
     if (dliEst) {
       // Below the band (too dim) is punished harder than above (too bright).
       const f = toleranceFit(dliEst.dli, s.dli[0], s.dli[1], niche.lightSigmaDli * 0.45, niche.lightSigmaDli);
@@ -125,30 +156,36 @@ export function plantsForEnvironment(
       parts.push({ f, w: 0.5 * niche.demand });
     }
     if (tempF != null) {
-      const f = toleranceFit(tempF, s.temp[0], s.temp[1], niche.tempSigmaF);
+      const f = toleranceFit(tempF, tempBand[0], tempBand[1], niche.tempSigmaF);
       factors.push({
         key: 'temperature',
         label: 'Temperature',
         fit: f,
         measured: `${Math.round(tempF)}°F here`,
-        ideal: `wants ${s.temp[0]}–${s.temp[1]}°F`,
+        ideal: `wants ${Math.round(tempBand[0])}–${Math.round(tempBand[1])}°F`,
       });
       parts.push({ f, w: 0.32 });
     }
     if (humidity != null) {
       // Humidity has a floor, not a ceiling — above the floor is always fine.
-      const f = toleranceFit(humidity, s.rhFloor, 100, niche.rhSigmaPct);
+      const f = toleranceFit(humidity, rhFloor, 100, niche.rhSigmaPct);
       factors.push({
         key: 'humidity',
         label: 'Humidity',
         fit: f,
         measured: `${Math.round(humidity)}% here`,
-        ideal: `wants ≥${s.rhFloor}%`,
+        ideal: `wants ≥${Math.round(rhFloor)}%`,
       });
       parts.push({ f, w: 0.18 });
     }
 
-    const score = parts.length ? Math.round(geometricMean(parts) * 100) : 0;
+    // NO rounding — the geometric mean of continuous curves is continuous, so
+    // keeping the float is what makes two-decimal ranking real rather than
+    // decorative. Callers format for display.
+    const score = parts.length ? geometricMean(parts) * 100 : 0;
+    // Uncertainty shrinks as more factors are measured and as light confidence
+    // rises. Roughly: ±12 points on one uncalibrated factor, ±4 on three good ones.
+    const margin = parts.length ? Math.max(1.5, 14 * (1 - confidence) + 2) : 50;
     const limiting = factors.length
       ? factors.slice().sort((a, b) => a.fit - b.fit)[0]
       : null;
@@ -168,10 +205,22 @@ export function plantsForEnvironment(
       why = `Limited by ${worst.label.toLowerCase()} — ${dir} (${worst.measured}, ${worst.ideal}).`;
     } else why = 'A solid fit for this spot.';
 
-    return { species: s, score, verdict: verdictFor(score), why, factors, limiting: worst, confidence };
+    const emp = empirical?.get(s.common);
+    const basis: Match['basis'] =
+      emp && emp.samplePlants >= 20 ? 'measured' : s.care?.verified ? 'verified' : 'category';
+    return {
+      species: s, score, margin, verdict: verdictFor(score), why, factors,
+      limiting: worst, confidence, basis, samplePlants: emp?.samplePlants ?? 0,
+    };
   });
 
-  return scored.sort((a, b) => b.score - a.score).slice(0, limit);
+  // Rank by score, then by EVIDENCE — species sharing a category profile score
+  // identically, so falling back to data quality is the honest tie-break rather
+  // than whichever happened to be first in the catalog.
+  const rank = { measured: 2, verified: 1, category: 0 } as const;
+  return scored
+    .sort((a, b) => b.score - a.score || rank[b.basis] - rank[a.basis] || b.samplePlants - a.samplePlants)
+    .slice(0, limit);
 }
 
 /**
@@ -188,4 +237,70 @@ export function scoreSpeciesForEnvironment(
   if (!s) return null;
   const all = plantsForEnvironment(lightIdx, tempC, humidity, ALL_SPECIES.length);
   return all.find((m) => m.species.common === speciesCommon) ?? null;
+}
+
+/**
+ * "What will actually thrive in MY area?" — the spot-level HSI above, plus the
+ * one factor a windowsill reading can never capture: the local climate.
+ *
+ * Indoors, the spot decides nearly everything and climate barely matters. For a
+ * plant that will live outside, winter cold is decisive and overrides every
+ * other factor — a species rated to zone 10 simply dies in a zone 7 winter, no
+ * matter how good the summer light is. Scoring those two cases identically is
+ * how apps end up recommending a Monstera as a patio plant in Michigan.
+ *
+ * Species whose hardiness suits the area are also given a small, honest boost:
+ * they can be grown either way, which is genuinely more useful to the user.
+ */
+export function plantsForArea(opts: {
+  lightIdx: number | null;
+  tempC: number | null;
+  humidity: number | null;
+  /** local climate from lib/areaClimate — null falls back to spot-only scoring */
+  area?: import('./areaClimate').AreaClimate | null;
+  /** true when the plant will live outdoors (cold hardiness becomes decisive) */
+  outdoor?: boolean;
+  limit?: number;
+  /** measured per-species bands (lib/empirical) */
+  empirical?: Map<string, import('./empirical').EmpiricalBands> | null;
+}): Match[] {
+  const { lightIdx, tempC, humidity, area = null, outdoor = false, limit = 6, empirical = null } = opts;
+  // Score every species on the spot first, then re-rank by climate fit.
+  const all = plantsForEnvironment(lightIdx, tempC, humidity, ALL_SPECIES.length, empirical);
+  if (!area) return all.slice(0, limit);
+
+  const adjusted = all.map((m) => {
+    const hardy = parseHardiness(m.species.care?.hardinessZones);
+    const viability = outdoorViability(hardy, area);
+    let score = m.score;
+    let why = m.why;
+
+    if (outdoor) {
+      // Outdoors, winter is a hard gate, not a weighting.
+      if (!viability.yearRound && !viability.summerOnly) {
+        score *= 0.12;
+        why = viability.note;
+      } else if (!viability.yearRound) {
+        // Survives the summer outside but must come in — genuinely worse than a
+        // plant that can simply stay put, so it ranks below the hardy ones.
+        score *= 0.55;
+        why = viability.note;
+      }
+    } else if (viability.yearRound) {
+      // Indoors: being hardy locally is a modest plus (it can also go outside),
+      // never enough to outrank a plant that actually fits the light.
+      score = Math.min(100, score * 1.04);
+    }
+    return { ...m, score, why, verdict: verdictFor(score), outdoor: viability };
+  });
+
+  const rank2 = { measured: 2, verified: 1, category: 0 } as const;
+  return adjusted
+    .sort((a, b) => b.score - a.score || rank2[b.basis] - rank2[a.basis] || b.samplePlants - a.samplePlants)
+    .slice(0, limit);
+}
+
+/** Format a score the way the UI should show it: precise, with its error bar. */
+export function formatScore(m: Pick<Match, 'score' | 'margin'>): string {
+  return `${m.score.toFixed(2)}% ±${m.margin.toFixed(1)}`;
 }

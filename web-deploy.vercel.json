@@ -8,6 +8,7 @@
     { "source": "/diagnose/:id", "destination": "/diagnose/[id]" },
     { "source": "/autopsy/:id", "destination": "/autopsy/[id]" },
     { "source": "/move/:id", "destination": "/move/[id]" },
+    { "source": "/repot/:id", "destination": "/repot/[id]" },
     { "source": "/spot/:id", "destination": "/spot/[id]" },
     { "source": "/sensor/:id", "destination": "/sensor/[id]" },
     { "source": "/calibrate/:id", "destination": "/calibrate/[id]" }

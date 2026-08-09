@@ -26,11 +26,17 @@ import { isAlreadyConfigured, isChooserCancelled } from '@/lib/wifiSetupTypes';
  * with it.)
  */
 
+/**
+ * The universal setup route: the sensor broadcasts its own "greenr-setup" Wi-Fi
+ * and shows a setup page when you join it. This needs no Bluetooth and no app, so
+ * it works on iPhone, Android and laptops alike — it is the one path that always
+ * works, which is why it's what we tell people to do.
+ */
 const MANUAL_STEPS: { icon: string; text: string }[] = [
-  { icon: 'power-outline', text: 'Give the sensor power and keep it near you. Until it has Wi-Fi it keeps offering itself over Bluetooth — there’s no time limit, so set it up whenever suits you.' },
-  { icon: 'logo-chrome', text: 'Open greenr-app.vercel.app in Chrome or Edge (computer or Android) — those browsers can talk to the sensor over Bluetooth. On iPhone, use the Greenr app.' },
-  { icon: 'bluetooth-outline', text: 'Go to Wi-Fi setup there and tap “Find my sensor”, then pick your network and enter its password.' },
-  { icon: 'checkmark-circle-outline', text: 'The sensor saves your Wi-Fi permanently and starts reporting — this is a one-time step.' },
+  { icon: 'power-outline', text: 'Give the sensor power and keep it nearby. Until it has Wi-Fi it offers its own setup network — there’s no time limit, so do this whenever suits you.' },
+  { icon: 'wifi-outline', text: 'On your phone, open Settings → Wi-Fi and join the network called “greenr-setup”. It has no password.' },
+  { icon: 'globe-outline', text: 'A setup page opens automatically. (If it doesn’t, open a browser and go to 192.168.4.1.) Pick your home Wi-Fi and type its password.' },
+  { icon: 'checkmark-circle-outline', text: 'Rejoin your normal Wi-Fi. The sensor saves the network permanently and starts reporting — a one-time step.' },
 ];
 
 type Phase = 'intro' | 'searching' | 'form' | 'sending' | 'success' | 'unsure' | 'manual';
@@ -44,6 +50,7 @@ export function WifiSetupFlow({
   onSkip,
   skipLabel,
   verify,
+  onIdentified,
 }: {
   onDone: () => void;
   /** Label of the confirm button on the manual/instruction path. */
@@ -56,6 +63,12 @@ export function WifiSetupFlow({
    * which is frequently lost when the sensor powers up its Wi-Fi radio.
    */
   verify?: () => Promise<boolean>;
+  /**
+   * Called with the sensor's id + key the moment they're read over Bluetooth
+   * (firmware exposes them on the encrypted link). Lets the caller CLAIM the
+   * device with no QR code. Only fires when the firmware provides them.
+   */
+  onIdentified?: (deviceId: string, deviceKey: string) => void;
 }) {
   // No in-app Bluetooth here (e.g. iOS Safari) → go straight to the manual steps.
   const [phase, setPhase] = useState<Phase>(isWifiSetupSupported ? 'intro' : 'manual');
@@ -135,6 +148,9 @@ export function WifiSetupFlow({
       s.onStatus(setStatus);
       sessionRef.current = s;
       setSession(s);
+      // If the sensor handed us its identity over Bluetooth, claim it now — no
+      // QR needed. (Older firmware doesn't, so this simply doesn't fire.)
+      if (s.deviceId && s.deviceKey) onIdentified?.(s.deviceId, s.deviceKey);
       if (s.networks[0]) setSsid(s.networks[0]);
       else setUseOther(true);
       setPhase('form');
@@ -146,6 +162,13 @@ export function WifiSetupFlow({
         setErr(
           'That sensor is already set up and running, so it isn’t offering Wi-Fi setup. Check Device health to see its latest report. To move it to a different network, let it fail to connect a few times (it reopens setup automatically) or hold its setup button if fitted.',
         );
+      } else if (/permission/i.test(msg)) {
+        // Bluetooth (or, on older phones, location) permission was declined.
+        setErr(
+          'Greenr needs Bluetooth permission to find your sensor. Enable it in your phone’s Settings → Apps → Greenr → Permissions, then tap “Find my sensor” again.',
+        );
+      } else if (/bluetooth.*(off|disabled)|powered ?off|turn (it |on)/i.test(msg)) {
+        setErr('Turn Bluetooth on in your phone settings, then tap “Find my sensor” again.');
       } else if (isChooserCancelled(e)) {
         // Chrome throws NotFoundError both for "you cancelled" and "nothing
         // matched". Saying nothing here is what made this look broken.
@@ -154,10 +177,14 @@ export function WifiSetupFlow({
         );
       } else if (/in progress|InvalidState/i.test(msg)) {
         setErr(
-          'Bluetooth is busy with an earlier connection. Wait ~10 seconds and try again. If it persists, remove “greenr-…” from your computer’s Bluetooth settings, then retry.',
+          'Bluetooth is busy with an earlier connection. Wait ~10 seconds and try again. If it persists, remove “greenr-…” from your phone’s Bluetooth settings, then retry.',
+        );
+      } else if (/no sensor found|not found|timeout|timed out/i.test(msg)) {
+        setErr(
+          'Couldn’t find your sensor. Make sure it’s powered and its light is slow-blinking (setup mode) — unplug and replug to restart setup — then keep it close and try again.',
         );
       } else {
-        setErr(msg || 'Could not reach the sensor. Make sure it has power and is nearby.');
+        setErr(msg || 'Could not reach the sensor. Make sure it has power, its light is blinking, and it’s nearby.');
       }
     }
   };
@@ -196,9 +223,23 @@ export function WifiSetupFlow({
     return (
       <View>
         <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Connect it to your Wi-Fi</Text>
-        <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
-          The sensor remembers the network afterwards — this is a one-time step.
-        </Text>
+        {!isWifiSetupSupported ? (
+          // Be blunt: this browser CANNOT talk to the sensor, so nothing on this
+          // screen will connect it. Saying so up front stops people from tapping
+          // through and believing setup finished when it never started.
+          <Card mode="light" style={{ marginTop: 10, flexDirection: 'row', gap: 10 }}>
+            <Ionicons name="information-circle" size={20} color={accent.verdant} />
+            <Text style={[type.caption, { color: light.ink, flex: 1, lineHeight: 19 }]}>
+              <Text style={{ fontWeight: '600' }}>Use the sensor’s own setup network.</Text> This
+              browser can’t do Bluetooth, but you don’t need it — just follow the steps below. It
+              works on any phone, including iPhone.
+            </Text>
+          </Card>
+        ) : (
+          <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
+            The sensor remembers the network afterwards — this is a one-time step.
+          </Text>
+        )}
         <View style={{ marginTop: 14, gap: 8 }}>
           {MANUAL_STEPS.map((s, i) => (
             <Card key={s.icon} mode="light" style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>

@@ -8,7 +8,7 @@ import { idealsFor } from './plantStatus';
 import { currentSeason, SEASON_LABEL } from './season';
 import { activePlants } from './store';
 import type { Plant, Spot } from './types';
-import { mlNeeded } from './watering';
+import { waterAction } from './waterAction';
 import { weatherWateringImpact, type WeatherData } from './weather';
 
 /**
@@ -64,12 +64,18 @@ export function deriveCareTasks(opts: {
 
     if (sensored && raw) {
       const r = applyCalibration(raw, cal);
+      const rawHist = histories?.get(p.id) ?? [];
+      const calHistForTasks = cal ? rawHist.map((h) => applyCalibration(h, cal)) : rawHist;
 
       // Watering — the sensor's soil reading decides, weather adjusts.
       if (r.soil_pct != null && r.soil_pct < lo) {
         const impact = weatherWateringImpact(weather, outdoor);
-        const target = Math.round((lo + hi) / 2);
-        const ml = mlNeeded(p.potSize, p.potMaterial, r.soil_pct, target, p.potCm);
+        // Same decision as Home and the plant screen (lib/waterAction).
+        // No `|| recommendedPourMl(...)` fallback: that is the old whole-pot
+        // chain, and the engine returns 0 precisely when nothing should be poured
+        // — most often because the plant was watered minutes ago. Falling back
+        // there told people to pour litres onto a pot they had just filled.
+        const ml = waterAction({ plant: p, reading: r, history: calHistForTasks }).ml;
         if (impact.effect === 'delay') {
           out.push({
             id: `ct-${p.id}-rain`,
@@ -89,7 +95,7 @@ export function deriveCareTasks(opts: {
             plantName: p.name,
             kind: 'water',
             title: `Water ${p.name} — add ~${ml} ml`,
-            why: `Soil is ${Math.round(r.soil_pct)}%, below ${p.species}'s ${lo}% minimum. ~${ml} ml takes this ${p.potMaterial.toLowerCase()} pot back to ~${target}%.`,
+            why: `Soil is ${Math.round(r.soil_pct)}%, below ${p.species}'s ${lo}% minimum. Pour ~${ml} ml slowly until it runs from the drainage holes, then empty the saucer.`,
             ml,
             sensorVerifies: true,
             minutes: 2,

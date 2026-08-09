@@ -141,13 +141,13 @@ export default function PairDevice() {
         {error && <Text style={[type.micro, { color: '#C0392B', marginTop: 10 }]}>{error}</Text>}
         <GButton title="Pair sensor" onPress={() => claim(manual)} disabled={!manual.trim()} style={{ marginTop: 12 }} />
         <GButton
-          title="Skip to Wi-Fi setup — Find my sensor"
+          title="No code? Set it up over Bluetooth"
           kind="secondary"
-          onPress={() => router.push('/wifi-setup' as any)}
+          onPress={() => { setError(null); setWifiStartedAt(Date.now()); setStep('wifi'); }}
           style={{ marginTop: 10 }}
         />
         <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 6, lineHeight: 15 }]}>
-          Already paired, or just need to get it online? Wi-Fi setup finds it over Bluetooth.
+          Don’t want to scan? We’ll find your sensor over Bluetooth and claim it automatically — no code needed.
         </Text>
         <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', minHeight: 44, justifyContent: 'center', marginTop: 4 }}>
           <Text style={[type.body, { color: light.inkMuted }]}>Cancel</Text>
@@ -170,7 +170,7 @@ export default function PairDevice() {
     return (
       <Screen mode="light">
         <Text style={[type.micro, { color: accent.sage, marginTop: 8 }]}>
-          PAIRED ✓ · STEP 2 OF 3 — CONNECT IT TO WI-FI
+          {deviceId ? 'PAIRED ✓ · ' : ''}STEP 2 OF 3 — CONNECT IT TO WI-FI
         </Text>
         <WifiSetupFlow
           onDone={() => setStep('assign')}
@@ -181,6 +181,15 @@ export default function PairDevice() {
           // moment it joins, so a fresh last_seen proves setup worked even if
           // the BLE link dropped before it could report back.
           verify={deviceId ? () => deviceSeenSince(deviceId, wifiStartedAt) : undefined}
+          // No-QR path: the sensor hands us its id+key over Bluetooth, so we
+          // claim it right here. (When paired via QR, deviceId is already set.)
+          onIdentified={async (id, key) => {
+            if (deviceId) return;
+            const { error } = await registerDevice(id, key);
+            if (error) { setError(error); setStep('scan'); return; }
+            setDeviceId(id);
+            setWifiStartedAt(Date.now());
+          }}
         />
       </Screen>
     );
@@ -213,10 +222,19 @@ export default function PairDevice() {
             No plants yet — you can assign the sensor later from the plant's screen.
           </Text>
         )}
+        {error && <Text style={[type.micro, { color: '#C0392B', marginTop: 12 }]}>{error}</Text>}
         <GButton
           title={plantId ? 'Assign & finish' : 'Skip for now'}
           onPress={async () => {
-            if (deviceId && plantId) await assignDeviceToPlant(deviceId, plantId);
+            if (deviceId && plantId) {
+              const { error: assignErr } = await assignDeviceToPlant(deviceId, plantId);
+              if (assignErr) {
+                // Don't move on pretending it linked — the plant would show nothing.
+                setError(`Couldn’t link the sensor to that plant: ${assignErr}. Try again.`);
+                return;
+              }
+            }
+            setError(null);
             setStep('done');
           }}
           style={{ marginTop: 16 }}
@@ -225,7 +243,7 @@ export default function PairDevice() {
     );
   }
 
-  // --- done: waiting for / showing first reading ---
+  // --- done: only claim success if the sensor ACTUALLY reported ---
   const V = ({ label, value }: { label: string; value: string }) => (
     <Card mode="light" style={{ width: '47%', alignItems: 'center' }}>
       <Text style={[type.numBold as any, { fontSize: 24, color: light.ink }]}>{value}</Text>
@@ -233,15 +251,27 @@ export default function PairDevice() {
     </Card>
   );
   const num = (v: number | null) => (v != null ? String(v) : '—');
+  // Is this sensor actually alive? Either it reported since setup began, OR its
+  // last reading is recent enough that it's clearly still on its normal cycle —
+  // a sensor that's been online for weeks shouldn't be told it "needs Wi-Fi"
+  // just because we happened to pair it between two 3-hourly readings.
+  const readingMs = reading ? new Date(reading.created_at).getTime() : 0;
+  const ONE_CYCLE_MS = 3.5 * 60 * 60 * 1000; // one ~3 h reporting cycle, plus slack
+  const reportedNow =
+    reading != null && (readingMs >= wifiStartedAt || Date.now() - readingMs < ONE_CYCLE_MS);
   return (
     <Screen mode="light" scroll={false} style={{ justifyContent: 'center' }}>
       <View style={{ alignItems: 'center' }}>
-        <Ionicons name="checkmark-circle" size={54} color={accent.sage} />
+        <Ionicons
+          name={reportedNow ? 'checkmark-circle' : 'time-outline'}
+          size={54}
+          color={reportedNow ? accent.sage : accent.sunbeamText}
+        />
         <Text style={[type.ritualTitle, { color: light.ink, marginTop: 12, textAlign: 'center' }]}>
-          Sensor connected.
+          {reportedNow ? 'Sensor connected.' : 'Linked — waiting for its first reading'}
         </Text>
       </View>
-      {reading ? (
+      {reportedNow && reading ? (
         <>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 20, justifyContent: 'center' }}>
             <V label="soil moisture" value={`${num(reading.soil_pct)}%`} />
@@ -255,13 +285,33 @@ export default function PairDevice() {
           </Text>
         </>
       ) : (
-        <Text style={[type.body, { color: light.inkMuted, textAlign: 'center', marginTop: 24 }]}>
-          Waiting for the first reading… it lands within a few minutes of the sensor waking.
-        </Text>
+        <>
+          <Text style={[type.body, { color: light.inkMuted, textAlign: 'center', marginTop: 18, lineHeight: 22 }]}>
+            The sensor is linked to your account, but it hasn’t sent a reading yet — so
+            it probably still needs its Wi-Fi.
+          </Text>
+          <Card mode="light" style={{ marginTop: 14, flexDirection: 'row', gap: 10 }}>
+            <Ionicons name="wifi" size={20} color={accent.verdant} />
+            <Text style={[type.caption, { color: light.ink, flex: 1, lineHeight: 19 }]}>
+              <Text style={{ fontWeight: '600' }}>To give it Wi-Fi:</Text> open your phone’s
+              Settings → Wi-Fi and join <Text style={{ fontWeight: '600' }}>“greenr-setup”</Text> (no
+              password). A page opens where you pick your home network — then rejoin your normal
+              Wi-Fi. Works on any phone, no Bluetooth needed.
+            </Text>
+          </Card>
+          {reading && (
+            <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 12 }]}>
+              Its last reading was {new Date(reading.created_at).toLocaleString()} — from before this setup.
+            </Text>
+          )}
+        </>
       )}
       <GButton
-        title="Done"
+        title={plantId ? 'See it on your plant' : 'Done'}
         onPress={() => {
+          // Land the user on the plant they linked, so the sensor readings are
+          // right there instead of them hunting for them from the home tab.
+          if (plantId) { router.replace({ pathname: '/plant/[id]', params: { id: plantId } }); return; }
           try { if (router.canDismiss()) { router.dismiss(); return; } } catch {}
           router.replace('/(tabs)');
         }}

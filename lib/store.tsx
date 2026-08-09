@@ -17,9 +17,11 @@ import {
   AccuracyEntry,
   CareTask,
   Plant,
+  PotShape,
   Profile,
   Sensor,
   Settings,
+  SoilMix,
   Spot,
 } from './types';
 
@@ -146,7 +148,7 @@ interface GreenrApi extends GreenrState {
   addSpot: (s: Spot) => void;
   logWater: (plantId: string) => void;
   /** Log a watering with its amount — feeds the estimate cycle (honest, no fabricated score change). */
-  logWaterAmount: (plantId: string, ml: number | null) => void;
+  logWaterAmount: (plantId: string, ml: number | null, predictedRisePts?: number | null) => void;
   /** Log non-watering care (fertilized, misted, repotted, …) to the plant's history. */
   logCare: (plantId: string, note: string) => void;
   completeTask: (taskId: string, verified: boolean) => void;
@@ -163,6 +165,14 @@ interface GreenrApi extends GreenrState {
   /** Add a growth-journal entry (photo and/or height/leaf measurement + note). */
   logGrowth: (plantId: string, entry: { photoUri?: string; heightCm?: number | null; leaves?: number | null; note?: string }) => void;
   renamePlant: (plantId: string, name: string) => void;
+  setPotDimensions: (plantId: string, dims: { potCm?: number | null; potHeightCm?: number | null; potShape?: PotShape }) => void;
+  /**
+   * Record a repot: the new mix, optionally new pot dimensions, and the date.
+   * Stamping `lastRepottedAt` is not bookkeeping — it puts the plant into
+   * `settlingState`'s 21-day window, which softens the advice and suppresses
+   * feeding while the roots re-establish.
+   */
+  repotPlant: (plantId: string, change: { soilMix?: SoilMix; hasDrainage?: boolean; potCm?: number | null; potHeightCm?: number | null }) => void;
   reassignSensor: (sensorId: string, plantId: string) => void;
   recalibrateSensor: (sensorId: string) => void;
   /** §8: record a per-metric calibration (offset = reference − measured) */
@@ -352,7 +362,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const logWaterAmount = useCallback((plantId: string, ml: number | null) => {
+  const logWaterAmount = useCallback((plantId: string, ml: number | null, predictedRisePts?: number | null) => {
     const at = new Date().toISOString();
     setState((s) => ({
       ...s,
@@ -365,7 +375,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
         return {
           ...p,
           lastWateredAt: at,
-          waterLog: [...(p.waterLog ?? []), { at, ml }].slice(-30),
+          waterLog: [...(p.waterLog ?? []), { at, ml, predictedRisePts: predictedRisePts ?? null }].slice(-30),
           timeline: [
             {
               id: `tl-${Date.now()}`, at: new Date().toISOString(),
@@ -542,6 +552,65 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       plants: s.plants.map((p) => (p.id === plantId ? { ...p, name } : p)),
     }));
   }, []);
+
+  /**
+   * Record the pot's measured dimensions. Soil volume needs BOTH the width and
+   * the depth — supplying only one leaves the estimate on its fallback, which is
+   * why this takes them together rather than one at a time.
+   */
+  const setPotDimensions = useCallback(
+    (plantId: string, dims: { potCm?: number | null; potHeightCm?: number | null; potShape?: PotShape }) => {
+      setState((s) => ({
+        ...s,
+        plants: s.plants.map((p) =>
+          p.id === plantId
+            ? {
+                ...p,
+                ...(dims.potCm != null ? { potCm: dims.potCm } : {}),
+                ...(dims.potHeightCm != null ? { potHeightCm: dims.potHeightCm } : {}),
+                ...(dims.potShape ? { potShape: dims.potShape } : {}),
+              }
+            : p,
+        ),
+      }));
+    },
+    [],
+  );
+
+  const repotPlant = useCallback(
+    (plantId: string, change: { soilMix?: SoilMix; hasDrainage?: boolean; potCm?: number | null; potHeightCm?: number | null }) => {
+      setState((s) => ({
+        ...s,
+        plants: s.plants.map((p) => {
+          if (p.id !== plantId) return p;
+          const bits = [
+            change.soilMix && change.soilMix !== p.soilMix ? `into ${change.soilMix.toLowerCase()}` : null,
+            change.potCm != null && change.potCm !== p.potCm ? `${change.potCm} cm pot` : null,
+            change.hasDrainage === true && p.hasDrainage === false ? 'drainage holes added' : null,
+          ].filter(Boolean);
+          return {
+            ...p,
+            ...(change.soilMix ? { soilMix: change.soilMix } : {}),
+            ...(change.hasDrainage != null ? { hasDrainage: change.hasDrainage } : {}),
+            ...(change.potCm != null ? { potCm: change.potCm } : {}),
+            ...(change.potHeightCm != null ? { potHeightCm: change.potHeightCm } : {}),
+            lastRepottedAt: new Date().toISOString(),
+            timeline: [
+              {
+                id: `tl-${Date.now()}`,
+                at: new Date().toISOString(),
+                daysAgo: 0,
+                kind: 'care' as const,
+                text: bits.length ? `Repotted ${bits.join(', ')}` : 'Repotted',
+              },
+              ...p.timeline,
+            ],
+          };
+        }),
+      }));
+    },
+    [],
+  );
 
   const reassignSensor = useCallback((sensorId: string, plantId: string) => {
     setState((s) => ({
@@ -720,6 +789,8 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       setPlantPhoto,
       logGrowth,
       renamePlant,
+      setPotDimensions,
+      repotPlant,
       reassignSensor,
       recalibrateSensor,
       calibrateMetric,
@@ -730,7 +801,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPotDimensions, repotPlant, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

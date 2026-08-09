@@ -1,5 +1,8 @@
 import { applyCalibration, type SensorCalibration } from './calibration';
 import type { Reading } from './devices';
+import { pct2 } from './format';
+import { isNight, USEFUL_LIGHT_MIN } from './insights';
+import type { SoilDynamics } from './soilDynamics';
 import { idealsFor, lightStatus, soilStatus, tempStatus, humidityStatus, type Tone } from './plantStatus';
 
 /**
@@ -58,7 +61,12 @@ function wordFor(total: number): HealthScore['word'] {
   return 'Critical';
 }
 
-function moistureComponent(species: string, soil: number | null | undefined, band: [number, number]): HealthComponent {
+function moistureComponent(
+  species: string,
+  soil: number | null | undefined,
+  band: [number, number],
+  dyn?: SoilDynamics | null,
+): HealthComponent {
   const [lo, hi] = band;
   const base: Omit<HealthComponent, 'earned' | 'tone' | 'value' | 'reason' | 'recommendation'> = {
     key: 'moisture',
@@ -69,26 +77,44 @@ function moistureComponent(species: string, soil: number | null | undefined, ban
   if (soil == null) {
     return { ...base, earned: 0, tone: 'unknown', value: 'N/A', reason: `Waiting for a soil reading to judge against ${species}'s ${lo}–${hi}% ideal.`, recommendation: '' };
   }
+
+  // Freshly watered soil reads saturated — that is the watering WORKING, not a
+  // fault. Scoring that instant against the band gave 0/30 and told people to
+  // fix something they had just done right, so a plant inside its normal drain
+  // window keeps full marks and simply reports when it'll settle.
+  if (dyn?.draining) {
+    return {
+      ...base,
+      earned: WEIGHTS.moisture,
+      tone: 'good',
+      value: `${pct2(soil)} · draining`,
+      reason: `Just watered, so the soil is saturated at ${Math.round(soil)}% — normal while it drains toward ${lo}–${hi}%.`,
+      recommendation: '',
+    };
+  }
+
   const span = Math.max(8, hi - lo);
   const earned = scoreRange(soil, lo, hi, span, WEIGHTS.moisture);
   const tone = soilStatus(soil, band).tone;
   let recommendation = '';
   if (soil < lo) recommendation = 'Water now — pour slowly until it drains from the base, then empty the saucer.';
+  else if (dyn?.drainageProblem)
+    recommendation = 'Still waterlogged long after watering — check the drainage holes and empty the saucer.';
   else if (soil > hi) recommendation = 'Hold off watering; let the soil dry back into range before the next drink.';
   return {
     ...base,
     earned,
     tone,
-    value: `${Math.round(soil)}%`,
+    value: pct2(soil),
     reason: `${species} prefers ${lo}–${hi}% soil moisture; the sensor reads ${Math.round(soil)}%.`,
     recommendation,
   };
 }
 
-/** Daytime is 07:00–19:00 local (matches the daytime window used for averaging). */
+/** Uses the real local sunrise/sunset when the weather data has supplied it, so
+ *  a winter evening reading isn't mistaken for a dark spot. */
 function isNightHour(iso: string): boolean {
-  const h = new Date(iso).getHours();
-  return h < 7 || h >= 19;
+  return isNight(new Date(iso).getTime());
 }
 
 function lightComponent(
@@ -108,9 +134,11 @@ function lightComponent(
   if (idx == null) {
     return { ...base, earned: 0, tone: 'unknown', value: 'N/A', reason: `Waiting for a light reading.`, recommendation: '' };
   }
-  // Night, with no daytime average yet: a dark nighttime reading says nothing
-  // about the spot's daylight, so hold light neutral instead of tanking health.
-  if (!useAvg && opts?.night) {
+  // Night AND genuinely dark, with no average yet: that reading says nothing
+  // about the spot, so hold light neutral instead of tanking health.
+  // If a lamp or grow light is on and bright enough to clear the compensation
+  // point, it IS feeding the plant — that reading counts normally.
+  if (!useAvg && opts?.night && idx < USEFUL_LIGHT_MIN) {
     return {
       ...base,
       earned: Math.round(WEIGHTS.light * 0.8),
@@ -126,11 +154,22 @@ function lightComponent(
   const earned =
     st.tone === 'good' ? WEIGHTS.light : st.tone === 'warn' ? Math.round(WEIGHTS.light * 0.7) : Math.round(WEIGHTS.light * 0.35);
   const wants = dli[1] >= 10 ? 'bright, direct light' : dli[1] <= 4 ? 'low to medium indirect light' : 'bright indirect light';
+  // "Move your plant" must NEVER come from one reading. Light swings hugely with
+  // cloud, time of day and season, so a single dim sample says nothing about the
+  // spot. The recommendation only appears once the multi-day average has reached
+  // the same confidence bar the spot verdict uses; before that the app says it is
+  // still measuring, which is the honest state.
+  const MIN_DAYS_FOR_MOVE = 5;
+  const daysBehind = useAvg ? (opts?.days ?? 1) : 0;
   let recommendation = '';
   if (st.tone !== 'good') {
-    recommendation = st.label.includes('dark') || st.label.includes('Low')
-      ? `Move ${species} closer to a brighter window, or add a grow light.`
-      : `Filter the light or move it back — this is stronger than ${species} wants.`;
+    if (daysBehind >= MIN_DAYS_FOR_MOVE) {
+      recommendation = st.label.includes('dark') || st.label.includes('Low')
+        ? `Move ${species} closer to a brighter window, or add a grow light.`
+        : `Filter the light or move it back — this is stronger than ${species} wants.`;
+    } else {
+      recommendation = `Still measuring this spot — light varies a lot day to day, so Greenr waits for ${MIN_DAYS_FOR_MOVE} days of readings before suggesting a move.`;
+    }
   }
   const multiDay = useAvg && opts?.days && opts.days >= 2;
   const tag = useAvg ? (multiDay ? ` · ${opts!.days}-day avg` : ' · daytime avg') : '';
@@ -183,7 +222,7 @@ function humidityComponent(species: string, rh: number | null | undefined, floor
     ...base,
     earned,
     tone,
-    value: `${Math.round(rh)}%`,
+    value: pct2(rh),
     reason: `${species} wants at least ${floor}% humidity; the air here is ${Math.round(rh)}%.`,
     recommendation,
   };
@@ -205,6 +244,7 @@ export function computeHealth(
   unitsF = true,
   calibration?: SensorCalibration | null,
   lightAvg?: LightAvgInput | null,
+  soilDyn?: SoilDynamics | null,
 ): HealthScore {
   const ideal = idealsFor(species, band);
   // Correct the reading with the sensor's calibration offsets first, so health
@@ -212,7 +252,7 @@ export function computeHealth(
   const r = reading ? applyCalibration(reading, calibration) : reading;
   const night = reading ? isNightHour(reading.created_at) : false;
   const components: HealthComponent[] = [
-    moistureComponent(species, r?.soil_pct, ideal.band),
+    moistureComponent(species, r?.soil_pct, ideal.band, soilDyn),
     lightComponent(species, r?.light_lux, ideal.dli, { avg: lightAvg?.avg, days: lightAvg?.days, night }),
     temperatureComponent(species, r?.temp_c, ideal.temp, unitsF),
     humidityComponent(species, r?.humidity_pct, ideal.rhFloor),

@@ -13,28 +13,38 @@ import PlantAvatar from '@/components/greenr/PlantAvatar';
 import { Card, Chip, GButton, Hairline, SectionHeader } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, bandFor, dark, layout, type } from '@/constants/theme';
-import { daysAgoLabel, eventDaysAgo } from '@/lib/format';
+import { daysAgoLabel, eventDaysAgo, relTime } from '@/lib/format';
 import { useGreenr } from '@/lib/store';
 import { useLiveReading } from '@/lib/useLiveReading';
 import { idealsFor, type Tone } from '@/lib/plantStatus';
 import { plantsForEnvironment, scoreSpeciesForEnvironment, type Match } from '@/lib/compatibility';
 import { estimateDli, dliBracket } from '@/lib/lightModel';
-import { insightsFor, lightBenchmark, dayLight, recentLightAvg, lightVerdict } from '@/lib/insights';
+import { insightsFor, lightBenchmark, dayLight, daytimeLightAvg, recentLightAvg, lightVerdict } from '@/lib/insights';
 import { careProfileFor } from '@/lib/plantCare';
 import { computeHealth, vitalityFor, BASELINE_DAYS, type HealthComponent } from '@/lib/health';
 import { computeCareScore, type CareComponent } from '@/lib/careScore';
 import { growthHeadline, growthSummary } from '@/lib/growth';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { estimateWaterSchedule, qualitativeNeeds } from '@/lib/estimate';
-import type { Toxicity } from '@/lib/plants';
+import { getSpecies, waterProfileFor, waterStyleNote, type Toxicity } from '@/lib/plants';
 import { computeSchedule, wateringIcs } from '@/lib/schedule';
 import { useWeather } from '@/lib/useWeather';
 import { weatherWateringImpact } from '@/lib/weather';
 import { shareContent } from '@/lib/platform';
 import { currentSeason, seasonalNotes, SEASON_EMOJI, SEASON_LABEL } from '@/lib/season';
 import { groomingTip, tipsFor } from '@/lib/tips';
-import { mlNeeded, waterPlan, wateringAdvice } from '@/lib/watering';
-import { buildHydrationModel } from '@/lib/hydration';
+import { potVolume, pourStep, recommendedPourMl, waterPlan, wateringAdvice, wettingFor } from '@/lib/watering';
+import { pourOutcome, reviewWatering, settlingState, soilDynamics, wateredSinceLastReading, wateringDidNotRegister } from '@/lib/soilDynamics';
+import { confidentVerdicts } from '@/lib/environment';
+import { metricSummary } from '@/lib/dailyStats';
+import { PROBE, profileCorrection, perchedWaterTableCm, probeFit, profileBands, rootZoneFromReading, inferWaterTableDepth } from '@/lib/soilProfile';
+import { retentionEstimate, RETENTION_LABEL } from '@/lib/soilRetention';
+import { mixVerdict, recipeLine, soilRecipeFor } from '@/lib/soilRecipe';
+import { buildHydrationModel, rootBoundSignal } from '@/lib/hydration';
+import { pestRisks } from '@/lib/pestRisk';
+import { vpdKpa, vpdVerdict } from '@/lib/vpd';
+import { waterAction } from '@/lib/waterAction';
+import type { PotShape } from '@/lib/types';
 
 /** A labelled fact chip for the care guide (difficulty, size, zones, …). */
 function Fact({ label, value }: { label: string; value: string }) {
@@ -195,9 +205,14 @@ export default function PlantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, spots, sensors, settings, profile, calibrations, lightDaily, recordLightDay, logWaterAmount, logCare, archivePlant, setPlantPhoto, renamePlant, setLightInverted } =
+  const { plants, spots, sensors, settings, profile, calibrations, lightDaily, recordLightDay, logWaterAmount, logCare, archivePlant, setPlantPhoto, renamePlant, setPotDimensions, setLightInverted } =
     useGreenr();
   const plant = plants.find((p) => p.id === id);
+  const [depthInput, setDepthInput] = useState('');
+  const [widthInput, setWidthInput] = useState('');
+  const [dimsError, setDimsError] = useState<string | null>(null);
+  const [potSizeEditing, setPotSizeEditing] = useState(false);
+  const [shapeInput, setShapeInput] = useState<PotShape | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [careOpen, setCareOpen] = useState(false);
   const [signsOpen, setSignsOpen] = useState(false);
@@ -211,6 +226,11 @@ export default function PlantDetail() {
   const [renameText, setRenameText] = useState('');
   const [photoAdded, setPhotoAdded] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
+  // Progressive disclosure: the page opens SIMPLE — score, what to do now, and
+  // the four readings. Charts, care guide, trends and analysis sit behind one
+  // toggle for anyone who wants them, instead of burying the answer in a wall.
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const spot = useMemo(() => spots.find((s) => s.id === plant?.spotId), [spots, plant]);
   const sensor = useMemo(() => sensors.find((s) => s.id === plant?.sensorId), [sensors, plant]);
@@ -242,10 +262,21 @@ export default function PlantDetail() {
     () => recentLightAvg(lightDaily[plant?.id ?? ''] ?? [], todayLight),
     [lightDaily, plant?.id, todayLight],
   );
-  const lightAvgInput = useMemo(
-    () => (lightAvg ? { avg: lightAvg.avg, days: lightAvg.days } : null),
-    [lightAvg],
-  );
+  /**
+   * The light figure health actually scores against.
+   *
+   * The stored per-day history is only written while the plant screen is open,
+   * so a sensor can gather light all day and still leave the store empty — which
+   * left the Light metric stuck on "Awaiting daytime" every evening. Falling back
+   * to the daytime average computed straight from the readings means an average
+   * essentially always exists, and night simply reuses the day's measurement
+   * instead of pretending we know nothing.
+   */
+  const lightAvgInput = useMemo(() => {
+    if (lightAvg) return { avg: lightAvg.avg, days: lightAvg.days };
+    const fromHistory = daytimeLightAvg(calHistory);
+    return fromHistory ? { avg: fromHistory.avg, days: 1 } : null;
+  }, [lightAvg, calHistory]);
   // Snapshot each day's light into the store so the average survives restarts and
   // keeps growing over calendar time (recordLightDay is a no-op when unchanged).
   useEffect(() => {
@@ -253,14 +284,99 @@ export default function PlantDetail() {
     if (todayLight) recordLightDay(plant.id, todayLight);
     if (yesterdayLight) recordLightDay(plant.id, yesterdayLight);
   }, [plant?.id, todayLight, yesterdayLight, recordLightDay]);
+  // What the soil is DOING: draining after a drink, settled, or drying out. This
+  // is what stops a freshly watered plant scoring 0/30 for moisture.
+  const soilDyn = useMemo(
+    () => (plant && liveDeviceId ? soilDynamics(plant, calHistory, plant.comfortBand) : null),
+    [plant, liveDeviceId, calHistory],
+  );
+  const waterReview = useMemo(
+    () => (plant && liveDeviceId ? reviewWatering(plant, calHistory, plant.comfortBand) : null),
+    [plant, liveDeviceId, calHistory],
+  );
+  // True from the moment a watering is logged until a fresh reading arrives.
+  const justWatered = plant ? wateredSinceLastReading(plant, liveReading) : false;
+  // …and once a reading HAS arrived, whether the pour actually showed up in the
+  // soil. A logged watering that changes nothing is a real, actionable failure.
+  const wateringMiss = plant && calHistory.length
+    ? wateringDidNotRegister(plant, calHistory, plant.comfortBand)
+    : null;
+  /**
+   * How long this pot really stays damp, read off the sensor's own dry-down
+   * curve instead of the owner's estimate of it. `retention` is what every
+   * moisture calculation on this screen should use — see lib/soilRetention.
+   */
+  const retentionEst = useMemo(
+    () => (plant && liveDeviceId ? retentionEstimate(plant, calHistory) : null),
+    [plant, liveDeviceId, calHistory],
+  );
+  const retention = retentionEst?.confident ? retentionEst.value : (plant?.soilRetention ?? null);
+  /**
+   * Explain the vertical moisture profile for THIS pot: the probe samples the
+   * driest few centimetres, while the roots sit lower where a fixed-height
+   * saturated layer keeps things wetter.
+   */
+  const soilProfileNote = useMemo(() => {
+    if (!plant || !liveDeviceId) return null;
+    const geo = { potHeightCm: plant.potHeightCm ?? 16, soilMix: plant.soilMix, soilRetention: retention };
+    const reading = calReading?.soil_pct;
+    if (reading == null) return null;
+    // Invert the retention curve: what the probe read → how far the pot has
+    // dried → what the roots below it are actually sitting in.
+    const { rootZonePct, offset } = rootZoneFromReading(reading, geo);
+    const pwt = perchedWaterTableCm(plant.soilMix ?? 'Standard mix', retention);
+    return {
+      geo,
+      rootZonePct,
+      offset,
+      pwt,
+      text: `The probe senses the top ${PROBE.insertCm} cm — the driest part of any pot, because height above the base IS suction. Below it a saturated layer about ${pwt.toFixed(1)} cm deep sits on the base, so the roots are holding roughly ${rootZonePct.toFixed(2)}% (${offset >= 0 ? '+' : ''}${offset.toFixed(2)} vs the probe). In this ${geo.potHeightCm} cm pot that layer is ${((pwt / geo.potHeightCm) * 100).toFixed(0)}% of the depth.`,
+    };
+  }, [plant, liveDeviceId, calReading, retention]);
+  const settling = useMemo(() => (plant ? settlingState(plant) : null), [plant]);
+  // The best substrate for this species, and whether what it is in now will do.
+  const soilRecipe = useMemo(() => soilRecipeFor(plant?.species), [plant?.species]);
+  const soilFit = useMemo(
+    () => mixVerdict(plant?.species, plant?.soilMix ?? null),
+    [plant?.species, plant?.soilMix],
+  );
+  // "Is this spot actually working?" — only surfaced once several days of
+  // readings independently agree, so a "move it" is never a knee-jerk call.
+  const envIssues = useMemo(
+    () =>
+      plant && liveDeviceId
+        ? confidentVerdicts({
+            species: plant.species,
+            plantName: plant.name,
+            history: calHistory,
+            ideal: idealsFor(plant.species, plant.comfortBand),
+            unitsF: settings.unitsF,
+            // Per-day light from the store: it remembers ~30 days, far beyond the
+            // ~6 days of raw readings, so the light verdict has the most evidence.
+            lightDaily: [...(lightDaily[plant.id] ?? []), ...(todayLight ? [todayLight] : [])],
+            soilDyn,
+          })
+        : [],
+    [plant, liveDeviceId, calHistory, settings.unitsF, lightDaily, todayLight, soilDyn],
+  );
+  // Multi-day averages for EVERY metric — a day is the honest unit, and these
+  // get more trustworthy the longer the sensor runs.
+  const norms = useMemo(
+    () => ({
+      soil: metricSummary(calHistory, 'soil'),
+      temp: metricSummary(calHistory, 'temp'),
+      humidity: metricSummary(calHistory, 'humidity'),
+    }),
+    [calHistory],
+  );
   // Live health, computed from the sensor vs this species' ideals (§9). When
   // measured, it — not the seeded estimate — drives the hero ring (§3).
   const health = useMemo(
     () =>
       plant && liveDeviceId
-        ? computeHealth(plant.species, plant.comfortBand, liveReading, liveHistory, settings.unitsF, cal, lightAvgInput)
+        ? computeHealth(plant.species, plant.comfortBand, liveReading, liveHistory, settings.unitsF, cal, lightAvgInput, soilDyn)
         : null,
-    [plant, liveDeviceId, liveReading, liveHistory, settings.unitsF, cal, lightAvgInput],
+    [plant, liveDeviceId, liveReading, liveHistory, settings.unitsF, cal, lightAvgInput, soilDyn],
   );
   // A live sensor is authoritative: never show estimate visuals for it (§6).
   const sensored = liveDeviceId != null;
@@ -368,12 +484,6 @@ export default function PlantDetail() {
       ? lightVerdict(lightAvg.avg, plant.species, ideal.dli, { days: lightAvg.days, hours: lightAvg.hours })
       : lightBenchmark(calHistory, plant.species, ideal.dli)
     : null;
-  // Exact refill: ml to take the soil from its current reading back to mid-band.
-  const bandMid = Math.round((ideal.band[0] + ideal.band[1]) / 2);
-  const refillMl =
-    sensored && calReading?.soil_pct != null && calReading.soil_pct < ideal.band[0]
-      ? mlNeeded(plant.potSize, plant.potMaterial, calReading.soil_pct, bandMid, plant.potCm)
-      : null;
   const careProfile = careProfileFor(plant.species);
   // Seasonal context + the personalized water plan (pot volume × species draw ×
   // measured climate × season — the real calculation, factors listed).
@@ -396,11 +506,452 @@ export default function PlantDetail() {
   const efficientPour = hydration
     ? hydration.mlForDays(plan.intervalDays, calReading?.soil_pct ?? ideal.band[0], ideal.band)
     : null;
+  /**
+   * THE amount to pour — one number, used everywhere.
+   *
+   * There used to be three competing figures on this screen (a partial "refill to
+   * mid-band", the calculated plan, and the learned pour), which left people
+   * reading "water 500 ml" directly above "1050 ml every 7 days". Beyond being
+   * confusing it was also poor practice: a partial top-up wets only part of the
+   * root ball and leaves dry pockets. Correct watering is a THOROUGH soak until
+   * it drains — so the volume is constant and only the timing changes.
+   * Preference: the volume learned from this plant's own curve, else the
+   * calculated plan.
+   */
+  // The ONE shared figure (lib/watering → recommendedPourMl), so Home, Forecast,
+  // Care Mode and this screen can never disagree again.
+  const pourEnv = {
+    tempC: calReading?.temp_c,
+    humidityPct: calReading?.humidity_pct,
+    lightAvg: lightAvg?.avg ?? null,
+    // With a live reading the amount is the MEASURED deficit, not a routine soak.
+    soilPct: calReading?.soil_pct,
+    targetPct: Math.round((ideal.band[0] + ideal.band[1]) / 2),
+  };
+  /**
+   * The closed loop: dose → predict → observe → correct.
+   *
+   * `step` is what to pour now. Until this pot has taught us its own
+   * millilitres-per-point, that is a deliberately modest TRIAL sized to produce a
+   * clearly readable rise, together with the rise we expect. `outcome` reads the
+   * next sensor report back and says whether the prediction held — and it is that
+   * pairing, not the model, that the amount eventually rests on.
+   */
+  const calibration =
+    hydration && hydration.fit.n >= 2
+      ? { mlPerPoint: hydration.fit.k, pairs: hydration.fit.n, r2: hydration.fit.r2 }
+      : null;
+  /**
+   * The shared decision (lib/waterAction) — the same one Home, Care Mode and the
+   * alert engine use. This screen used to call `pourStep` directly, which doses
+   * toward the MID-BAND target rather than the floor, so a plant sitting happily
+   * at 31% in a 30–55% band was quoted a litre while Home correctly said nothing.
+   *
+   * Two distinct numbers, deliberately kept apart:
+   *   actionMl  — pour this NOW. Zero unless the plant actually needs water.
+   *   routineMl — what a normal drink for this plant is, for the schedule line
+   *               and as the default when someone chooses to water anyway.
+   */
+  const action = waterAction({ plant, reading: calReading, history: calHistory });
+  const step = action.step ?? pourStep(plant, pourEnv, calibration);
+  const actionMl = action.ml;
+  const routineMl = plan.ml;
+  const pourMl = actionMl > 0 ? actionMl : routineMl;
+  const outcome = calHistory.length ? pourOutcome(plant, calHistory) : null;
+  // Volume scales with the CUBE of the diameter, so an unmeasured depth is the
+  // biggest single source of error in every ml figure on this screen. When it's
+  // missing, say so and ask — don't quote a confident number built on a guess.
+  const potVol = potVolume(plant);
+
+  /**
+   * Growth conditions the sensor can already see. VPD is the one that explains
+   * "everything is right but nothing is happening": above ~1.6 kPa stomata shut,
+   * so CO2 stops coming in and growth halts regardless of light and water.
+   */
+  const air = calReading
+    ? (() => {
+        const kpa = vpdKpa(calReading.temp_c, calReading.humidity_pct);
+        if (kpa == null) return null;
+        const cat = getSpecies(plant.species)?.category;
+        return vpdVerdict(kpa, cat === 'cactus' || cat === 'succulent');
+      })()
+    : null;
+  const risks = calHistory.length ? pestRisks(calHistory, ideal.band) : [];
+  const rootBound = rootBoundSignal(hydration);
+  /**
+   * Everything that shaped `pourMl`, in plain language. The amount is not a
+   * lookup — it comes from the measured deficit, the pot's real volume, the
+   * medium's leaching, the wall losses, and the depth physics. Showing the terms
+   * is what makes it checkable rather than oracular.
+   */
+  const pourFactors = (() => {
+    if (calReading?.soil_pct == null) return null;
+    // Both of these must see the SAME retention the dose was computed with
+    // (waterAction substitutes the measured value), or this explanation would
+    // describe an amount the app never quoted.
+    const wet = wettingFor({
+      potMaterial: plant.potMaterial,
+      soilMix: plant.soilMix,
+      soilRetention: retention,
+      hasDrainage: plant.hasDrainage,
+    });
+    const corr = plant.potHeightCm
+      ? profileCorrection({
+          potHeightCm: plant.potHeightCm,
+          soilMix: plant.soilMix,
+          soilRetention: retention,
+        })
+      : null;
+    const style = waterProfileFor(plant.species).style;
+    const out = [
+      style === 'soak-and-dry'
+        ? `Soil is ${calReading.soil_pct.toFixed(0)}%. ${plant.species} is a soak-and-dry plant, so it gets a thorough drenching now and then nothing until it is bone dry`
+        : style === 'constantly-damp'
+          ? `Soil is ${calReading.soil_pct.toFixed(0)}%. ${plant.species} must never dry out, so it is kept deliberately wet`
+          : `Soil is ${calReading.soil_pct.toFixed(0)}% and ${plant.species} wants ${pourEnv.targetPct}%`,
+      `${potVol.liters.toFixed(1)} L of mix (${potVol.basis})`,
+      ...wet.notes,
+    ];
+    if (corr?.note) out.push(corr.note);
+    return out;
+  })();
+  /**
+   * What the pour WOULD be with the dimensions currently being typed. Showing
+   * this live is the point of the whole prompt: the person can watch the
+   * measurement they just took turn into the millilitres they should pour, so
+   * it reads as one connected calculation rather than a form to fill in.
+   */
+  const draft = (() => {
+    if (!potVol.heightAssumed) return null;
+    const parse = (s: string) => {
+      const n = parseFloat(s.replace(',', '.'));
+      return Number.isFinite(n) ? n : null;
+    };
+    const w = plant.potCm ?? parse(widthInput);
+    const d = plant.potHeightCm ?? parse(depthInput);
+    if (w == null || d == null || w < 5 || w > 80 || d < 3 || d > 100) return null;
+    const shape = shapeInput ?? plant.potShape ?? 'tapered';
+    const vol = potVolume({ potSize: plant.potSize, potCm: w, potHeightCm: d, potShape: shape });
+    const ml = recommendedPourMl({ ...plant, potCm: w, potHeightCm: d, potShape: shape }, pourEnv);
+    return { liters: vol.liters, ml, w, d };
+  })();
+  /**
+   * Ask for the pot's real size. Kept OUT of the watering section on purpose:
+   * that section only renders once there is soil history, so a plant still
+   * awaiting its first reading could never be measured — which is exactly when
+   * getting the volume right matters most.
+   */
+  const potSizePrompt = potVol.heightAssumed || potSizeEditing ? (
+
+    <Card accentBorder={accent.clay}>
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        <Ionicons name="resize-outline" size={18} color={accent.clay} style={{ marginTop: 1 }} />
+        <Text style={[type.caption, { color: dark.inkMuted, flex: 1, lineHeight: 19 }]}>
+          <Text style={{ color: dark.ink }}>
+            {potSizeEditing && !potVol.heightAssumed
+              ? 'Update the pot size'
+              : plant.potCm == null && plant.potHeightCm == null
+                ? 'How big is this pot?'
+                : plant.potCm == null
+                  ? 'How wide is this pot?'
+                  : 'How deep is this pot?'}
+          </Text>{' '}
+          {potSizeEditing && !potVol.heightAssumed
+            ? `Currently ${potVol.basis} — ${potVol.liters.toFixed(1)} L of soil. Correct a mistyped figure, or put in the new pot's size after repotting.`
+            : `Greenr is working from ${potVol.liters.toFixed(1)} L of soil (${potVol.basis}). Pot size is the biggest thing that moves this number — measure across the top and down to the soil, and the amount becomes properly accurate.`}
+        </Text>
+      </View>
+      {/* Volume needs BOTH dimensions, so ask for whichever are
+          missing — saving only one would silently change nothing.
+          One labelled row per field: cramming them side by side made
+          the boxes too narrow to read a typed decimal. */}
+      {[
+        (potSizeEditing || plant.potCm == null) && {
+          key: 'w',
+          label: 'Width across the top',
+          hint: 'the widest point, rim to rim',
+          value: widthInput,
+          set: setWidthInput,
+          placeholder: '18',
+        },
+        (potSizeEditing || plant.potHeightCm == null) && {
+          key: 'd',
+          label: 'Soil depth',
+          hint: 'soil surface down to the base',
+          value: depthInput,
+          set: setDepthInput,
+          placeholder: '16',
+        },
+      ]
+        .filter((f): f is Exclude<typeof f, false> => f !== false)
+        .map((f) => (
+          <View key={f.key} style={{ marginTop: 10 }}>
+            <Text style={[type.micro, { color: dark.ink }]}>{f.label}</Text>
+            <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1 }]}>
+              {f.hint}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6 }}>
+              <TextInput
+                value={f.value}
+                onChangeText={f.set}
+                placeholder={f.placeholder}
+                placeholderTextColor={dark.inkMuted}
+                keyboardType="decimal-pad"
+                inputMode="decimal"
+                style={{
+                  width: 110,
+                  paddingVertical: 11,
+                  paddingHorizontal: 14,
+                  borderRadius: 10,
+                  backgroundColor: dark.surface2,
+                  color: dark.ink,
+                  fontSize: 18,
+                  letterSpacing: 0.5,
+                }}
+              />
+              <Text style={[type.body, { color: dark.inkMuted }]}>cm</Text>
+            </View>
+          </View>
+        ))}
+      {/* Shape is worth ±20% of the volume — a frustum is (1+k+k²)/3 of its
+          cylinder — so it is asked alongside the two lengths, not assumed. */}
+      <View style={{ marginTop: 12 }}>
+        <Text style={[type.micro, { color: dark.ink }]}>Pot shape</Text>
+        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1 }]}>
+          how much it narrows towards the base
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+          {(
+            [
+              ['straight', 'Straight'],
+              ['tapered', 'Tapered'],
+              ['very-tapered', 'Very tapered'],
+            ] as [PotShape, string][]
+          ).map(([val, label]) => {
+            const on = (shapeInput ?? plant.potShape ?? 'tapered') === val;
+            return (
+              <Pressable
+                key={val}
+                onPress={() => setShapeInput(val)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: 10,
+                  alignItems: 'center',
+                  backgroundColor: on ? `${accent.verdant}28` : dark.surface2,
+                  borderWidth: 1,
+                  borderColor: on ? accent.verdant : 'transparent',
+                }}
+              >
+                <Text style={[type.micro, { color: on ? dark.ink : dark.inkMuted, fontWeight: on ? '700' : '400' }]}>
+                  {label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+      {/* The payoff, live: measurement → soil volume → millilitres. */}
+      {draft && (
+        <View
+          style={{
+            flexDirection: 'row',
+            gap: 8,
+            marginTop: 12,
+            padding: 10,
+            borderRadius: 10,
+            backgroundColor: `${accent.verdant}18`,
+          }}
+        >
+          <Ionicons name="arrow-forward-circle" size={16} color={accent.verdant} style={{ marginTop: 1 }} />
+          <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 16 }]}>
+            {draft.w} × {draft.d} cm ={' '}
+            <Text style={{ color: dark.ink }}>{draft.liters.toFixed(1)} L of soil</Text>, so
+            this plant needs{' '}
+            <Text style={[type.numBold as any, { color: accent.verdant }]}>
+              {draft.ml} ml
+            </Text>{' '}
+            right now{pourMl !== draft.ml ? `, not the ${pourMl} ml estimated above` : ''}. Save
+            to lock it in.
+          </Text>
+        </View>
+      )}
+      <Pressable
+        onPress={() => {
+          const parse = (s: string) => {
+            const n = parseFloat(s.replace(',', '.'));
+            return Number.isFinite(n) ? n : NaN;
+          };
+          const w = parse(widthInput);
+          const d = parse(depthInput);
+          const okW = Number.isFinite(w) && w >= 5 && w <= 80;
+          const okD = Number.isFinite(d) && d >= 3 && d <= 100;
+          const needW = potSizeEditing || plant.potCm == null;
+          const needD = potSizeEditing || plant.potHeightCm == null;
+          // Only save once everything still missing has a valid
+          // value, so a half-filled form can't look like it worked.
+          if ((!needW || okW) && (!needD || okD)) {
+            const before = potVol;
+            setPotDimensions(plant.id, {
+              potCm: needW ? Math.round(w * 10) / 10 : null,
+              potHeightCm: needD ? Math.round(d * 10) / 10 : null,
+              potShape: shapeInput ?? plant.potShape ?? 'tapered',
+            });
+            // Repotting is a real horticultural event — a bigger pot changes
+            // drying rate and watering volume for months, so it belongs in the
+            // plant's history rather than silently changing the numbers.
+            const after = potVolume({
+              potSize: plant.potSize,
+              potCm: needW ? Math.round(w * 10) / 10 : plant.potCm,
+              potHeightCm: needD ? Math.round(d * 10) / 10 : plant.potHeightCm,
+              potShape: shapeInput ?? plant.potShape ?? 'tapered',
+            });
+            if (!before.heightAssumed && Math.abs(after.liters - before.liters) > 0.2) {
+              logCare(
+                plant.id,
+                `Pot size updated: ${before.liters.toFixed(1)} L → ${after.liters.toFixed(1)} L (${after.basis})`,
+              );
+            }
+            setWidthInput('');
+            setDepthInput('');
+            setDimsError(null);
+            setPotSizeEditing(false);
+            setShapeInput(null);
+          } else {
+            setDimsError(
+              needW && needD
+                ? 'Enter both measurements — width 5–80 cm, depth 3–100 cm.'
+                : needW
+                  ? 'Enter the width across the top, between 5 and 80 cm.'
+                  : 'Enter the soil depth, between 3 and 100 cm.',
+            );
+          }
+        }}
+        style={{
+          marginTop: 12,
+          paddingVertical: 12,
+          borderRadius: 10,
+          backgroundColor: accent.verdant,
+          alignItems: 'center',
+        }}
+      >
+        <Text style={[type.caption, { color: '#04140b', fontWeight: '700' }]}>
+          {potSizeEditing && !potVol.heightAssumed ? 'Save new pot size' : 'Save pot size'}
+        </Text>
+      </Pressable>
+      {potSizeEditing && (
+        <Pressable
+          onPress={() => {
+            setPotSizeEditing(false);
+            setWidthInput('');
+            setDepthInput('');
+            setDimsError(null);
+          }}
+          style={{ marginTop: 8, paddingVertical: 8, alignItems: 'center' }}
+        >
+          <Text style={[type.micro, { color: dark.inkMuted }]}>Cancel</Text>
+        </Pressable>
+      )}
+      {dimsError && (
+        <Text style={[type.micro, { color: accent.clay, marginTop: 8, lineHeight: 15 }]}>
+          {dimsError}
+        </Text>
+      )}
+    </Card>
+  ) : null;
+
+  /**
+   * The ONE thing to do right now, shown at the very top of the page.
+   *
+   * Ranked by real urgency: roots rotting beats a dry pot beats a wrong spot.
+   * It is derived from the live reading, so it clears itself the moment the
+   * sensor shows the problem is fixed — nothing to dismiss, nothing to go stale.
+   * Returns null when the plant is genuinely fine, and then the page opens calm.
+   */
+  const todo = (() => {
+    if (!plant || !sensored) return null;
+    // Just watered? Then every "needs water" prompt is stale until the sensor
+    // reports again — otherwise tapping "log" appears to do nothing.
+    if (justWatered)
+      return {
+        urgent: false,
+        icon: 'checkmark-circle',
+        title: 'Watered — waiting for the sensor to confirm',
+        detail: `You logged a watering. The sensor reports every few hours, so the soil reading above is from before you poured. It'll update on the next report.`,
+        action: null as string | null,
+        onPress: () => {},
+      };
+    // The sensor HAS reported since the pour, and the soil never moved. Ranked
+    // above "too dry" because the soil genuinely is dry — but repeating the same
+    // instruction would just repeat the same failure.
+    if (wateringMiss)
+      return {
+        urgent: true,
+        icon: 'alert-circle',
+        title: `That watering didn't reach the soil`,
+        // Offer the retry directly: the failure mode is a pour that ran past the
+        // root ball, and the fix is to pour again more slowly. Logging it again
+        // also re-arms the check, so the next reading either confirms the second
+        // attempt worked or says so once more.
+        detail: wateringMiss.text,
+        action: `Water again — log ${pourMl} ml`,
+        onPress: () => doLogWater(pourMl),
+      };
+    // 1. Waterlogged — the fastest way to actually kill a plant.
+    if (soilDyn?.drainageProblem)
+      return {
+        urgent: true,
+        icon: 'warning',
+        title: 'Water is not draining away',
+        detail: soilDyn.detail,
+        action: null as string | null,
+        onPress: () => {},
+      };
+    // 2. Too dry — needs water now.
+    if (watering?.tone === 'bad')
+      return {
+        urgent: true,
+        icon: 'water',
+        title: `Water ${plant.name} — about ${pourMl} ml`,
+        detail: `${watering.detail} Pour slowly until it runs from the drainage holes, then empty the saucer.`,
+        action: `Log ${pourMl} ml watering`,
+        onPress: () => doLogWater(pourMl),
+      };
+    // 3. A confidently wrong spot (several days of readings agree).
+    const worst = envIssues[0];
+    if (worst)
+      return {
+        urgent: false,
+        icon: worst.relocate ? 'move' : 'construct-outline',
+        title: worst.headline,
+        detail: `${worst.detail} ${worst.action}`,
+        action: worst.relocate ? `Move ${plant.name} to another spot` : null,
+        onPress: () => router.push({ pathname: '/move/[id]', params: { id: plant.id } }),
+      };
+    // 4. Drying out — worth doing, not urgent.
+    if (watering?.tone === 'warn')
+      return {
+        urgent: false,
+        icon: 'water-outline',
+        title: `${plant.name} will want water soon`,
+        detail: `${watering.detail} When you do, give it about ${pourMl} ml.`,
+        action: `Log ${pourMl} ml watering`,
+        onPress: () => doLogWater(pourMl),
+      };
+    return null;
+  })();
   const growthLine = growthHeadline(growth);
 
   const doLogWater = (ml: number) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    logWaterAmount(plant.id, ml);
+    // Record the predicted rise ALONGSIDE the amount. Without it the next reading
+    // can only say what happened, not whether we called it correctly — and it is
+    // the comparison that calibrates this pot.
+    const predicted =
+      step.predictedRisePts != null && ml > 0 && step.ml > 0
+        ? (step.predictedRisePts * ml) / step.ml
+        : null;
+    logWaterAmount(plant.id, ml, predicted);
     setWaterOpen(false);
     setCustomMl('');
     setWaterLoggedMsg(`Logged ${ml} ml 💧`);
@@ -614,6 +1165,59 @@ export default function PlantDetail() {
         </View>
 
         <View style={{ paddingHorizontal: layout.margin }}>
+          {/* ══════════ DO THIS NOW ══════════
+              The single most urgent thing, at the very top, before any data.
+              Someone opening this page usually wants "is anything wrong, and what
+              do I do?" — not a dashboard to interpret. It disappears by itself
+              once the reading shows the problem is resolved. */}
+          {todo && (
+            <Card
+              accentBorder={todo.urgent ? accent.clay : accent.sunbeam}
+              style={{ marginTop: 18, borderWidth: 1.5, borderColor: todo.urgent ? accent.clay : accent.sunbeam }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name={todo.icon as any} size={18} color={todo.urgent ? accent.clay : accent.sunbeam} />
+                <Text style={[type.micro, { color: todo.urgent ? accent.clay : accent.sunbeam, letterSpacing: 0.6 }]}>
+                  {todo.urgent ? 'NEEDS YOU NOW' : 'WORTH DOING'}
+                </Text>
+              </View>
+              <Text style={[type.ritualTitle, { color: dark.ink, fontSize: 21, marginTop: 8 }]}>
+                {todo.title}
+              </Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 6, lineHeight: 21 }]}>
+                {todo.detail}
+              </Text>
+              {todo.action && (
+                <GButton title={todo.action} onPress={todo.onPress} style={{ marginTop: 14, minHeight: 46 }} />
+              )}
+            </Card>
+          )}
+
+          {/* What the probe is really measuring, given how deep it sits and how
+              deep the pot is. Water leaves a saturated layer of FIXED height on
+              the pot's base, so the root zone is reliably wetter than the top
+              few centimetres the probe samples. */}
+          {/* Probe depth check. A capacitive blade averages moisture along its
+              WHOLE length, so a half-inserted probe reads mostly air and the pot
+              looks bone dry — the exact confusion of "it said water me, then I
+              pushed it in and it said it was fine". */}
+          {sensored && calReading?.soil_pct != null && calReading.soil_pct <= 1 && (
+            <Card accentBorder={accent.sunbeam} style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="alert-circle" size={18} color={accent.sunbeam} />
+                <Text style={[type.cardTitle, { color: accent.sunbeam, flex: 1, fontSize: 15 }]}>
+                  Is the probe pushed all the way in?
+                </Text>
+              </View>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                The soil is reading 0% — the same value the probe gives in open air. It senses along
+                its whole blade, so if only part is buried it averages in the air above and reads far
+                too dry. Push it into the soil up to the <Text style={{ color: dark.ink }}>white line</Text>,
+                near the roots and not touching the pot wall. Readings settle within a couple of reports.
+              </Text>
+            </Card>
+          )}
+
           {/* ── Sensor readings & health — every number with its meaning + action ── */}
           {liveDeviceId && (
             <>
@@ -637,14 +1241,48 @@ export default function PlantDetail() {
                         </Text>
                       </View>
                     </View>
-                    <Hairline style={{ marginTop: 14 }} />
-                    {health.components.map((c) => (
-                      <HealthRow key={c.key} c={c} />
-                    ))}
-                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 16, lineHeight: 15 }]}>
-                      Health = the four readings summed (max 100), each judged against {plant.species}&apos;s
-                      ideal ranges. Light is a relative index, so it&apos;s coarser than the measured metrics.
-                    </Text>
+                    {/* At a glance: the four numbers, no scoring maths. The full
+                        breakdown is one tap away for anyone who wants it. */}
+                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+                      {health.components.map((c) => (
+                        <View
+                          key={c.key}
+                          style={{ flex: 1, alignItems: 'center', backgroundColor: dark.surface2, borderRadius: 10, paddingVertical: 9 }}
+                        >
+                          <Text style={{ fontSize: 15 }}>
+                            {c.key === 'moisture' ? '💧' : c.key === 'light' ? '☀️' : c.key === 'temperature' ? '🌡️' : '💨'}
+                          </Text>
+                          <Text
+                            style={[type.numBold as any, { color: healthTone(c.tone), fontSize: 14, marginTop: 3 }]}
+                            numberOfLines={1}
+                          >
+                            {c.value.split(' ')[0]}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    <Pressable
+                      onPress={() => setBreakdownOpen(!breakdownOpen)}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, minHeight: 36 }}
+                    >
+                      <Text style={[type.caption, { color: accent.verdant, flex: 1 }]}>
+                        {breakdownOpen ? 'Hide the score breakdown' : 'How is this score worked out?'}
+                      </Text>
+                      <Ionicons name={breakdownOpen ? 'chevron-up' : 'chevron-down'} size={16} color={accent.verdant} />
+                    </Pressable>
+                    {breakdownOpen && (
+                      <>
+                        <Hairline />
+                        {health.components.map((c) => (
+                          <HealthRow key={c.key} c={c} />
+                        ))}
+                        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 16, lineHeight: 15 }]}>
+                          Health = the four readings summed (max 100), each judged against {plant.species}&apos;s
+                          ideal ranges. Light is a relative index, so it&apos;s coarser than the measured metrics.
+                        </Text>
+                      </>
+                    )}
                   </>
                 ) : (
                   <Text style={[type.body, { color: dark.inkMuted, lineHeight: 21 }]}>
@@ -653,16 +1291,22 @@ export default function PlantDetail() {
                     bank — a PC&apos;s USB port cuts power when the PC sleeps).
                   </Text>
                 )}
-                {liveReading && (
-                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
-                    Reports on its own about every 3 h · next ~
-                    {new Date(new Date(liveReading.created_at).getTime() + 10800 * 1000).toLocaleTimeString('en-US', {
-                      hour: 'numeric',
-                      minute: '2-digit',
-                    })}
-                    .
-                  </Text>
-                )}
+                {liveReading && (() => {
+                  // Honest scheduling line: once the predicted time has passed,
+                  // stop showing a time in the past — say it's due/overdue, so a
+                  // late sensor reads as "late", not as a wrong clock.
+                  const nextAt = new Date(liveReading.created_at).getTime() + 10800 * 1000;
+                  const lateMin = Math.round((Date.now() - nextAt) / 60000);
+                  return (
+                    <Text style={[type.micro, { color: lateMin > 30 ? accent.sunbeamText : dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                      {lateMin < 0
+                        ? `Reports on its own about every 3 h · next ~${new Date(nextAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.`
+                        : lateMin <= 30
+                          ? 'Reports about every 3 h · next reading due now.'
+                          : `Reports about every 3 h · running ${relTime(lateMin)} late — it retries every few minutes, so this catches up on its own.`}
+                    </Text>
+                  );
+                })()}
                 <Pressable
                   onPress={() => router.push(`/dashboard/${plant.id}` as any)}
                   style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12, minHeight: 32 }}
@@ -671,25 +1315,86 @@ export default function PlantDetail() {
                   <Text style={[type.caption, { color: accent.verdant }]}>View full analytics</Text>
                 </Pressable>
               </Card>
+
+              {/* ── Multi-day norms: what this spot is USUALLY like ──
+                  A single reading is a snapshot; the day average is the honest
+                  measure, and it sharpens with every day the sensor runs. */}
+              {detailsOpen && (norms.soil?.reliable || norms.temp?.reliable || norms.humidity?.reliable) && (
+                <Card style={{ marginTop: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4 }]}>
+                    TYPICAL FOR THIS SPOT
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                    {([
+                      ['Soil', norms.soil, (v: number) => `${Math.round(v)}%`],
+                      ['Temp', norms.temp, (v: number) => (settings.unitsF ? `${Math.round((v * 9) / 5 + 32)}°F` : `${Math.round(v)}°C`)],
+                      ['Humidity', norms.humidity, (v: number) => `${Math.round(v)}%`],
+                    ] as [string, ReturnType<typeof metricSummary>, (v: number) => string][])
+                      .filter(([, m]) => m != null)
+                      .map(([label, m, fmt]) => (
+                        <View key={label} style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                          <Text style={[type.micro, { color: dark.inkMuted }]}>{label.toUpperCase()}</Text>
+                          <Text style={[type.numBold as any, { color: dark.ink, fontSize: 18, marginTop: 2 }]}>
+                            {fmt(m!.avg)}
+                          </Text>
+                          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1 }]}>
+                            {fmt(m!.low)}–{fmt(m!.high)}
+                          </Text>
+                        </View>
+                      ))}
+                  </View>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                    Averaged across {Math.max(norms.soil?.days ?? 0, norms.temp?.days ?? 0, norms.humidity?.days ?? 0)}{' '}
+                    day(s) of readings, weighted by how much of each day was covered — the range shows
+                    the quietest and busiest days. Accuracy improves the longer the sensor runs.
+                  </Text>
+                </Card>
+              )}
             </>
           )}
 
-          {/* ── Watering: direct call from the sensor (replaces generic advice) ── */}
-          {watering && (
+          {/* ── NEEDS ATTENTION — the spot itself isn't working ──
+                 Only rendered for verdicts that passed the confidence tests
+                 (enough days, most of them agreeing, a clear margin), because
+                 "move your plant" is a big ask to get wrong. */}
+          {envIssues.length > 0 && (
             <>
-              <SectionHeader>Watering</SectionHeader>
-              <Card accentBorder={watering.tone === 'bad' ? accent.clay : undefined}>
-                <Text style={[type.ritualTitle, { color: toneColor(watering.tone), fontSize: 22 }]}>
-                  {watering.verdict}
-                </Text>
-                <Text style={[type.body, { color: dark.inkMuted, marginTop: 6, lineHeight: 21 }]}>
-                  {watering.detail}
-                </Text>
-                {refillMl != null && (
+              <SectionHeader>Needs attention</SectionHeader>
+              {envIssues.map((v) => (
+                <Card
+                  key={v.metric}
+                  accentBorder={v.severity === 'act' ? accent.clay : accent.sunbeam}
+                  style={{ marginBottom: 10 }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Ionicons
+                      name={
+                        v.relocate
+                          ? 'move'
+                          : v.metric === 'humidity'
+                            ? 'water-outline'
+                            : v.metric === 'soil'
+                              ? 'rainy-outline'
+                              : 'alert-circle'
+                      }
+                      size={20}
+                      color={v.severity === 'act' ? accent.clay : accent.sunbeam}
+                    />
+                    <Text
+                      style={[
+                        type.cardTitle,
+                        { color: v.severity === 'act' ? accent.clay : accent.sunbeam, flex: 1, fontSize: 15 },
+                      ]}
+                    >
+                      {v.headline}
+                    </Text>
+                  </View>
+                  <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                    {v.detail}
+                  </Text>
                   <View
                     style={{
                       flexDirection: 'row',
-                      alignItems: 'center',
                       gap: 8,
                       marginTop: 10,
                       padding: 10,
@@ -697,13 +1402,395 @@ export default function PlantDetail() {
                       backgroundColor: `${accent.verdant}18`,
                     }}
                   >
-                    <Ionicons name="water" size={16} color={accent.verdant} />
-                    <Text style={[type.caption, { color: dark.ink, flex: 1, lineHeight: 18 }]}>
-                      Add about <Text style={[type.numBold as any, { color: accent.verdant }]}>{refillMl} ml</Text> — takes
-                      soil from {Math.round(calReading?.soil_pct ?? 0)}% back to ~{bandMid}% for this {plant.potSize === 'S' ? 'small' : plant.potSize === 'M' ? 'medium' : 'large'} {plant.potMaterial.toLowerCase()} pot.
+                    <Ionicons name="arrow-forward-circle" size={15} color={accent.verdant} style={{ marginTop: 1 }} />
+                    <Text style={[type.caption, { color: dark.ink, flex: 1, lineHeight: 18 }]}>{v.action}</Text>
+                  </View>
+                  {v.relocate && (
+                    <Pressable
+                      onPress={() => router.push({ pathname: '/move/[id]', params: { id: plant.id } })}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, minHeight: 36 }}
+                    >
+                      <Ionicons name="swap-horizontal" size={15} color={accent.verdant} />
+                      <Text style={[type.caption, { color: accent.verdant }]}>Move {plant.name} to another spot</Text>
+                    </Pressable>
+                  )}
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 15 }]}>
+                    Based on {v.days} days of readings — {v.daysOut} of them outside the ideal range.
+                  </Text>
+                </Card>
+              ))}
+            </>
+          )}
+
+          {/* Conditions that stop a plant GROWING even when watering is perfect —
+              and the pests those same conditions invite. All three come from the
+              sensor stream already being collected; none needs a new input. */}
+          {(air?.growthLimiting || risks.length > 0 || rootBound) && (
+            <>
+              <SectionHeader>Growing conditions</SectionHeader>
+              {air && air.growthLimiting && (
+                <Card accentBorder={air.tone === 'bad' ? accent.clay : accent.sunbeam}>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <Ionicons name="thermometer-outline" size={18} color={air.tone === 'bad' ? accent.clay : accent.sunbeam} style={{ marginTop: 1 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>{air.label}</Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, lineHeight: 17 }]}>
+                        {air.detail}
+                      </Text>
+                      {air.fix && (
+                        <Text style={[type.micro, { color: dark.ink, marginTop: 6, lineHeight: 17 }]}>
+                          {air.fix}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                </Card>
+              )}
+              {risks.map((r) => (
+                <Card key={r.key} accentBorder={r.level === 'likely' ? accent.clay : undefined}>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <Ionicons name="bug-outline" size={18} color={r.level === 'likely' ? accent.clay : accent.sunbeam} style={{ marginTop: 1 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
+                        {r.name} — {r.level === 'likely' ? 'likely' : 'worth watching'}
+                      </Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, lineHeight: 17 }]}>
+                        {r.because}
+                      </Text>
+                      <Text style={[type.micro, { color: dark.ink, marginTop: 6, lineHeight: 17 }]}>{r.action}</Text>
+                    </View>
+                  </View>
+                </Card>
+              ))}
+              {rootBound && (
+                <Card accentBorder={rootBound.confident ? accent.clay : undefined}>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <Ionicons name="git-branch-outline" size={18} color={accent.sunbeam} style={{ marginTop: 1 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
+                        Looks ready for a bigger pot
+                      </Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, lineHeight: 17 }]}>
+                        {rootBound.text}
+                      </Text>
+                    </View>
+                  </View>
+                </Card>
+              )}
+            </>
+          )}
+
+          {/* Pot size gates the accuracy of every ml figure below, so it is asked
+              before them and independently of whether readings exist yet. */}
+          <SectionHeader>Pot size</SectionHeader>
+          {potSizePrompt ?? (
+            // Known and confirmed: state what it IS, and keep a way back in — a
+            // mistyped digit or a repot would otherwise be baked in permanently.
+            <Card>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="resize-outline" size={18} color={accent.verdant} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
+                    {plant.potCm} × {plant.potHeightCm} cm · {potVol.liters.toFixed(1)} L of soil
+                  </Text>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                    {plant.potMaterial.toLowerCase()}
+                    {plant.soilMix ? `, ${plant.soilMix.toLowerCase()}` : ''}
+                    {plant.hasDrainage === false ? ', no drainage holes' : ''} — all of it feeds the
+                    watering amount.
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    // Pre-fill with what is stored so a correction is a tweak,
+                    // not a re-entry from scratch.
+                    setWidthInput(String(plant.potCm ?? ''));
+                    setDepthInput(String(plant.potHeightCm ?? ''));
+                    setPotSizeEditing(true);
+                  }}
+                  style={{
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                    borderRadius: 8,
+                    backgroundColor: dark.surface2,
+                  }}
+                >
+                  <Text style={[type.micro, { color: dark.ink, fontWeight: '700' }]}>Change</Text>
+                </Pressable>
+              </View>
+            </Card>
+          )}
+
+          {/* ── Soil: what it should be potted in, and whether it already is ──
+              Placed with pot size because they are the same decision made at the
+              same moment, and both are read through the same retention model. A
+              MAJOR mismatch is shown as an alert rather than a quiet link: it is
+              the one care problem no amount of correct watering can compensate
+              for, and the reason it stays quiet otherwise is that repotting a
+              plant that is doing fine does more harm than good. */}
+          <Card style={{ marginTop: 10, borderLeftWidth: soilFit.severity === 'major' ? 3 : 0, borderLeftColor: accent.clay }}>
+            <Pressable
+              onPress={() => router.push(`/repot/${plant.id}` as any)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
+            >
+              <Ionicons
+                name={soilFit.matches ? 'checkmark-circle-outline' : soilFit.severity === 'major' ? 'alert-circle' : 'flask-outline'}
+                size={18}
+                color={soilFit.matches ? accent.verdant : soilFit.severity === 'major' ? accent.clay : accent.sunbeam}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>{soilFit.headline}</Text>
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                  {soilRecipe.headline} — {recipeLine(soilRecipe)}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={dark.inkMuted} />
+            </Pressable>
+          </Card>
+
+          {/* ── Watering: direct call from the sensor (replaces generic advice) ── */}
+          {watering && (
+            <>
+              <SectionHeader>Watering</SectionHeader>
+
+              {/* Soil BEHAVIOUR — draining after a drink, or genuinely waterlogged.
+                  Shown above the verdict so a freshly watered plant reads as
+                  "working normally" instead of alarming. */}
+              {soilDyn && (soilDyn.draining || soilDyn.drainageProblem) && (
+                <Card
+                  accentBorder={soilDyn.drainageProblem ? accent.clay : accent.sage}
+                  style={{ marginBottom: 10 }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Ionicons
+                      name={soilDyn.drainageProblem ? 'warning' : 'hourglass-outline'}
+                      size={20}
+                      color={soilDyn.drainageProblem ? accent.clay : accent.sage}
+                    />
+                    <Text style={[type.cardTitle, { color: soilDyn.drainageProblem ? accent.clay : accent.sage, flex: 1, fontSize: 15 }]}>
+                      {soilDyn.headline}
+                    </Text>
+                  </View>
+                  <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                    {soilDyn.detail}
+                  </Text>
+                  {soilDyn.draining && soilDyn.reachesIdealAt && (
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginTop: 10,
+                        padding: 10,
+                        borderRadius: 10,
+                        backgroundColor: `${accent.sage}18`,
+                      }}
+                    >
+                      <Ionicons name="time-outline" size={15} color={accent.sage} />
+                      <Text style={[type.caption, { color: dark.ink, flex: 1, lineHeight: 18 }]}>
+                        Back in the ideal {ideal.band[0]}–{ideal.band[1]}% at about{' '}
+                        <Text style={[type.numBold as any, { color: accent.sage }]}>
+                          {soilDyn.reachesIdealAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                        </Text>
+                        {soilDyn.dryRatePerHour ? ` · drying ${soilDyn.dryRatePerHour.toFixed(1)}%/h` : ''}
+                      </Text>
+                    </View>
+                  )}
+                </Card>
+              )}
+
+              {/* Still settling in — gentler expectations, and no feeding yet. */}
+              {settling && (
+                <Card style={{ marginBottom: 10 }}>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <Ionicons name="leaf-outline" size={18} color={accent.verdant} style={{ marginTop: 1 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
+                        SETTLING IN · DAY {settling.daysIn + 1}
+                      </Text>
+                      <Text style={[type.caption, { color: dark.ink, marginTop: 3, lineHeight: 19 }]}>
+                        {settling.note}
+                      </Text>
+                    </View>
+                  </View>
+                </Card>
+              )}
+
+              {/* Did the last watering actually do the job? Judged from what the
+                  soil DID afterwards, not from what was poured. */}
+              {waterReview && (
+                <Card style={{ marginBottom: 10 }}>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <Ionicons
+                      name={
+                        waterReview.outcome === 'about-right'
+                          ? 'checkmark-circle'
+                          : waterReview.outcome === 'too-little'
+                            ? 'arrow-down-circle'
+                            : 'alert-circle'
+                      }
+                      size={18}
+                      color={waterReview.outcome === 'about-right' ? accent.sage : accent.sunbeam}
+                      style={{ marginTop: 1 }}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
+                        YOUR LAST WATERING
+                      </Text>
+                      <Text style={[type.caption, { color: dark.ink, marginTop: 3, lineHeight: 19 }]}>
+                        {waterReview.text}
+                      </Text>
+                    </View>
+                  </View>
+                </Card>
+              )}
+
+              <Card accentBorder={watering.tone === 'bad' ? accent.clay : undefined}>
+                <Text style={[type.ritualTitle, { color: toneColor(watering.tone), fontSize: 22 }]}>
+                  {watering.verdict}
+                </Text>
+                <Text style={[type.body, { color: dark.inkMuted, marginTop: 6, lineHeight: 21 }]}>
+                  {watering.detail}
+                </Text>
+                {/* ONE amount, stated once, matching the button and the plan. */}
+                {actionMl > 0 && (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 10,
+                      marginTop: 12,
+                      padding: 12,
+                      borderRadius: 12,
+                      backgroundColor: `${accent.verdant}18`,
+                    }}
+                  >
+                    <Ionicons name="water" size={20} color={accent.verdant} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 20 }]}>
+                        {actionMl} ml
+                      </Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1, lineHeight: 16 }]}>
+                        {/* Big pours cannot be absorbed in one go: dry mix is
+                            water-repellent and the flow channels down the sides,
+                            which is the same failure the "didn't reach the soil"
+                            alert catches after the fact. */}
+                        {actionMl >= 800
+                          ? `That's a lot at once — give it in ${Math.min(4, Math.ceil(actionMl / 500))} passes of about ${Math.round(actionMl / Math.min(4, Math.ceil(actionMl / 500)) / 25) * 25} ml, waiting a few minutes between each so it soaks in instead of running down the sides. Empty the saucer at the end.`
+                          : plant.hasDrainage === false
+                          ? 'Pour slowly and stop there — with no drainage holes the excess has nowhere to go.'
+                          : waterProfileFor(plant.species).style === 'soak-and-dry'
+                            ? `Drench it until water runs from the holes, empty the saucer — then give it nothing at all until the soil is bone dry, usually about ${Math.round(plan.intervalDays)} days. The long dry spell matters as much as the soak.`
+                            : 'Pour slowly until it runs from the drainage holes, then empty the saucer.'}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                {/* The experiment: a modest dose with a stated prediction, so the
+                    next reading either confirms it or corrects this pot's model. */}
+                {actionMl > 0 && step.isTrial && (
+                  <View
+                    style={{
+                      marginTop: 10,
+                      padding: 10,
+                      borderRadius: 10,
+                      backgroundColor: `${accent.sunbeam}18`,
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Ionicons name="flask-outline" size={15} color={accent.sunbeam} style={{ marginTop: 1 }} />
+                      <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 16 }]}>
+                        <Text style={{ color: dark.ink }}>Start smaller and measure.</Text> {step.note}
+                      </Text>
+                    </View>
+                    {step.predictedRisePts != null && (
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 16 }]}>
+                        Greenr predicts this will lift the soil about{' '}
+                        <Text style={[type.numBold as any, { color: accent.sunbeam }]}>
+                          {step.predictedRisePts.toFixed(0)} points
+                        </Text>
+                        , from {calReading?.soil_pct?.toFixed(0)}% to roughly{' '}
+                        {Math.round((calReading?.soil_pct ?? 0) + step.predictedRisePts)}%. The next
+                        reading checks that.
+                      </Text>
+                    )}
+                  </View>
+                )}
+                {/* What the last pour actually did, versus what was claimed. */}
+                {outcome && (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      gap: 8,
+                      marginTop: 10,
+                      padding: 10,
+                      borderRadius: 10,
+                      backgroundColor: `${accent.verdant}18`,
+                    }}
+                  >
+                    <Ionicons
+                      name={outcome.accuracy != null && outcome.accuracy >= 0.8 && outcome.accuracy <= 1.25 ? 'checkmark-circle' : 'analytics-outline'}
+                      size={15}
+                      color={accent.verdant}
+                      style={{ marginTop: 1 }}
+                    />
+                    <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 16 }]}>
+                      <Text style={{ color: dark.ink }}>Last watering, measured.</Text> {outcome.text}
                     </Text>
                   </View>
                 )}
+                {actionMl > 0 && step.basis === 'measured' && (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      gap: 8,
+                      marginTop: 10,
+                      padding: 10,
+                      borderRadius: 10,
+                      backgroundColor: `${accent.verdant}18`,
+                    }}
+                  >
+                    <Ionicons name="checkmark-done-circle" size={15} color={accent.verdant} style={{ marginTop: 1 }} />
+                    <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 16 }]}>
+                      <Text style={{ color: dark.ink }}>Calibrated to this pot.</Text> {step.note} That
+                      replaces the estimate — it is measured from your own waterings, so it already
+                      accounts for the roots, the compost and how this pot actually drains.
+                    </Text>
+                  </View>
+                )}
+                {/* The number's working, so it can be checked rather than trusted. */}
+                {actionMl > 0 && pourFactors && (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
+                      HOW THIS AMOUNT WAS WORKED OUT
+                    </Text>
+                    {pourFactors.map((f) => (
+                      <View key={f} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                        <Text style={[type.micro, { color: accent.verdant }]}>·</Text>
+                        <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 15 }]}>
+                          {f}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {/* How THIS species wants to be watered — the curve behind the
+                    numbers, in plain language. */}
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    gap: 8,
+                    marginTop: 12,
+                    padding: 10,
+                    borderRadius: 10,
+                    backgroundColor: dark.surface2,
+                  }}
+                >
+                  <Ionicons name="water-outline" size={15} color={accent.verdant} style={{ marginTop: 1 }} />
+                  <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 16 }]}>
+                    {waterStyleNote(plant.species)}
+                  </Text>
+                </View>
                 {watering.confidence === 'low' && (
                   <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
                     Still gathering history — accuracy climbs with every reading.
@@ -715,8 +1802,9 @@ export default function PlantDetail() {
                 <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
                   WATER PLAN — CALCULATED FOR THIS PLANT
                 </Text>
+                {/* States the SAME ml as the action above — only the timing differs. */}
                 <Text style={[type.cardTitle, { color: dark.ink, marginTop: 4, fontSize: 15 }]}>
-                  {plan.summary}
+                  ≈{routineMl} ml about every {plan.intervalDays} day{plan.intervalDays === 1 ? '' : 's'}
                 </Text>
                 {plan.factors.map((f) => (
                   <View key={f.label} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
@@ -797,8 +1885,143 @@ export default function PlantDetail() {
             </>
           )}
 
+          {/* ── ONE door to everything else ──
+                 The page above answers "how is it, and what do I do?". Charts,
+                 trends, the care guide and the analysis live behind this, so the
+                 answer is never buried under the evidence. */}
+          <Pressable
+            onPress={() => setDetailsOpen(!detailsOpen)}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 10,
+              marginTop: 16,
+              paddingVertical: 15,
+              paddingHorizontal: 16,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: dark.hairline,
+              backgroundColor: dark.surface1,
+            }}
+          >
+            <Ionicons name={detailsOpen ? 'chevron-up-circle' : 'options-outline'} size={20} color={accent.verdant} />
+            <View style={{ flex: 1 }}>
+              <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
+                {detailsOpen ? 'Hide the details' : 'See all the details'}
+              </Text>
+              {!detailsOpen && (
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                  Charts, trends, seasonal care, the full care guide and how this spot suits it
+                </Text>
+              )}
+            </View>
+            <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark.inkMuted} />
+          </Pressable>
+
+          {/* ── How well THIS compost holds water, measured from the dry-down ── */}
+          {detailsOpen && sensored && retentionEst && (
+            <Card style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons
+                  name={retentionEst.confident ? 'water-outline' : 'hourglass-outline'}
+                  size={18}
+                  color={retentionEst.confident ? accent.verdant : accent.sunbeam}
+                />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  HOW LONG THIS SOIL STAYS DAMP · MEASURED
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{retentionEst.headline}</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>DROPS BY</Text>
+                  <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 18 }]}>
+                    {retentionEst.ptsPerDay.toFixed(1)}%/day
+                  </Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>WATERED → DRY</Text>
+                  <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 18 }]}>
+                    {retentionEst.dryDays < 1 ? retentionEst.dryDays.toFixed(1) : Math.round(retentionEst.dryDays)} days
+                  </Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>VERDICT</Text>
+                  <Text style={[type.caption, { color: dark.ink, marginTop: 2 }]}>
+                    {RETENTION_LABEL[retentionEst.value]}
+                  </Text>
+                </View>
+              </View>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, lineHeight: 21 }]}>
+                {retentionEst.detail}
+              </Text>
+              <View style={{ marginTop: 10, gap: 4 }}>
+                {retentionEst.runs.slice(-3).map((r) => (
+                  <View key={r.startMs} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted, flex: 1 }]}>
+                      {relTime((Date.now() - r.startMs) / 60000)} · {r.fromPct.toFixed(0)}% →{' '}
+                      {r.toPct.toFixed(0)}% over {Math.round(r.hours)} h
+                    </Text>
+                    <Text style={[type.micro, { color: r.spanned ? accent.verdant : dark.inkMuted }]}>
+                      {r.spanned ? 'full cycle' : 'partial'} · fit {(r.fit * 100).toFixed(0)}%
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                This is how long the pot stays damp with THIS plant in THIS spot — a big, thirsty plant
+                empties its pot faster than a cutting in the same compost. Greenr corrects for how dry
+                the air was, not for how much the plant drinks.
+              </Text>
+            </Card>
+          )}
+
+          {detailsOpen && sensored && soilProfileNote && (
+            <Card style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="layers-outline" size={18} color={accent.verdant} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  WHAT THE PROBE IS MEASURING
+                </Text>
+              </View>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {soilProfileNote.text}
+              </Text>
+              <View style={{ marginTop: 10, gap: 4 }}>
+                {profileBands(
+                  soilProfileNote.geo,
+                  calReading?.soil_pct != null ? inferWaterTableDepth(calReading.soil_pct, soilProfileNote.geo) : 0,
+                ).map((b) => (
+                  <View key={b.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted, width: 150 }]}>{b.label}</Text>
+                    <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: dark.hairline, overflow: 'hidden' }}>
+                      <View style={{ width: `${Math.round(b.pct)}%`, height: 6, backgroundColor: accent.verdant }} />
+                    </View>
+                    <Text style={[type.micro, { color: dark.ink, width: 52, textAlign: 'right' }]}>
+                      {b.pct.toFixed(2)}%
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              {(() => {
+                const fit = probeFit(soilProfileNote.geo);
+                return fit.potTooShallow ? (
+                  <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
+                    {fit.note}
+                  </Text>
+                ) : null;
+              })()}
+              {!plant.potHeightCm && (
+                <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
+                  Assuming a 16 cm soil depth — set the real depth when you add or edit this plant and
+                  these figures become exact for your pot.
+                </Text>
+              )}
+            </Card>
+          )}
+
           {/* ── Watering efficiency: volume learned from the moisture curve ── */}
-          {hydration && (
+          {detailsOpen && hydration && (
             <>
               <SectionHeader>Watering efficiency</SectionHeader>
               <Card>
@@ -872,7 +2095,7 @@ export default function PlantDetail() {
           )}
 
           {/* ── What Greenr has learned (from history) ── */}
-          {insights.length > 0 && (
+          {detailsOpen && insights.length > 0 && (
             <>
               <SectionHeader>What Greenr has learned</SectionHeader>
               <Card>
@@ -994,8 +2217,9 @@ export default function PlantDetail() {
                 <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
                   WATER PLAN — CALCULATED FOR THIS PLANT
                 </Text>
+                {/* States the SAME ml as the action above — only the timing differs. */}
                 <Text style={[type.cardTitle, { color: dark.ink, marginTop: 4, fontSize: 15 }]}>
-                  {plan.summary}
+                  ≈{routineMl} ml about every {plan.intervalDays} day{plan.intervalDays === 1 ? '' : 's'}
                 </Text>
                 {plan.factors.map((f) => (
                   <View key={f.label} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
@@ -1065,6 +2289,7 @@ export default function PlantDetail() {
           )}
 
           {/* ── This season: automatic winter/summer care shifts ── */}
+          {detailsOpen && (<>
           <SectionHeader>{`${SEASON_EMOJI[season]} ${SEASON_LABEL[season]} care`}</SectionHeader>
           <Card>
             <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 15 }]}>
@@ -1079,7 +2304,7 @@ export default function PlantDetail() {
           </Card>
 
           {/* ── Tips tuned to the user's survey (beginner ≠ expert) ── */}
-          {(userTips.length > 0 || groom) && (
+          {detailsOpen && (userTips.length > 0 || groom) && (
             <>
               <SectionHeader>Tips for you</SectionHeader>
               <Card>
@@ -1156,8 +2381,10 @@ export default function PlantDetail() {
             )}
           </Card>
 
+          </>)}
+
           {/* ── Light (real sensor history) ── */}
-          {liveDeviceId && (
+          {detailsOpen && liveDeviceId && (
             <>
               <SectionHeader>Light</SectionHeader>
               <Card>
@@ -1181,6 +2408,28 @@ export default function PlantDetail() {
                       Relative light (0–100) from your sensor · last {lightBars.length} readings · now{' '}
                       {calReading?.light_lux != null ? Math.round(calReading.light_lux) : '—'}. Taller bar = brighter.
                     </Text>
+                    {/* Artificial light is real light — say so when it's counted,
+                        and note the dark period plants still need. */}
+                    {todayLight?.artificial && (
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          gap: 8,
+                          marginTop: 10,
+                          padding: 10,
+                          borderRadius: 10,
+                          backgroundColor: `${accent.sunbeam}18`,
+                        }}
+                      >
+                        <Ionicons name="bulb-outline" size={15} color={accent.sunbeam} style={{ marginTop: 1 }} />
+                        <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 16 }]}>
+                          <Text style={{ color: accent.sunbeam }}>Lamp light counted.</Text> A lamp or grow light was
+                          bright enough after dark to drive photosynthesis, so those hours count toward{' '}
+                          {plant.name}&apos;s light. Dim room lighting is ignored — below roughly 200–500 lux a plant
+                          burns more energy than it makes. Most plants still want a few hours of real darkness each night.
+                        </Text>
+                      </View>
+                    )}
                     {bench ? (
                       <View
                         style={{
@@ -1265,7 +2514,7 @@ export default function PlantDetail() {
 
           {/* ── Care guide: full for sensorless plants; a collapsed reference when
                  a sensor already provides live data (the sensor IS the guide) ── */}
-          {careProfile && (
+          {detailsOpen && careProfile && (
             <>
               {!sensored && <SectionHeader>Care guide</SectionHeader>}
               <Card style={sensored ? { marginTop: 10 } : undefined}>
@@ -1386,6 +2635,7 @@ export default function PlantDetail() {
           )}
 
           {/* ── Growth journal: the outcome dimension no sensor can read ── */}
+          {detailsOpen && (
           <Card style={{ marginTop: 10 }} onPress={() => router.push(`/growth/${plant.id}` as any)}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <Text style={{ fontSize: 22 }}>📈</Text>
@@ -1404,6 +2654,7 @@ export default function PlantDetail() {
               <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
             </View>
           </Card>
+          )}
 
           {/* ── Photo-check: for problems no sensor can see (pests, spots, yellowing) ── */}
           <Card style={{ marginTop: 10 }} onPress={openDiagnose}>
@@ -1423,7 +2674,7 @@ export default function PlantDetail() {
           </Card>
 
           {/* ── Spot fit for THIS plant (Habitat Suitability model) ── */}
-          {selfMatch && selfMatch.factors.length > 0 && (
+          {detailsOpen && selfMatch && selfMatch.factors.length > 0 && (
             <>
               <SectionHeader>How well this spot suits {plant.name}</SectionHeader>
               <Card accentBorder={selfMatch.score < 42 ? accent.clay : undefined}>
@@ -1457,7 +2708,7 @@ export default function PlantDetail() {
           )}
 
           {/* ── What thrives in this spot (compatibility from the sensor) ── */}
-          {spotMatches.length > 0 && (
+          {detailsOpen && spotMatches.length > 0 && (
             <>
               <SectionHeader>Thrives in this spot</SectionHeader>
               <Card>
@@ -1691,8 +2942,9 @@ export default function PlantDetail() {
               </Pressable>
             )}
 
+            {/* Same number as the card above and the plan — never a third figure. */}
             <Pressable
-              onPress={() => doLogWater(efficientPour?.ml ?? refillMl ?? plan.ml)}
+              onPress={() => doLogWater(pourMl)}
               style={{
                 minHeight: 48,
                 borderRadius: 12,
@@ -1703,11 +2955,7 @@ export default function PlantDetail() {
               }}
             >
               <Text style={[type.cardTitle, { color: '#fff', fontSize: 14 }]}>
-                {efficientPour != null
-                  ? `Efficient pour — ${efficientPour.ml} ml (~${Math.round(efficientPour.lastsDays)} days)`
-                  : refillMl != null
-                    ? `Calculated refill — ${refillMl} ml`
-                    : `Calculated for this plant — ${plan.ml} ml`}
+                Recommended for this plant — {pourMl} ml
               </Text>
             </Pressable>
             {efficientPour != null && (

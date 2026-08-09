@@ -58,3 +58,15 @@ export function dliWord(dli: number): string {
   if (dli >= 1.5) return 'medium light';
   return 'low light';
 }
+
+
+/**
+ * Percentages, to two decimal places. The sensor resolves far finer than whole
+ * percent, and rounding to integers hid real movement between readings (a pot
+ * drying 0.4 %/h looked static for hours). Always two decimals so the number
+ * never appears to jump between formats.
+ */
+export function pct2(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  return `${v.toFixed(2)}%`;
+}

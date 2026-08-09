@@ -1,6 +1,7 @@
 import { IDLE_WAKE_SECONDS, type Reading } from './devices';
 import type { PotMaterial, PotSize, WaterEvent } from './types';
-import { ML_PER_PT_PER_LITER, soilLiters } from './watering';
+import { mlPerPointPerLiter } from './soilProfile';
+import { soilLiters } from './watering';
 
 /**
  * Soil-hydration dynamics — inferring watering VOLUME and optimising it from the
@@ -30,7 +31,9 @@ import { ML_PER_PT_PER_LITER, soilLiters } from './watering';
 
 const DAY = 86400000;
 const HOUR = 3600000;
-const RISE_MIN = 10; // a moisture jump this big (%) marks a watering
+const RISE_MIN = 10; // an UNLOGGED jump this big (%) marks a watering
+/** A LOGGED pour only needs to clear sensor noise to be worth calibrating from. */
+const SMALL_RISE_MIN = 4;
 const PAIR_WINDOW_H = 18; // logged ml within this of a detected pour = the same event
 const SAT_CEIL = 95; // practical saturation — beyond this, water drains, not stores
 /** A reading gap this many times the normal spacing = the sensor was offline. */
@@ -69,6 +72,14 @@ export interface HydrationModel {
   events: WateringEvent[];
   /** ml that raises THIS pot's moisture by 1 percentage point */
   mlPerPct: number;
+  /**
+   * Least-squares fit through the logged pours — the pot's own correlation.
+   * `r2` here is an AGREEMENT score (how well the individual pours concur about
+   * ml-per-point), not a textbook R²: see the note where it is computed.
+   */
+  fit: { k: number; r2: number; n: number };
+  /** what the physics model alone predicted, for comparison */
+  modelledMlPerPct: number;
   /** true when mlPerPct came from paired logged pours, not just the soil model */
   calibrated: boolean;
   calibrationPairs: number;
@@ -129,12 +140,16 @@ function slopePerDay(pts: { t: number; v: number }[]): number | null {
 }
 
 /** ml per 1 display-% rise from the pot's soil volume + material (the generic
- *  model, same constant as mlNeeded so all app volumes agree; paired logged
- *  pours replace this with the pot's own measured ratio). */
-function modelMlPerPct(pot: Pot): number {
+ *  model, same curve as mlNeeded so all app volumes agree; paired logged
+ *  pours replace this with the pot's own measured ratio).
+ *
+ *  `atPct` is where the soil currently sits: a display point costs about three
+ *  times as much water at 10 as it does at 50, so the prior is evaluated on the
+ *  Topp curve's local slope instead of a single flat constant. */
+function modelMlPerPct(pot: Pot, atPct: number): number {
   const liters = soilLiters(pot.size, pot.cm);
   const factor = pot.material === 'Terracotta' ? 1.15 : pot.material === 'Ceramic' ? 1.05 : 1;
-  return liters * ML_PER_PT_PER_LITER * factor;
+  return liters * mlPerPointPerLiter(atPct) * factor;
 }
 
 /** Find watering events (moisture jumps) and characterise each one.
@@ -235,12 +250,19 @@ export function buildHydrationModel(
 
   const [lo] = band;
   const events = detectEvents(soils, lo, offlineGapMs);
-  if (events.length === 0) return null;
 
   // Calibrate volume↔rise: pair logged ml with the detected pour it belongs to.
   const logs = (waterLog ?? [])
     .filter((w) => w.ml != null && w.ml > 0)
-    .map((w) => ({ t: new Date(w.at).getTime(), ml: w.ml as number }));
+    .map((w) => ({ t: new Date(w.at).getTime(), ml: w.ml as number }))
+    .filter((l) => Number.isFinite(l.t));
+
+  // Bail only when there is genuinely nothing to learn from. Requiring a detected
+  // JUMP here was silently fatal for thirsty pots: one that costs 120 ml per
+  // point answers a 1 L trial with an 8-point rise, under the 10-point jump
+  // threshold, so the model returned null and it could never calibrate — the
+  // exact pots that most need calibrating were the ones locked out of it.
+  if (events.length === 0 && logs.length < 2) return null;
   const ratios: number[] = [];
   const usedLogs = new Set<number>(); // each logged pour calibrates at most ONE event
   for (const ev of events) {
@@ -262,7 +284,69 @@ export function buildHydrationModel(
   }
 
   const calibrated = ratios.length >= 2;
-  const mlPerPct = calibrated ? median(ratios) : modelMlPerPct(pot);
+  // Evaluate the generic prior at the band low — the moisture level where the
+  // "how much should I pour" question is actually asked.
+  const modelled = modelMlPerPct(pot, lo);
+  const mlPerPct = calibrated ? median(ratios) : modelled;
+
+  /*
+   * THE CORRELATION. Each logged pour paired with the rise the sensor actually
+   * saw is one (rise, ml) observation. Fitting ml = k·rise through the origin
+   * gives k — this pot's real millilitres-per-point — which supersedes the whole
+   * modelled chain (Topp curve, leaching, depth profile) because it measures the
+   * thing those were estimating, including everything they cannot see: how
+   * root-bound the pot is, how hydrophobic the compost has become, how much runs
+   * down one particular gap between soil and wall.
+   *
+   * R² reports how well a single constant explains the observations. Low R² means
+   * the pours disagree with each other — usually because one ran straight through
+   * — and the model should keep leaning on physics rather than trust the fit.
+   */
+  const fit = (() => {
+    // Observations come from LOGGED pours, not only from detected jumps. The jump
+    // detector needs a RISE_MIN (10 pt) step to call something a watering, which
+    // is right for spotting unlogged waterings but wrong here: a pot that costs
+    // 120 ml per point answers a 1 L trial with only 8 points, so it would never
+    // have produced a single calibration pair and could never learn.
+    const obs: { x: number; y: number }[] = [];
+    for (const ev of events) {
+      if (ev.loggedMl != null && ev.rise > 0) obs.push({ x: ev.rise, y: ev.loggedMl });
+    }
+    for (const l of logs) {
+      if (events.some((e) => e.loggedMl === l.ml && Math.abs(e.at - l.t) <= PAIR_WINDOW_H * 3600000)) continue;
+      const before = soils.filter((p) => p.t <= l.t);
+      const after = soils.filter((p) => p.t > l.t && p.t - l.t <= PAIR_WINDOW_H * 3600000);
+      if (!before.length || !after.length) continue;
+      const rise = Math.max(...after.map((p) => p.v)) - before[before.length - 1].v;
+      // Still require a rise clearly above sensor noise, just a far lower bar.
+      if (rise >= SMALL_RISE_MIN) obs.push({ x: rise, y: l.ml });
+    }
+    if (obs.length < 2) return { k: modelled, r2: 0, n: obs.length };
+
+    let sxy = 0;
+    let sxx = 0;
+    for (const o of obs) {
+      sxy += o.x * o.y;
+      sxx += o.x * o.x;
+    }
+    const k = sxx > 0 ? sxy / sxx : modelled;
+
+    /*
+     * QUALITY, measured robustly. R² is the wrong tool here: it compares against
+     * the variance of y, and when every logged pour is the same size that
+     * variance is ~0, so a PERFECT fit scores R² = −Infinity and the gate would
+     * reject its own best calibration.
+     *
+     * What actually matters is whether the individual pours AGREE with each other
+     * about the millilitres-per-point. So: median absolute deviation of the
+     * per-pour ratios, relative to the median. Tight agreement → near 1.
+     */
+    const ratios = obs.map((o) => o.y / o.x);
+    const med = median(ratios);
+    const mad = median(ratios.map((r) => Math.abs(r - med)));
+    const agreement = med > 0 ? Math.max(0, Math.min(1, 1 - (mad / med) * 2)) : 0;
+    return { k, r2: agreement, n: obs.length };
+  })();
 
   // Fill in each event's estimated volume from the (calibrated) constant.
   for (const ev of events) {
@@ -302,6 +386,8 @@ export function buildHydrationModel(
   return {
     events,
     mlPerPct: Math.round(mlPerPct * 10) / 10,
+    fit: { k: Math.round(fit.k * 10) / 10, r2: Math.round(fit.r2 * 100) / 100, n: fit.n },
+    modelledMlPerPct: Math.round(modelled * 10) / 10,
     calibrated,
     calibrationPairs: ratios.length,
     dryingPerDay,
@@ -309,5 +395,65 @@ export function buildHydrationModel(
     reportIntervalH: Math.round(reportIntervalH * 10) / 10,
     confidence: Math.round(confidence * 100) / 100,
     mlForDays,
+  };
+}
+
+export interface RootBoundSignal {
+  /** ml-per-point measured from the earliest pours */
+  earlyMlPerPoint: number;
+  /** ml-per-point measured from the most recent pours */
+  recentMlPerPoint: number;
+  /** negative = the pot now holds less water than it used to */
+  changePct: number;
+  confident: boolean;
+  text: string;
+}
+
+/**
+ * ROOT-BOUND DETECTION, for free, from the calibration itself.
+ *
+ * As a root ball fills its pot there is progressively less SOIL in the same
+ * volume — roots displace it. Less soil means less water is needed to move the
+ * moisture reading, so this pot's measured millilitres-per-point drifts DOWN over
+ * months. That drift is a direct physical measurement of the root ball growing,
+ * and it needs no new sensor, no new question and no calendar: it falls out of
+ * data the watering model is already collecting.
+ *
+ * It is the honest version of "repot every year or two" — some plants fill a pot
+ * in six months and others sit happily for five years, and this tells them apart
+ * by measurement rather than by rule of thumb.
+ *
+ * Deliberately cautious: it needs several pours spread over real time, and the
+ * drop has to be large enough that noise cannot explain it.
+ */
+export function rootBoundSignal(model: HydrationModel | null): RootBoundSignal | null {
+  if (!model) return null;
+  const paired = model.events
+    .filter((e) => e.loggedMl != null && e.rise > 0)
+    .sort((a, b) => a.at - b.at);
+  // Four pours minimum, so "early" and "recent" are each an average of two.
+  if (paired.length < 4) return null;
+  // …and they must span enough time for roots to have actually grown.
+  const spanDays = (paired[paired.length - 1].at - paired[0].at) / DAY;
+  if (spanDays < 45) return null;
+
+  const half = Math.floor(paired.length / 2);
+  const ratio = (list: WateringEvent[]) =>
+    median(list.map((e) => (e.loggedMl as number) / e.rise));
+  const early = ratio(paired.slice(0, half));
+  const recent = ratio(paired.slice(-half));
+  if (!(early > 0) || !(recent > 0)) return null;
+
+  const changePct = ((recent - early) / early) * 100;
+  // Only a sustained DROP means root-bound; a rise usually means the compost has
+  // gone hydrophobic, which is a different problem with a different fix.
+  if (changePct > -18) return null;
+
+  return {
+    earlyMlPerPoint: Math.round(early * 10) / 10,
+    recentMlPerPoint: Math.round(recent * 10) / 10,
+    changePct: Math.round(changePct),
+    confident: paired.length >= 6 && changePct <= -25,
+    text: `This pot now takes about ${Math.round(Math.abs(changePct))}% less water to shift its moisture reading than it did ${Math.round(spanDays)} days ago — ${Math.round(recent)} ml per point versus ${Math.round(early)} ml. That means there is measurably less soil in it than there was, which is what happens as roots fill a pot. Worth checking for roots circling the base or coming out of the drainage holes; if so it is ready for a pot one size up.`,
   };
 }

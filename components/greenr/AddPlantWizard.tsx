@@ -8,7 +8,7 @@ import { genPlantId } from '@/lib/ids';
 import { dliWord } from '@/lib/format';
 import { ALL_SPECIES, PlantSpecies, getSpecies, searchSpecies, topMatches, type CategoryKey } from '@/lib/plants';
 import { useGreenr } from '@/lib/store';
-import { Plant, PotMaterial, PotSize, Spot } from '@/lib/types';
+import { Plant, PotMaterial, PotShape, PotSize, SoilMix, SoilRetention, Spot } from '@/lib/types';
 import CameraCapture from './CameraCapture';
 
 /**
@@ -80,6 +80,15 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
   const [lastWatered, setLastWatered] = useState<string | null>(null);
   const [browse, setBrowse] = useState<number | null>(null);
   const [potCmText, setPotCmText] = useState('');
+  const [potShape, setPotShape] = useState<PotShape>('tapered');
+  const [potHeightText, setPotHeightText] = useState('');
+  // Each of these drives a real calculation, not just a profile field:
+  // drainage + mix set how fast the soil should drain/dry; ownership age decides
+  // whether the plant is still settling in.
+  const [hasDrainage, setHasDrainage] = useState<boolean>(true);
+  const [soilMix, setSoilMix] = useState<SoilMix>('Standard mix');
+  const [soilRetention, setSoilRetention] = useState<SoilRetention | null>(null);
+  const [ownedDays, setOwnedDays] = useState<number>(0);
 
   const matches = useMemo(() => topMatches(), []);
   const results = useMemo(() => (query.trim() ? searchSpecies(query, 60) : []), [query]);
@@ -135,6 +144,15 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
       spotId: spotId ?? spots[0]?.id ?? '',
       potSize,
       potMaterial,
+      hasDrainage,
+      soilMix,
+      soilRetention: soilRetention ?? undefined,
+      potHeightCm: (() => {
+        const n = parseFloat(potHeightText);
+        return Number.isFinite(n) && n >= 4 && n <= 100 ? n : null;
+      })(),
+      ownedSince: new Date(Date.now() - ownedDays * 86400000).toISOString(),
+      potShape,
       potCm: (() => {
         const n = parseFloat(potCmText);
         return Number.isFinite(n) && n >= 5 && n <= 80 ? n : null;
@@ -372,8 +390,8 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
           Terracotta dries ~2× faster — we account for it.
         </Text>
 
-        <Text style={[type.caption, { color: light.inkMuted, marginTop: 20 }]}>
-          Pot diameter (optional)
+        <Text style={[type.micro, { color: accent.verdant, marginTop: 22, letterSpacing: 0.4 }]}>
+          HOW WIDE IS THE POT? · REQUIRED
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 }}>
           <TextInput
@@ -397,11 +415,262 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
           <Text style={[type.body, { color: light.inkMuted }]}>cm across the top</Text>
         </View>
         <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
-          Same species, different pot = different water needs. Measuring makes the ml amounts exact;
-          skip it and Greenr uses the size bucket above.
+          Same species, different pot = different water needs. Volume grows with the CUBE of the
+          width, so this is the single biggest influence on every ml amount Greenr gives you.
         </Text>
 
-        <GButton title="Continue" onPress={() => setStep('spot')} style={{ marginTop: 28 }} />
+        {/* Taper. A pot is a frustum, so its volume is (1+k+k²)/3 of the
+            enclosing cylinder for k = base ÷ top. That is a ±20% swing on soil
+            volume, and therefore on every watering amount. */}
+        <Text style={[type.micro, { color: accent.verdant, marginTop: 22, letterSpacing: 0.4 }]}>
+          WHAT SHAPE IS IT?
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+          {(
+            [
+              ['straight', 'Straight'],
+              ['tapered', 'Tapered'],
+              ['very-tapered', 'Very tapered'],
+            ] as [PotShape, string][]
+          ).map(([val, label]) => (
+            <Pressable
+              key={val}
+              onPress={() => setPotShape(val)}
+              style={{
+                flex: 1,
+                paddingVertical: 12,
+                borderRadius: 12,
+                alignItems: 'center',
+                backgroundColor: light.surface1,
+                borderWidth: 2,
+                borderColor: potShape === val ? accent.verdant : 'transparent',
+              }}
+            >
+              <Text style={[type.caption, { color: light.ink }]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+          How much it narrows towards the base. A straight-sided pot holds about a
+          fifth more soil than a strongly tapered one of the same width.
+        </Text>
+
+        {/* Soil DEPTH — as important as diameter, and for a different reason.
+            The saturated layer at a pot's base is a fixed height set by the mix,
+            so it fills most of a shallow bowl but little of a deep pot. */}
+        <Text style={[type.micro, { color: accent.verdant, marginTop: 22, letterSpacing: 0.4 }]}>
+          HOW DEEP IS THE SOIL? · REQUIRED
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 }}>
+          <TextInput
+            value={potHeightText}
+            onChangeText={setPotHeightText}
+            keyboardType="numeric"
+            placeholder="e.g. 16"
+            placeholderTextColor={light.inkMuted}
+            style={[
+              type.cardTitle,
+              {
+                color: light.ink,
+                backgroundColor: light.surface1,
+                borderRadius: 14,
+                paddingHorizontal: 14,
+                minHeight: 48,
+                width: 110,
+              },
+            ]}
+          />
+          <Text style={[type.body, { color: light.inkMuted, flex: 1 }]}>cm from soil surface to the base</Text>
+        </View>
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+          The probe reads the top 6.5 cm, while water always leaves a saturated layer on the pot&apos;s
+          base whose height depends on the compost, not the pot. Without the depth Greenr cannot work
+          out what the roots below the probe are sitting in — so this one is needed.
+        </Text>
+        {(() => {
+          const h = parseFloat(potHeightText);
+          if (!Number.isFinite(h) || h >= 6.5) return null;
+          // Rare, but real: bonsai trays and seed pans are shallower than the blade.
+          return (
+            <Card mode="light" style={{ marginTop: 10, flexDirection: 'row', gap: 10 }}>
+              <Ionicons name="information-circle" size={18} color={accent.verdant} />
+              <Text style={[type.micro, { color: light.ink, flex: 1, lineHeight: 16 }]}>
+                That&apos;s shallower than the probe ({h.toFixed(1)} cm vs 6.5 cm), so part of the blade
+                will sit in the air and read low. Greenr corrects for that — push the probe in at a
+                slight angle if you can, to bury more of it.
+              </Text>
+            </Card>
+          );
+        })()}
+
+        {/* Drainage holes — the single biggest factor in whether watering hurts
+            or helps, so it directly sets how long "draining" is allowed to last
+            before Greenr calls it waterlogged. */}
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 22, letterSpacing: 0.4 }]}>
+          DOES THE POT HAVE DRAINAGE HOLES?
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+          {([['Yes', true], ['No', false]] as [string, boolean][]).map(([label, val]) => (
+            <Pressable
+              key={label}
+              onPress={() => setHasDrainage(val)}
+              style={{
+                flex: 1,
+                minHeight: 48,
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 2,
+                borderColor: hasDrainage === val ? accent.verdant : light.hairline,
+                backgroundColor: light.surface1,
+              }}
+            >
+              <Text style={[type.body, { color: light.ink }]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+          {hasDrainage === false
+            ? 'Without holes, water can only leave by evaporation — Greenr will warn much sooner about soggy roots and suggest smaller pours.'
+            : 'Greenr uses this to know how long the soil should take to drain after you water.'}
+        </Text>
+
+        {/* Soil mix — sets the expected drying speed, so "water in 3 days" is
+            based on this pot's real behaviour, not a species average. */}
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 22, letterSpacing: 0.4 }]}>
+          WHAT’S IT POTTED IN?
+        </Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+          {(['Standard mix', 'Gritty / cactus', 'Chunky / aroid', 'Dense / heavy'] as SoilMix[]).map((m) => (
+            <Pressable
+              key={m}
+              onPress={() => setSoilMix(m)}
+              style={{
+                minHeight: 44,
+                paddingHorizontal: 14,
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 2,
+                borderColor: soilMix === m ? accent.verdant : light.hairline,
+                backgroundColor: light.surface1,
+              }}
+            >
+              <Text style={[type.caption, { color: light.ink }]}>{m}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+          Grit sheds water in hours; dense soil holds it for a day or more. This sets how fast Greenr
+          expects the soil to dry, and so when watering is really due.
+        </Text>
+
+        {/* How long they've owned it — a plant still settling into a new home gets
+            gentler advice and lower growth expectations. */}
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 22, letterSpacing: 0.4 }]}>
+          HOW LONG HAVE YOU HAD IT?
+        </Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+          {([
+            ['Just got it', 0],
+            ['A few months', 90],
+            ['About a year', 365],
+            ['Years', 1095],
+          ] as [string, number][]).map(([label, days]) => (
+            <Pressable
+              key={label}
+              onPress={() => setOwnedDays(days)}
+              style={{
+                minHeight: 44,
+                paddingHorizontal: 14,
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 2,
+                borderColor: ownedDays === days ? accent.verdant : light.hairline,
+                backgroundColor: light.surface1,
+              }}
+            >
+              <Text style={[type.caption, { color: light.ink }]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+          {ownedDays === 0
+            ? 'New arrivals spend a few weeks re-establishing roots — Greenr keeps advice gentle and won’t read early droop as a problem.'
+            : 'An established plant can be judged on its own history rather than species averages.'}
+        </Text>
+
+        {/* OPTIONAL calibration. The retention model is built from published
+            curves for generic substrates; real composts vary hugely with brand,
+            age and how much perlite is in them. This one observation — which
+            needs no instruments — tunes the curve to the soil actually in the
+            pot, which is the single biggest source of error otherwise. */}
+        <Text style={[type.micro, { color: accent.verdant, marginTop: 22, letterSpacing: 0.4 }]}>
+          HOW LONG DOES IT STAY DAMP? · OPTIONAL · SHARPENS SENSOR ACCURACY
+        </Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+          {([
+            ['A day or two', 'fast'],
+            ['3–5 days', 'typical'],
+            ['About a week', 'retentive'],
+            ['Over a week', 'very-retentive'],
+          ] as [string, SoilRetention][]).map(([label, val]) => (
+            <Pressable
+              key={val}
+              onPress={() => setSoilRetention(soilRetention === val ? null : val)}
+              style={{
+                minHeight: 44,
+                paddingHorizontal: 14,
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 2,
+                borderColor: soilRetention === val ? accent.verdant : light.hairline,
+                backgroundColor: light.surface1,
+              }}
+            >
+              <Text style={[type.caption, { color: light.ink }]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+          After a thorough watering, roughly how long before the soil feels dry again? Greenr models
+          water retention from published data for generic composts, but yours may hold water quite
+          differently. This answer calibrates the curve to your actual soil straight away. It is
+          genuinely optional: once the sensor has watched a couple of dry-downs Greenr measures this
+          for itself — from how slowly the moisture actually falls — and uses the measurement instead.
+        </Text>
+
+        {(() => {
+          // Soil volume needs BOTH dimensions — width alone or depth alone leaves
+          // the estimate on its fallback bucket, and every ml figure in the app is
+          // built on that volume. So both are required here rather than one.
+          const h = parseFloat(potHeightText);
+          const w = parseFloat(potCmText);
+          const okH = Number.isFinite(h) && h >= 4 && h <= 100;
+          const okW = Number.isFinite(w) && w >= 5 && w <= 80;
+          const valid = okH && okW;
+          return (
+            <>
+              {!valid && (
+                <Text style={[type.micro, { color: accent.clay, marginTop: 16 }]}>
+                  {!okW && !okH
+                    ? 'Enter the pot width (5–80 cm) and soil depth (4–100 cm) to continue.'
+                    : !okW
+                      ? 'Enter the pot width across the top (5–80 cm) to continue.'
+                      : 'Enter the soil depth (4–100 cm) to continue.'}
+                </Text>
+              )}
+              <GButton
+                title="Continue"
+                disabled={!valid}
+                onPress={() => setStep('spot')}
+                style={{ marginTop: valid ? 28 : 8 }}
+              />
+            </>
+          );
+        })()}
       </Screen>
     );
   }

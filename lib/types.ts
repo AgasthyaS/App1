@@ -1,7 +1,25 @@
 /** GREENR 2.0 domain model. */
 
 export type PotSize = 'S' | 'M' | 'L';
+/**
+ * Pot taper. Volume of a frustum over its enclosing cylinder is (1+k+k²)/3 where
+ * k is the base:top diameter ratio, so the shape alone moves soil volume — and
+ * therefore every watering amount — by about ±20%.
+ */
+export type PotShape = 'straight' | 'tapered' | 'very-tapered';
+
 export type PotMaterial = 'Terracotta' | 'Plastic' | 'Ceramic';
+/** What the plant is potted in — decides how fast water drains and soil dries. */
+export type SoilMix = 'Standard mix' | 'Gritty / cactus' | 'Chunky / aroid' | 'Dense / heavy';
+/**
+ * How long the owner's soil actually stays damp after a thorough watering.
+ *
+ * The retention model is built from published curves for generic substrates, but
+ * real composts vary enormously — brand, age, how compacted it is, how much
+ * perlite got mixed in. This single observation, which anyone can answer without
+ * instruments, calibrates the curve to THEIR soil instead of an average one.
+ */
+export type SoilRetention = 'fast' | 'typical' | 'retentive' | 'very-retentive';
 
 export interface ScoreComponents {
   hydration: number; // /40
@@ -60,6 +78,12 @@ export interface TimelineEvent {
 export interface WaterEvent {
   at: string; // ISO timestamp
   ml: number | null; // null = amount unknown
+  /**
+   * Soil rise (display points) Greenr predicted this pour would produce, recorded
+   * BEFORE the water went in. Keeping it makes the claim falsifiable: the next
+   * reading either confirms it or corrects the model for this pot.
+   */
+  predictedRisePts?: number | null;
 }
 
 /**
@@ -91,8 +115,52 @@ export interface Plant {
    * water needs — this makes ml amounts exact instead of S/M/L buckets.
    */
   potCm?: number | null;
+  /**
+   * Depth of soil in the pot, cm. Decisive for moisture: the saturated layer at
+   * a pot's base is a FIXED height set by the mix, so it fills two-thirds of a
+   * shallow bowl but a tenth of a deep pot — the same plant in the same compost
+   * is far wetter in the short one. See lib/soilProfile.
+   */
+  potHeightCm?: number | null;
+  /** how much the pot narrows towards its base — sets the volume factor */
+  potShape?: PotShape;
+  /**
+   * How far the moisture probe is actually pushed in, cm. A capacitive blade
+   * averages along its length, so a shallow install reads mostly the dry top
+   * (and the air above it) and understates the root zone badly.
+   */
+  probeDepthCm?: number | null;
   /** ISO timestamp when the plant was added (drives the baseline countdown) */
   addedAt?: string;
+  /**
+   * Does the pot have drainage holes? Drives the watering model: a pot that
+   * can't drain holds water around the roots, so its "normal" drain window is
+   * far longer and the overwatering warning has to trigger much sooner.
+   */
+  hasDrainage?: boolean;
+  /**
+   * What the plant is potted in. Gritty cactus mixes shed water in hours; dense
+   * or old compacted soil holds it for a day or more. Sets how fast the soil is
+   * expected to dry, and therefore when watering is actually due.
+   */
+  soilMix?: SoilMix;
+  /**
+   * Measured-by-feel water retention of this pot's actual compost. Scales the
+   * retention curve's air-entry parameter, so predictions match the substrate in
+   * front of the user rather than a literature average.
+   */
+  soilRetention?: SoilRetention;
+  /**
+   * When the owner actually got the plant (may be long before they installed the
+   * app). A plant in its first weeks in a new home is still settling — roots are
+   * re-establishing — so advice stays gentle and growth expectations are lower.
+   */
+  ownedSince?: string | null;
+  /**
+   * Last repot. Fresh mix carries ~2–3 months of nutrients, so this decides when
+   * feeding actually starts helping, and flags when a repot is due.
+   */
+  lastRepottedAt?: string | null;
   /** last watering the user reported (asked at registration, updated by logs) */
   lastWateredAt?: string | null;
   /** logged waterings with amounts — sharpens the estimate cycle */

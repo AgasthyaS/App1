@@ -11,7 +11,8 @@ import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { careScoreValue } from '@/lib/careScore';
 import { estimateWaterSchedule, type EstimateSchedule } from '@/lib/estimate';
 import { idealsFor } from '@/lib/plantStatus';
-import { mlNeeded } from '@/lib/watering';
+import { waterAction } from '@/lib/waterAction';
+import { attentionFor, byAttention, type Attention } from '@/lib/attention';
 import { gardenVitalityAvg, vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
 import { computeSchedule, type WaterSchedule } from '@/lib/schedule';
@@ -73,12 +74,38 @@ function WeatherAhead({ w, unitsF }: { w: ReturnType<typeof useWeather>; unitsF:
   );
 }
 
+/** The rating badge — the whole point of the list view. */
+const LEVEL_COLOR: Record<Attention['level'], string> = {
+  urgent: accent.clay,
+  soon: accent.sunbeam,
+  watch: accent.sunbeam,
+  fine: accent.verdant,
+  unknown: dark.inkMuted,
+};
+
+function RatingChip({ a }: { a: Attention }) {
+  const c = LEVEL_COLOR[a.level];
+  return (
+    <View
+      style={{
+        flexDirection: 'row', alignItems: 'center', gap: 5,
+        paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999,
+        backgroundColor: `${c}22`, borderWidth: 1, borderColor: `${c}66`,
+      }}
+    >
+      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: c }} />
+      <Text style={[type.micro, { color: c, fontWeight: '700' }]}>{a.label}</Text>
+    </View>
+  );
+}
+
 function ForecastRow({
   plant,
   hasSensor,
   schedule,
   estimate,
   refillMl,
+  attention,
   onPress,
 }: {
   plant: Plant;
@@ -87,6 +114,7 @@ function ForecastRow({
   estimate?: EstimateSchedule;
   /** exact ml to pour when the sensor says it's dry right now */
   refillMl?: number | null;
+  attention?: Attention;
   onPress: () => void;
 }) {
   // Sensored plants project a real next-watering date from the drying trend (§5).
@@ -100,11 +128,15 @@ function ForecastRow({
           <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]} numberOfLines={1}>
             {plant.name}
           </Text>
-          <Text style={[type.cardTitle, { color: overdue ? accent.clay : dark.ink, fontSize: 15 }]} numberOfLines={1}>
-            {s ? s.whenLabel : 'Gathering readings'}
-          </Text>
+          {attention && <RatingChip a={attention} />}
         </View>
-        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 15 }]} numberOfLines={2}>
+        {/* The rating's reason IS the summary line — it already says what the
+            plant needs and when, so a separate schedule line would just repeat
+            it in different words. */}
+        <Text style={[type.caption, { color: dark.ink, marginTop: 6, lineHeight: 18 }]} numberOfLines={2}>
+          {attention ? attention.reason : s ? s.whenLabel : 'Gathering readings'}
+        </Text>
+        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 3, lineHeight: 15 }]} numberOfLines={2}>
           {s && s.status !== 'unknown'
             ? s.basis
             : 'A watering date appears once the sensor has logged a few readings.'}
@@ -134,9 +166,10 @@ function ForecastRow({
         <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]} numberOfLines={1}>
           {plant.name}
         </Text>
-        <Text style={[type.cardTitle, { color: due ? accent.sunbeam : dark.ink, fontSize: 15 }]} numberOfLines={1}>
+        <Text style={[type.caption, { color: due ? accent.sunbeam : dark.inkMuted }]} numberOfLines={1}>
           {est.whenLabel}
         </Text>
+        {attention && <RatingChip a={attention} />}
       </View>
       <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 15 }]} numberOfLines={2}>
         {est.detail}
@@ -186,14 +219,43 @@ export default function ForecastTab() {
     return m;
   }, [plants, liveReadings]);
 
+  /**
+   * One rating per plant — the thing the list is actually for. Computed here
+   * rather than inside the row so the SAME value can order the list: what needs
+   * doing rises to the top instead of being buried alphabetically.
+   */
+  const attention = useMemo(() => {
+    const m = new Map<string, Attention>();
+    plants.forEach((p) => {
+      const raw = liveReadings.get(p.id) ?? null;
+      const cal = calibrationFor(calibrations, raw?.device_id, p.sensorId);
+      m.set(p.id, attentionFor({
+        plant: p,
+        reading: raw,
+        history: histories.get(p.id) ?? [],
+        calibration: cal,
+        lightDaily: lightDaily[p.id] ?? null,
+        hasSensor: liveReadings.has(p.id),
+      }));
+    });
+    return m;
+  }, [plants, liveReadings, histories, calibrations, lightDaily]);
+
   const sorted = useMemo(
     () =>
-      [...plants].sort(
-        (a, b) =>
+      [...plants].sort((a, b) => {
+        const at = attention.get(a.id);
+        const bt = attention.get(b.id);
+        if (at && bt) {
+          const d = byAttention(at, bt);
+          if (d !== 0) return d;
+        }
+        return (
           scheduleSort(schedules.get(a.id), estimates.get(a.id)) -
-          scheduleSort(schedules.get(b.id), estimates.get(b.id)),
-      ),
-    [plants, schedules, estimates],
+          scheduleSort(schedules.get(b.id), estimates.get(b.id))
+        );
+      }),
+    [plants, schedules, estimates, attention],
   );
 
   const careFor = (p: Plant) =>
@@ -316,10 +378,16 @@ export default function ForecastTab() {
               let refillMl: number | null = null;
               const raw = liveReadings.get(p.id);
               if (raw) {
-                const r = applyCalibration(raw, calibrationFor(calibrations, raw.device_id, p.sensorId));
-                const [lo, hi] = idealsFor(p.species, p.comfortBand).band;
+                const cal = calibrationFor(calibrations, raw.device_id, p.sensorId);
+                const r = applyCalibration(raw, cal);
+                const [lo] = idealsFor(p.species, p.comfortBand).band;
                 if (r.soil_pct != null && r.soil_pct < lo) {
-                  refillMl = mlNeeded(p.potSize, p.potMaterial, r.soil_pct, Math.round((lo + hi) / 2), p.potCm);
+                  // Same decision as every other surface (lib/waterAction) — and
+                  // it needs the HISTORY to make it, or this row alone misses the
+                  // pot's measured ml-per-point and its measured soil retention
+                  // and quotes a different number from Home for the same plant.
+                  const hist = (histories.get(p.id) ?? []).map((h) => applyCalibration(h, cal));
+                  refillMl = waterAction({ plant: p, reading: r, history: hist }).ml || null;
                 }
               }
               return (
@@ -330,6 +398,7 @@ export default function ForecastTab() {
                   schedule={schedules.get(p.id)}
                   estimate={estimates.get(p.id)}
                   refillMl={refillMl}
+                  attention={attention.get(p.id)}
                   onPress={() => router.push(`/plant/${p.id}`)}
                 />
               );

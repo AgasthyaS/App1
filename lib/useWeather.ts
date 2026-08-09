@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { setDaylightWindow } from './insights';
 import { fetchWeather, type WeatherData } from './weather';
 
 /**
@@ -36,7 +37,17 @@ export interface UseWeather {
 }
 
 export function useWeather(): UseWeather {
-  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [weather, setWeatherRaw] = useState<WeatherData | null>(null);
+  /**
+   * Every place weather arrives, hand today's real sunrise/sunset to the light
+   * model. Judging "is this spot bright enough" against a fixed 07:00–19:00 day
+   * is wrong away from the equator — in midwinter it counts hours of darkness as
+   * daytime and makes a perfectly good windowsill look hopeless.
+   */
+  const setWeather = useCallback((w: WeatherData | null) => {
+    if (w) setDaylightWindow(w.sunrise, w.sunset);
+    setWeatherRaw(w);
+  }, []);
   const [place, setPlace] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>('idle');
   const [loading, setLoading] = useState(false);

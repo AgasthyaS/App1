@@ -163,6 +163,71 @@ const CATEGORIES: Record<CategoryKey, CategoryBands> = {
 };
 
 /**
+ * WATER DYNAMICS per category — how each kind of plant actually handles water
+ * over time, which is what makes the drying curve species-specific instead of
+ * one generic pot model.
+ *
+ * These are physiologically grounded, not stylistic knobs:
+ *  • Desert CAM plants (cactus, succulent) evolved in fast-draining grit and
+ *    store their own water. They drink slowly, want to dry out COMPLETELY, and
+ *    their fleshy roots rot within days if left wet — the highest rot risk here.
+ *  • Rainforest understory plants (fern, carnivorous) evolved in permanently
+ *    damp litter. They transpire fast through thin leaves, must never dry out,
+ *    and tolerate wet roots that would kill a succulent.
+ *  • Epiphytes (orchid) grow on bark in the air: their mix drains in minutes and
+ *    their roots need oxygen, so standing water is lethal even though they like
+ *    humidity.
+ *  • Fast-growing edibles (herb, vegetable) move enormous amounts of water — a
+ *    tomato in summer can empty a pot in a day — so they dry fastest of all.
+ *
+ *   dryRateMult  — relative speed the pot loses water (1.0 = average houseplant).
+ *                  Driven by transpiration: big thin leaves lose water fast,
+ *                  waxy succulent skin barely loses any.
+ *   drainMult    — relative time to shed free water after a soak (grit/bark
+ *                  mixes < 1, moisture-retentive mixes > 1).
+ *   rotRiskHours — how long roots can sit saturated before it's genuinely
+ *                  dangerous. This sets when "draining" becomes "waterlogged".
+ *   dryTolerance — how far below the ideal band the plant copes with before real
+ *                  stress, in percentage points. Succulents shrug off a long dry
+ *                  spell; a fern browns at the edges almost immediately.
+ *   style        — how it wants to be watered, in plain language.
+ */
+export type WaterStyle = 'soak-and-dry' | 'evenly-moist' | 'constantly-damp' | 'dry-between';
+
+export interface CategoryWater {
+  dryRateMult: number;
+  drainMult: number;
+  rotRiskHours: number;
+  dryTolerance: number;
+  style: WaterStyle;
+}
+
+const CATEGORY_WATER: Record<CategoryKey, CategoryWater> = {
+  // Thin-leaved tropicals: steady drinkers, like the top third to dry.
+  tropical:    { dryRateMult: 1.0,  drainMult: 1.0,  rotRiskHours: 36, dryTolerance: 10, style: 'dry-between' },
+  // Never let a fern dry — no water storage, browns within a day.
+  fern:        { dryRateMult: 1.25, drainMult: 1.2,  rotRiskHours: 60, dryTolerance: 3,  style: 'evenly-moist' },
+  palm:        { dryRateMult: 1.0,  drainMult: 1.0,  rotRiskHours: 40, dryTolerance: 8,  style: 'dry-between' },
+  // Stores its own water; wet roots rot fast. Must dry out fully between drinks.
+  succulent:   { dryRateMult: 0.45, drainMult: 0.55, rotRiskHours: 12, dryTolerance: 25, style: 'soak-and-dry' },
+  cactus:      { dryRateMult: 0.35, drainMult: 0.45, rotRiskHours: 10, dryTolerance: 30, style: 'soak-and-dry' },
+  vine:        { dryRateMult: 1.05, drainMult: 1.0,  rotRiskHours: 36, dryTolerance: 12, style: 'dry-between' },
+  tree:        { dryRateMult: 0.9,  drainMult: 1.05, rotRiskHours: 44, dryTolerance: 10, style: 'dry-between' },
+  // Fast growth = heavy transpiration; wilts quickly but recovers when watered.
+  herb:        { dryRateMult: 1.5,  drainMult: 0.9,  rotRiskHours: 28, dryTolerance: 6,  style: 'evenly-moist' },
+  vegetable:   { dryRateMult: 1.7,  drainMult: 0.9,  rotRiskHours: 28, dryTolerance: 5,  style: 'evenly-moist' },
+  flowering:   { dryRateMult: 1.2,  drainMult: 1.0,  rotRiskHours: 32, dryTolerance: 7,  style: 'evenly-moist' },
+  // Epiphyte in bark: drains in minutes, roots need air, standing water kills.
+  orchid:      { dryRateMult: 1.1,  drainMult: 0.4,  rotRiskHours: 14, dryTolerance: 12, style: 'soak-and-dry' },
+  grass:       { dryRateMult: 1.2,  drainMult: 0.95, rotRiskHours: 40, dryTolerance: 10, style: 'evenly-moist' },
+  // Bog plants — they WANT to sit wet, and tap water minerals harm them.
+  carnivorous: { dryRateMult: 1.15, drainMult: 1.6,  rotRiskHours: 240, dryTolerance: 2, style: 'constantly-damp' },
+  shrub:       { dryRateMult: 0.95, drainMult: 0.95, rotRiskHours: 40, dryTolerance: 14, style: 'dry-between' },
+  // Bulbs rot in wet soil while dormant — the classic way people lose them.
+  bulb:        { dryRateMult: 0.85, drainMult: 0.85, rotRiskHours: 18, dryTolerance: 16, style: 'dry-between' },
+};
+
+/**
  * Ecological niche width per category — how forgiving a plant is when a factor
  * drifts outside its ideal band. These are physiologically grounded: desert
  * CAM plants (cacti, succulents) tolerate enormous swings in light, heat, and
@@ -206,6 +271,58 @@ const CATEGORY_NICHE: Record<CategoryKey, CategoryNiche> = {
 export function nicheFor(species: string | undefined): CategoryNiche {
   const s = getSpecies(species);
   return CATEGORY_NICHE[s?.category ?? 'tropical'];
+}
+
+/**
+ * Species that genuinely behave differently from their category. Kept small and
+ * evidence-led: a plant only appears here when its water behaviour is a known
+ * exception, not to manufacture per-species precision we don't have.
+ */
+const WATER_OVERRIDES: Record<string, Partial<CategoryWater>> = {
+  // Rhizomes/caudex store water like a succulent despite tropical foliage — the
+  // most over-watered houseplants there are.
+  'Snake plant':    { dryRateMult: 0.45, rotRiskHours: 14, dryTolerance: 28, style: 'soak-and-dry' },
+  'ZZ plant':       { dryRateMult: 0.4,  rotRiskHours: 14, dryTolerance: 30, style: 'soak-and-dry' },
+  'Ponytail palm':  { dryRateMult: 0.4,  rotRiskHours: 12, dryTolerance: 28, style: 'soak-and-dry' },
+  // Thin, thirsty leaves that collapse fast but recover — famously dramatic.
+  'Peace lily':     { dryRateMult: 1.35, dryTolerance: 4,  style: 'evenly-moist' },
+  'Nerve plant':    { dryRateMult: 1.5,  dryTolerance: 2,  style: 'evenly-moist' },
+  // Prayer plants: no drought tolerance, and very sensitive to staying soggy.
+  'Calathea':       { dryRateMult: 1.2,  dryTolerance: 3,  rotRiskHours: 40, style: 'evenly-moist' },
+  'Prayer plant':   { dryRateMult: 1.2,  dryTolerance: 3,  rotRiskHours: 40, style: 'evenly-moist' },
+  // Fine surface roots dry out quickly; hate both extremes.
+  'Fiddle leaf fig':{ dryRateMult: 1.0,  dryTolerance: 6,  rotRiskHours: 30, style: 'dry-between' },
+  // Woody desert shrub — long dry spells are normal, wet feet are fatal.
+  'Jade plant':     { dryRateMult: 0.4,  rotRiskHours: 10, dryTolerance: 30, style: 'soak-and-dry' },
+  // Thin bulbous roots; classic winter-rot victim.
+  'Amaryllis':      { rotRiskHours: 14,  dryTolerance: 18, style: 'dry-between' },
+};
+
+/**
+ * How THIS species handles water over time — the curve behind the drying model.
+ * Built from its category baseline, then adjusted by any curated override, so
+ * every species in the catalog gets a grounded curve rather than one shared
+ * default. Unknown species fall back to the average houseplant (tropical).
+ */
+export function waterProfileFor(species: string | undefined): CategoryWater {
+  const s = getSpecies(species);
+  const base = CATEGORY_WATER[s?.category ?? 'tropical'];
+  const over = s ? WATER_OVERRIDES[s.common] : undefined;
+  return over ? { ...base, ...over } : base;
+}
+
+/** Plain-language description of how this plant wants to be watered. */
+export function waterStyleNote(species: string | undefined): string {
+  switch (waterProfileFor(species).style) {
+    case 'soak-and-dry':
+      return 'Drench it, then let the soil dry out almost completely before the next drink — its roots rot if they stay wet.';
+    case 'constantly-damp':
+      return 'Keep the soil damp at all times; this one grows in bogs and must never dry out. Use rain or distilled water.';
+    case 'evenly-moist':
+      return 'Keep it evenly moist — water once the surface feels dry, before the leaves start to droop.';
+    default:
+      return 'Let the top third of the soil dry out, then water thoroughly until it runs from the base.';
+  }
 }
 
 /** Everything a category profile carries except the bands + generated fields. */
@@ -915,7 +1032,10 @@ const BY_NAME = new Map(ALL_SPECIES.map((s) => [s.common.toLowerCase(), s]));
 
 /** Look up a species by its common name (case-insensitive). */
 export function getSpecies(common: string | undefined): PlantSpecies | undefined {
-  if (!common) return undefined;
+  // Type-safe callers always pass a string, but plants restored from storage or
+  // the cloud are not runtime-checked — a non-string here used to throw and take
+  // the whole watering calculation down with it.
+  if (typeof common !== 'string' || !common) return undefined;
   return BY_NAME.get(common.toLowerCase());
 }
 

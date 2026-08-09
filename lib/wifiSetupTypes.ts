@@ -11,12 +11,21 @@ export const PROV_SERVICE = 'c0de0001-feed-4b1e-9d0b-c0ffee000001';
 export const CHAR_NETWORKS = 'c0de0002-feed-4b1e-9d0b-c0ffee000001';
 export const CHAR_CREDS = 'c0de0003-feed-4b1e-9d0b-c0ffee000001';
 export const CHAR_STATUS = 'c0de0004-feed-4b1e-9d0b-c0ffee000001';
+/** Device id + key (newline-separated) so the app can claim it without a QR. */
+export const CHAR_DEVICE = 'c0de0005-feed-4b1e-9d0b-c0ffee000001';
 
 export type SetupStatus = 'waiting' | 'connecting' | 'ok' | 'fail';
 
 export interface WifiSetupSession {
   /** e.g. "greenr-3F2A" — matches the sticker/serial. */
   deviceName: string;
+  /**
+   * The sensor's own id + secret, read over the encrypted BLE link (firmware v8+).
+   * Lets the app CLAIM the device without a QR code. Undefined for older firmware
+   * that doesn't expose it → fall back to the QR/code flow.
+   */
+  deviceId?: string;
+  deviceKey?: string;
   /** Wi-Fi networks the sensor can see, strongest first. */
   networks: string[];
   /** Send credentials; progress arrives via the onStatus callback. */

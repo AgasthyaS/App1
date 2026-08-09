@@ -2,6 +2,7 @@ import { DATA_SERVICE } from './bleGatewayTypes';
 import {
   ALREADY_CONFIGURED,
   CHAR_CREDS,
+  CHAR_DEVICE,
   CHAR_NETWORKS,
   CHAR_STATUS,
   PROV_SERVICE,
@@ -97,6 +98,17 @@ async function startWeb(): Promise<WifiSetupSession> {
   const netChar = await svc.getCharacteristic(CHAR_NETWORKS);
   const networks = parseNetworks(new TextDecoder().decode(await netChar.readValue()));
 
+  // Device identity (firmware v8+) → claim without a QR. Older firmware lacks it.
+  let deviceId: string | undefined;
+  let deviceKey: string | undefined;
+  try {
+    const idChar = await svc.getCharacteristic(CHAR_DEVICE);
+    const [id, key] = new TextDecoder().decode(await idChar.readValue()).split('\n');
+    if (id && key) { deviceId = id.trim(); deviceKey = key.trim(); }
+  } catch {
+    // no identity characteristic — the QR/code path still works
+  }
+
   let statusCb: ((s: SetupStatus) => void) | null = null;
   const statusChar = await svc.getCharacteristic(CHAR_STATUS);
   await statusChar.startNotifications();
@@ -108,6 +120,8 @@ async function startWeb(): Promise<WifiSetupSession> {
 
   return {
     deviceName: device.name ?? 'greenr sensor',
+    deviceId,
+    deviceKey,
     networks,
     sendCredentials: async (ssid, password) => {
       await credsChar.writeValue(new TextEncoder().encode(`${ssid}\n${password}`));
