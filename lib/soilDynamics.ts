@@ -558,3 +558,57 @@ export function pourOutcome(
       : `${verdict} That works out at about ${Math.round(mlPerPoint)} ml per point here.`,
   };
 }
+
+export interface SensorSilence {
+  lastReadingAt: number;
+  hoursSince: number;
+  /** the cadence this sensor actually reports at, measured from its own history */
+  expectedGapH: number;
+  /** it has missed enough reports that the latest reading can no longer be trusted as current */
+  stale: boolean;
+  text: string;
+}
+
+/**
+ * HAS THIS SENSOR GONE QUIET?
+ *
+ * Every judgement in the app is made on "the latest reading", and nothing checked
+ * how old that was. A sensor that dies — flat battery, dropped Wi-Fi, knocked out
+ * of the soil — leaves its last reading sitting there being treated as the
+ * present. In simulation that produced the worst possible failure: a plant
+ * genuinely at 15% soil against a 30% floor, its sensor silent for six days, and
+ * the app calmly reporting "Fine — nothing needs doing" off a reading from before
+ * the drought started. Silence looked exactly like health.
+ *
+ * The threshold is measured rather than assumed, because the reporting cadence is
+ * server-controlled and can be changed: three missed reports, with a floor of 12
+ * hours so a fast watch-mode cadence cannot make the app twitchy.
+ */
+export function sensorSilence(history: Reading[], now = Date.now()): SensorSilence | null {
+  const ts = history
+    .map((r) => new Date(r.created_at).getTime())
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  if (!ts.length) return null;
+
+  const gaps: number[] = [];
+  for (let i = 1; i < ts.length; i++) gaps.push((ts[i] - ts[i - 1]) / 3600000);
+  const sorted = gaps.slice().sort((a, b) => a - b);
+  const medianGapH = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 3;
+  const expectedGapH = medianGapH > 0 && Number.isFinite(medianGapH) ? medianGapH : 3;
+
+  const lastReadingAt = ts[ts.length - 1];
+  const hoursSince = (now - lastReadingAt) / 3600000;
+  const threshold = Math.max(12, expectedGapH * 3);
+  const stale = hoursSince > threshold;
+
+  return {
+    lastReadingAt,
+    hoursSince,
+    expectedGapH,
+    stale,
+    text: stale
+      ? `This sensor last reported ${hoursSince < 48 ? `${Math.round(hoursSince)} hours` : `${Math.round(hoursSince / 24)} days`} ago, so everything below describes the plant as it was THEN, not now. Check the sensor is powered, in range, and still pushed into the soil.`
+      : '',
+  };
+}

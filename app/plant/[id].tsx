@@ -39,12 +39,13 @@ import { confidentVerdicts } from '@/lib/environment';
 import { metricSummary } from '@/lib/dailyStats';
 import { PROBE, profileCorrection, perchedWaterTableCm, probeFit, profileBands, rootZoneFromReading, inferWaterTableDepth } from '@/lib/soilProfile';
 import { retentionEstimate, RETENTION_LABEL } from '@/lib/soilRetention';
+import { doseAccuracy } from '@/lib/doseAccuracy';
 import { mixVerdict, recipeLine, soilRecipeFor } from '@/lib/soilRecipe';
 import { buildHydrationModel, rootBoundSignal } from '@/lib/hydration';
 import { pestRisks } from '@/lib/pestRisk';
 import { vpdKpa, vpdVerdict } from '@/lib/vpd';
 import { waterAction } from '@/lib/waterAction';
-import type { PotShape } from '@/lib/types';
+import type { PotShape, WaterAmountSource } from '@/lib/types';
 
 /** A labelled fact chip for the care guide (difficulty, size, zones, …). */
 function Fact({ label, value }: { label: string; value: string }) {
@@ -336,6 +337,11 @@ export default function PlantDetail() {
   const settling = useMemo(() => (plant ? settlingState(plant) : null), [plant]);
   // The best substrate for this species, and whether what it is in now will do.
   const soilRecipe = useMemo(() => soilRecipeFor(plant?.species), [plant?.species]);
+  // How well the app's own amounts have held up against what was actually poured.
+  const doseCheck = useMemo(
+    () => (plant && calHistory.length ? doseAccuracy(plant, calHistory) : null),
+    [plant, calHistory],
+  );
   const soilFit = useMemo(
     () => mixVerdict(plant?.species, plant?.soilMix ?? null),
     [plant?.species, plant?.soilMix],
@@ -942,7 +948,7 @@ export default function PlantDetail() {
   })();
   const growthLine = growthHeadline(growth);
 
-  const doLogWater = (ml: number) => {
+  const doLogWater = (ml: number, source: WaterAmountSource = 'preset') => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     // Record the predicted rise ALONGSIDE the amount. Without it the next reading
     // can only say what happened, not whether we called it correctly — and it is
@@ -951,7 +957,15 @@ export default function PlantDetail() {
       step.predictedRisePts != null && ml > 0 && step.ml > 0
         ? (step.predictedRisePts * ml) / step.ml
         : null;
-    logWaterAmount(plant.id, ml, predicted);
+    /*
+     * Record what was POURED, what was SUGGESTED, and how the amount was arrived
+     * at — all three, because only together do they let the app grade itself.
+     * With just the amount it can say the soil rose; with the suggestion beside it
+     * it can say "we asked for 900 ml and 400 was plenty", which is the correction
+     * rather than the anecdote. And `source` is what stops a suggestion the owner
+     * merely accepted from being read back later as a measurement of their pot.
+     */
+    logWaterAmount(plant.id, ml, { predictedRisePts: predicted, suggestedMl: pourMl, source });
     setWaterOpen(false);
     setCustomMl('');
     setWaterLoggedMsg(`Logged ${ml} ml 💧`);
@@ -961,7 +975,7 @@ export default function PlantDetail() {
   const logCustomWater = () => {
     const ml = parseInt(customMl.replace(/[^0-9]/g, ''), 10);
     if (!Number.isFinite(ml) || ml <= 0) return;
-    doLogWater(Math.min(ml, 5000));
+    doLogWater(Math.min(ml, 5000), 'measured');
   };
   // The diagnose camera is a Greenr+ feature — route non-subscribers to the sheet.
   const openDiagnose = () =>
@@ -1918,6 +1932,52 @@ export default function PlantDetail() {
             <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark.inkMuted} />
           </Pressable>
 
+          {/* ── Was the amount we recommended right? Graded against real pours ── */}
+          {detailsOpen && sensored && doseCheck && (
+            <Card style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons
+                  name={doseCheck.direction === 'good' ? 'checkmark-circle-outline' : 'construct-outline'}
+                  size={18}
+                  color={doseCheck.direction === 'good' ? accent.verdant : accent.sunbeam}
+                />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  HOW ACCURATE GREENR&apos;S AMOUNTS HAVE BEEN
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{doseCheck.headline}</Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {doseCheck.detail}
+              </Text>
+              <View style={{ marginTop: 12, gap: 10 }}>
+                {doseCheck.checks.slice(-3).reverse().map((c) => (
+                  <View key={c.at}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={[type.micro, { color: dark.inkMuted, flex: 1 }]}>
+                        {relTime((Date.now() - c.at) / 60000)}
+                      </Text>
+                      <Text style={[type.micro, { color: dark.inkMuted }]}>suggested</Text>
+                      <Text style={[type.numBold as any, { color: dark.inkMuted }]}>{c.suggestedMl} ml</Text>
+                      <Ionicons name="arrow-forward" size={12} color={dark.inkMuted} />
+                      <Text style={[type.micro, { color: dark.inkMuted }]}>poured</Text>
+                      <Text style={[type.numBold as any, { color: accent.verdant }]}>{c.pouredMl} ml</Text>
+                    </View>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                      {c.verdict}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              {doseCheck.skippedAssumed > 0 && (
+                <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
+                  {doseCheck.skippedAssumed} watering{doseCheck.skippedAssumed === 1 ? ' was' : 's were'} logged
+                  without you stating an amount. Those record that you watered, but Greenr never treats its own
+                  suggestion as proof its suggestion was right — so they cannot sharpen anything.
+                </Text>
+              )}
+            </Card>
+          )}
+
           {/* ── How well THIS compost holds water, measured from the dry-down ── */}
           {detailsOpen && sensored && retentionEst && (
             <Card style={{ marginTop: 14 }}>
@@ -2858,12 +2918,20 @@ export default function PlantDetail() {
           <Card elevated>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15, flex: 1 }]}>
-                How much water?
+                How much did you actually pour?
               </Text>
               <Pressable onPress={() => setWaterOpen(false)} hitSlop={8}>
                 <Ionicons name="close" size={18} color={dark.inkMuted} />
               </Pressable>
             </View>
+            {/* The wording matters. Asking "how much water?" invites people to
+                accept whatever the app proposed, and an accepted suggestion
+                cannot test the suggestion. Asking what they POURED — and saying
+                why — is what turns each watering into evidence. */}
+            <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, lineHeight: 15 }]}>
+              Greenr suggested {pourMl} ml. Tell it the real amount, even if it was
+              nothing like that — that is how it finds out whether the suggestion was right.
+            </Text>
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
               {[
                 { label: 'Splash', ml: 100 },
@@ -2934,7 +3002,7 @@ export default function PlantDetail() {
             {/* Repeat the last measured pour in one tap */}
             {lastLoggedMl != null && (
               <Pressable
-                onPress={() => doLogWater(lastLoggedMl)}
+                onPress={() => doLogWater(lastLoggedMl, 'measured')}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, minHeight: 32 }}
               >
                 <Ionicons name="refresh" size={14} color={accent.verdant} />

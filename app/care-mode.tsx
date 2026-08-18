@@ -63,7 +63,10 @@ export default function CareMode() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     if (task.kind === 'water' || task.kind === 'water-check') {
       // Completing a water task IS the watering log — this is what sharpens the cycle.
-      logWaterAmount(task.plantId, task.ml);
+      // Completing the task says it WAS watered, not how much — the amount shown
+      // was the app's own suggestion, so it is logged as assumed and never
+      // calibrates the pot.
+      logWaterAmount(task.plantId, task.ml, { suggestedMl: task.ml, source: 'assumed' });
       setLoggedWater((n) => n + 1);
     } else if (task.kind === 'light') {
       logCare(task.plantId, 'Moved to a brighter spot (from Care Mode).');

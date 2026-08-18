@@ -75,6 +75,23 @@ export interface TimelineEvent {
 }
 
 /** One logged watering — the raw material for sensorless accuracy. */
+/**
+ * Where a logged amount came from — and therefore whether it may be learned from.
+ *
+ * This distinction is not bookkeeping, it is the difference between a model that
+ * learns and one that confirms its own errors. Two screens used to log the
+ * RECOMMENDED amount as though the owner had poured it. The calibration then read
+ * that number back as evidence, agreed with itself, and locked in. A suggestion of
+ * 900 ml would be recorded as 900 ml poured, "measured" at exactly the ml-per-point
+ * that produced it, and no amount of real watering could ever dislodge it.
+ *
+ *   measured — typed in after actually measuring the pour. Full weight.
+ *   preset   — tapped "Cup ≈250 ml". A real choice by a human, roughly quantified.
+ *   assumed  — nobody stated an amount; the app filled in its own suggestion.
+ *              Records THAT it was watered, never HOW MUCH for learning purposes.
+ */
+export type WaterAmountSource = 'measured' | 'preset' | 'assumed';
+
 export interface WaterEvent {
   at: string; // ISO timestamp
   ml: number | null; // null = amount unknown
@@ -84,6 +101,15 @@ export interface WaterEvent {
    * reading either confirms it or corrects the model for this pot.
    */
   predictedRisePts?: number | null;
+  /**
+   * What the app RECOMMENDED at the moment of logging, kept beside what was
+   * actually poured. Without both numbers the app can say what happened but never
+   * whether its own advice was right — which is the only way "we said 900 ml and
+   * 400 ml was plenty" ever becomes a correction instead of an anecdote.
+   */
+  suggestedMl?: number | null;
+  /** how much to trust `ml` — see WaterAmountSource */
+  source?: WaterAmountSource;
 }
 
 /**

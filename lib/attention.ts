@@ -4,7 +4,7 @@ import { confidentVerdicts } from './environment';
 import type { DayLight } from './insights';
 import { idealsFor } from './plantStatus';
 import { mixVerdict } from './soilRecipe';
-import { soilDynamics } from './soilDynamics';
+import { sensorSilence, soilDynamics } from './soilDynamics';
 import type { Plant } from './types';
 import { waterAction } from './waterAction';
 import { wateringSchedule } from './waterBalance';
@@ -91,36 +91,60 @@ export function attentionFor(opts: {
     };
   }
 
+  /*
+   * A SILENT SENSOR IS NOT A HEALTHY PLANT. Every branch below judges "the latest
+   * reading", and until now nothing asked how old that was — so a sensor that had
+   * been dead for six days produced a confident "Fine" while the plant went dry.
+   * Silence has to read as not-knowing, never as reassurance.
+   */
+  const silence = sensorSilence(history, now);
+
   const act = waterAction({ plant, reading, history, now });
   const dyn = history.length ? soilDynamics(plant, history, ideal.band, now) : null;
   const schedule = history.length ? wateringSchedule(plant, history, ideal.band, now) : null;
   const daysUntilWater = schedule?.daysUntilDue ?? null;
 
+  // A stale reading can still show a problem — a plant that was already dry when
+  // the sensor died is still dry — so a genuine alarm is kept and merely dated.
+  // What must never survive staleness is the all-clear.
+  const dated = (a: Attention): Attention =>
+    silence?.stale
+      ? {
+          ...a,
+          level: a.level === 'fine' ? 'unknown' : a.level,
+          label: a.level === 'fine' ? 'Sensor quiet' : a.label,
+          priority: a.level === 'fine' ? 42 : a.priority,
+          reason: a.level === 'fine'
+            ? `No reading for ${silence.hoursSince < 48 ? `${Math.round(silence.hoursSince)} h` : `${Math.round(silence.hoursSince / 24)} days`} — this plant has not been checked, not confirmed healthy.`
+            : `${a.reason} (from a reading ${silence.hoursSince < 48 ? `${Math.round(silence.hoursSince)} h` : `${Math.round(silence.hoursSince / 24)} days`} old)`,
+        }
+      : a;
+
   // 1 — actively being harmed.
   if (dyn?.drainageProblem) {
-    return { level: 'urgent', priority: 100, label: 'Waterlogged', reason: dyn.headline, daysUntilWater };
+    return dated({ level: 'urgent', priority: 100, label: 'Waterlogged', reason: dyn.headline, daysUntilWater });
   }
   if (act.kind === 'retry') {
-    return { level: 'urgent', priority: 95, label: 'Retry water', reason: 'A watering was logged but the soil never moved.', daysUntilWater };
+    return dated({ level: 'urgent', priority: 95, label: 'Retry water', reason: 'A watering was logged but the soil never moved.', daysUntilWater });
   }
   // 2 — needs water. How urgent depends on how far past its floor it is, which is
   // already species-weighted by `soilDynamics` through the drought tolerance.
   if (act.kind === 'water') {
     const below = Math.max(0, ideal.band[0] - (reading.soil_pct ?? 0));
     const serious = dyn?.tone === 'bad';
-    return {
+    return dated({
       level: serious ? 'urgent' : 'soon',
       priority: serious ? 90 : 70,
       label: serious ? 'Water now' : 'Water soon',
       reason: `Soil ${Math.round(reading.soil_pct)}%, ${Math.round(below)} below its floor · ~${act.ml} ml`,
       daysUntilWater: 0,
-    };
+    });
   }
   if (act.kind === 'waiting') {
-    return { level: 'fine', priority: 10, label: 'Watered', reason: 'Waiting for the sensor to confirm.', daysUntilWater };
+    return dated({ level: 'fine', priority: 10, label: 'Watered', reason: 'Waiting for the sensor to confirm.', daysUntilWater });
   }
   if (act.kind === 'hold') {
-    return { level: 'watch', priority: 45, label: 'Too wet', reason: act.line, daysUntilWater };
+    return dated({ level: 'watch', priority: 45, label: 'Too wet', reason: act.line, daysUntilWater });
   }
 
   // 3 — a confidently wrong spot. Weeks-scale, so it ranks below water but it is
@@ -137,23 +161,23 @@ export function attentionFor(opts: {
     : [];
   const worst = verdicts[0];
   if (worst) {
-    return {
+    return dated({
       level: 'watch', priority: 50, label: worst.relocate ? 'Move it' : 'Fix the air',
       reason: worst.headline, daysUntilWater,
-    };
+    });
   }
 
   // 4 — wrong soil. Only actionable at a repot, so it never outranks anything live.
   const mix = mixVerdict(plant.species, plant.soilMix ?? null);
   if (mix.severity === 'major') {
-    return { level: 'watch', priority: 35, label: 'Wrong soil', reason: mix.headline, daysUntilWater };
+    return dated({ level: 'watch', priority: 35, label: 'Wrong soil', reason: mix.headline, daysUntilWater });
   }
 
   // 5 — fine. The rating still carries the schedule, because "fine for 6 days" and
   // "fine until tomorrow" are different kinds of fine.
   if (daysUntilWater != null) {
     const soon = daysUntilWater <= 1.5;
-    return {
+    return dated({
       level: soon ? 'soon' : 'fine',
       priority: soon ? 60 : Math.max(5, 30 - daysUntilWater * 2),
       label: soon ? 'Due soon' : 'Fine',
@@ -161,7 +185,7 @@ export function attentionFor(opts: {
         ? `Water in about ${daysUntilWater < 1 ? 'a day' : `${Math.round(daysUntilWater)} days`} · ~${schedule?.ml} ml`
         : `Next water in about ${Math.round(daysUntilWater)} days`,
       daysUntilWater,
-    };
+    });
   }
-  return { level: 'fine', priority: 15, label: 'Fine', reason: 'Nothing needs doing.', daysUntilWater: null };
+  return dated({ level: 'fine', priority: 15, label: 'Fine', reason: 'Nothing needs doing.', daysUntilWater: null });
 }

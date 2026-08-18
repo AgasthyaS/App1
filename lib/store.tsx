@@ -23,6 +23,7 @@ import {
   Settings,
   SoilMix,
   Spot,
+  WaterAmountSource,
 } from './types';
 
 const STORAGE_KEY = 'greenr.state.v2';
@@ -148,7 +149,16 @@ interface GreenrApi extends GreenrState {
   addSpot: (s: Spot) => void;
   logWater: (plantId: string) => void;
   /** Log a watering with its amount — feeds the estimate cycle (honest, no fabricated score change). */
-  logWaterAmount: (plantId: string, ml: number | null, predictedRisePts?: number | null) => void;
+  logWaterAmount: (
+    plantId: string,
+    ml: number | null,
+    /**
+     * Everything that makes the amount interpretable later. `source` decides
+     * whether this pour may calibrate the pot at all, and `suggestedMl` is what
+     * lets the app grade its own advice afterwards.
+     */
+    meta?: { predictedRisePts?: number | null; suggestedMl?: number | null; source?: WaterAmountSource },
+  ) => void;
   /** Log non-watering care (fertilized, misted, repotted, …) to the plant's history. */
   logCare: (plantId: string, note: string) => void;
   completeTask: (taskId: string, verified: boolean) => void;
@@ -362,8 +372,13 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const logWaterAmount = useCallback((plantId: string, ml: number | null, predictedRisePts?: number | null) => {
+  const logWaterAmount = useCallback((
+    plantId: string,
+    ml: number | null,
+    meta?: { predictedRisePts?: number | null; suggestedMl?: number | null; source?: WaterAmountSource },
+  ) => {
     const at = new Date().toISOString();
+    const source: WaterAmountSource = meta?.source ?? 'preset';
     setState((s) => ({
       ...s,
       // A paired demo sensor sees the pour on its next reading (cosmetic only).
@@ -375,13 +390,27 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
         return {
           ...p,
           lastWateredAt: at,
-          waterLog: [...(p.waterLog ?? []), { at, ml, predictedRisePts: predictedRisePts ?? null }].slice(-30),
+          waterLog: [...(p.waterLog ?? []), {
+            at,
+            ml,
+            predictedRisePts: meta?.predictedRisePts ?? null,
+            suggestedMl: meta?.suggestedMl ?? null,
+            source,
+          }].slice(-30),
           timeline: [
             {
               id: `tl-${Date.now()}`, at: new Date().toISOString(),
               daysAgo: 0,
               kind: 'care' as const,
-              text: ml != null ? `Watered ~${ml} ml (logged)` : 'Watered (logged)',
+              // "about 250 ml" and "250 ml, measured" are different claims, and the
+              // timeline is the record someone reads back months later.
+              text: ml == null
+                ? 'Watered (logged)'
+                : source === 'measured'
+                  ? `Watered ${ml} ml (measured)`
+                  : source === 'assumed'
+                    ? `Watered — amount not recorded (about ${ml} ml suggested)`
+                    : `Watered ~${ml} ml (logged)`,
             },
             ...p.timeline,
           ],

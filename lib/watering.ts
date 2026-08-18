@@ -786,7 +786,22 @@ export function pourStep(
    * out on a pot nobody has measured. The trial is also HOW a pot gets measured,
    * so removing it broke the loop that makes the rest of this work.
    */
-  if (balance && balance.basis !== 'modelled') {
+  /*
+   * `bounded` joins `modelled` on the trial side, and that is not a detail.
+   *
+   * A bounded estimate means every pour so far FILLED the pot, so all we know is
+   * a ceiling on the millilitres-per-point — the true figure could be far lower.
+   * Dosing from the bound produces another pour that overflows, which teaches
+   * nothing, so the estimate never improves and the app keeps recommending a
+   * flood. That is the loop a chronic over-waterer would be stuck in forever:
+   * seven identical 1000 ml pours left the engine at 18.8 ml/point against a true
+   * 8.2, with every future dose built on the same over-estimate.
+   *
+   * Routing it through the trial path breaks the loop, because a deliberately
+   * small pour is the only thing that CAN come back under the ceiling and give a
+   * real measurement.
+   */
+  if (balance && balance.basis !== 'modelled' && balance.basis !== 'bounded') {
     // Every branch of this min() must be a whole number of millilitres — the
     // pot-volume cap is a raw float, and when it won it surfaced in the UI as
     // "~43.67721905116241 ml".

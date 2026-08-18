@@ -2,6 +2,7 @@ import type { Reading } from './devices';
 import { MAX_SINGLE_POUR_FRACTION, PROBE, containerThresholds, probeReads, waterFractionBetween } from './soilProfile';
 import { retentionEstimate, withMeasuredRetention } from './soilRetention';
 import type { Plant, PotShape } from './types';
+import { getSpecies } from './plants';
 import { potVolume, wettingFor } from './watering';
 
 /**
@@ -222,13 +223,26 @@ const MIN_MEASURABLE_RISE = 4;
 /** Two pours must differ by at least this factor before agreeing proves a ceiling. */
 const CEILING_VOLUME_SPREAD = 1.3;
 
+/**
+ * How far above the comfort band a ceiling has to sit before it means flooding.
+ *
+ * Not zero, and that matters: a GOOD watering lands right at the top of the band
+ * by design, so "max ≥ band ceiling" brands correct advice as over-watering — it
+ * did, turning "these amounts are right" into "they are too big". A ceiling only
+ * means the pot is being flooded when it is being driven clearly PAST where the
+ * plant should sit. The real Peace lily topped out 23 points above its ceiling.
+ */
+const CEILING_ABOVE_BAND_PTS = 8;
+
 export interface Ceiling {
   /** the highest reading this pot has ever reached */
   pct: number;
   /** how many separate WATERINGS topped out within tolerance of it */
   hits: number;
-  /** true once waterings of clearly different sizes agree on the same ceiling */
+  /** true once two separate waterings agree on the same ceiling */
   confirmed: boolean;
+  /** …and their volumes differed too, which is the strongest form of the evidence */
+  strong: boolean;
 }
 
 /**
@@ -248,7 +262,15 @@ export interface Ceiling {
  * 1050 ml, 975 ml and 400 ml all ending at 78% is the pot stating its limit,
  * because the extra 650 ml demonstrably went somewhere other than the soil.
  */
-export function ceilingFor(history: Reading[], pours?: { ml: number; peakPct: number }[]): Ceiling | null {
+export function ceilingFor(
+  history: Reading[],
+  pours?: { ml: number; peakPct: number }[],
+  /**
+   * The species' comfort band. Supplied because it is what separates a real
+   * ceiling from a coincidence — see below.
+   */
+  band?: [number, number] | null,
+): Ceiling | null {
   const pts = history
     .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct))
     .map((r) => r.soil_pct as number);
@@ -261,7 +283,31 @@ export function ceilingFor(history: Reading[], pours?: { ml: number; peakPct: nu
   return {
     pct: max,
     hits: topped.length,
-    confirmed: topped.length >= 2 && spread >= CEILING_VOLUME_SPREAD,
+    /*
+     * TWO SEPARATE WATERINGS ENDING AT THE SAME READING IS THE PROOF. Differing
+     * volumes make it stronger, but requiring them was a hole big enough to drive
+     * the worst case through: someone who pours the same excessive amount every
+     * time produces no spread at all, so the ceiling was never confirmed, every
+     * flooding pour was banked as a clean measurement, and the pot's ml-per-point
+     * came out 2.5× too high — which made the app recommend MORE water to the one
+     * user already drowning their plant. Seven identical 1000 ml pours all ending
+     * at exactly 78% read as "measured, 20.9 ml per point" against a true 8.2.
+     *
+     * The residual risk is real and it bit: two pours of the same size from the
+     * same starting point land on the same reading for ordinary reasons, and
+     * branding that a ceiling turned a suggestion that was too SMALL into "you
+     * are over-pouring" — the opposite diagnosis.
+     *
+     * What separates the two is WHERE the pot tops out. A ceiling only means
+     * flooding if the pot is being driven above the range the plant wants to sit
+     * in; a maximum below the comfort ceiling just means it has never been filled.
+     * The real Peace lily topped out at 78% against a 55% ceiling, which is the
+     * signature. Without a band to compare against, fall back to demanding that
+     * the volumes differ, which is weaker evidence but cannot be coincidence.
+     */
+    confirmed: topped.length >= 2 && (band ? max >= band[1] + CEILING_ABOVE_BAND_PTS : spread >= CEILING_VOLUME_SPREAD),
+    /** volumes that differ as well — the strongest form of the evidence */
+    strong: topped.length >= 2 && spread >= CEILING_VOLUME_SPREAD,
   };
 }
 
@@ -318,6 +364,16 @@ export function observedPours(
   const out: ObservedPour[] = [];
   for (const w of plant.waterLog ?? []) {
     if (w.ml == null || !(w.ml > 0)) continue;
+    /*
+     * AN ASSUMED AMOUNT IS NOT EVIDENCE. Two screens log the app's own
+     * recommendation when the owner taps "done" without stating a volume. Reading
+     * those back as measurements is circular in the worst way: the suggestion that
+     * produced the number becomes the proof the number was right, the pot's
+     * ml-per-point locks onto whatever the model already believed, and no amount
+     * of real watering can shift it. Recorded, shown in the timeline, never
+     * learned from.
+     */
+    if (w.source === 'assumed') continue;
     const t = new Date(w.at).getTime();
     if (!Number.isFinite(t) || now - t > 60 * 86400000) continue;
     // One pour per minute per volume — collapses double-tapped log entries.
@@ -391,12 +447,15 @@ export function observedPours(
  * topped out is defined by the ceiling. Two passes settles it.
  */
 export function poursAndCeiling(
-  plant: Pick<Plant, 'waterLog'>,
+  plant: Pick<Plant, 'waterLog'> & { species?: string; comfortBand?: [number, number] | null },
   history: Reading[],
   now = Date.now(),
 ): { pours: ObservedPour[]; ceiling: Ceiling | null } {
+  // The band comes from the plant itself so every caller gets the stronger test
+  // without having to remember to pass it.
+  const band = plant.comfortBand ?? (plant.species ? getSpecies(plant.species)?.band ?? null : null);
   const first = observedPours(plant, history, null, now);
-  const ceiling = ceilingFor(history, first.map((p) => ({ ml: p.ml, peakPct: p.peakPct })));
+  const ceiling = ceilingFor(history, first.map((p) => ({ ml: p.ml, peakPct: p.peakPct })), band);
   // Only a CONFIRMED ceiling may brand a pour as saturating; an unconfirmed one
   // is just the highest reading so far, which proves nothing.
   const pours = observedPours(plant, history, ceiling?.confirmed ? ceiling : null, now);
@@ -458,7 +517,8 @@ const median = (xs: number[]): number => {
  * local slope rather than a single constant.
  */
 export function perPointFor(
-  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog'>,
+  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog'>
+    & { id?: string; species?: string; comfortBand?: [number, number] | null },
   history: Reading[],
   atPct: number,
   now = Date.now(),
@@ -594,7 +654,8 @@ export interface DailyUse {
  * cross-check rather than two dressings of the same assumption.
  */
 export function dailyUseMl(
-  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'waterLog' | 'soilMix' | 'soilRetention'>,
+  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'waterLog' | 'soilMix' | 'soilRetention'>
+    & { id?: string; species?: string; comfortBand?: [number, number] | null },
   history: Reading[],
   now = Date.now(),
 ): DailyUse | null {
@@ -604,7 +665,7 @@ export function dailyUseMl(
     .filter((p) => Number.isFinite(p.t))
     .sort((a, b) => a.t - b.t);
 
-  const { pours } = poursAndCeiling(plant as Pick<Plant, 'waterLog'>, history, now);
+  const { pours } = poursAndCeiling(plant, history, now);
 
   // MEASURED: a pour, then the time until the soil is back where it started.
   const rates: number[] = [];
@@ -660,7 +721,8 @@ export interface Dose {
 }
 
 export function doseFor(
-  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog'>,
+  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog'>
+    & { id?: string; species?: string; comfortBand?: [number, number] | null },
   history: Reading[],
   soilPct: number,
   targetPct: number,

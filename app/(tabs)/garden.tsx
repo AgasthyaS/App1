@@ -182,7 +182,14 @@ export default function GardenTab() {
                   kind="secondary"
                   style={{ flex: 1, minHeight: 44 }}
                   onPress={() => {
-                    logWaterAmount(p.id, waterAmount(p).ml);
+                    // Nobody stated an amount here — this is the app's own
+                    // suggestion. Recording it as `assumed` keeps "it was
+                    // watered" (which mutes the nag) while keeping the number
+                    // out of the calibration, where it would only confirm itself.
+                    logWaterAmount(p.id, waterAmount(p).ml, {
+                      suggestedMl: waterAmount(p).ml,
+                      source: 'assumed',
+                    });
                     setQuickFor(null);
                   }}
                 />

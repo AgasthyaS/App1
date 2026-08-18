@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { accent, dark, type } from '@/constants/theme';
 import { useGreenr } from '@/lib/store';
+import { useResearchSync } from '@/lib/useResearchSync';
 
 /** §3 — Forecast · Garden · (+) · Home · You, center (+) raised Verdant. */
 
@@ -85,6 +86,10 @@ function GreenrTabBar({ state, navigation }: BottomTabBarProps) {
 
 export default function TabsLayout() {
   const { onboarded, profile, hydrated } = useGreenr();
+  // Mounted here because it needs the garden AND the sensor histories, which
+  // live in different places and only meet inside the tab tree. Runs a few times
+  // a day, never on a user action, and fails silently by design.
+  useResearchSync();
   if (hydrated && !profile) return <Redirect href="/signin" />;
   if (hydrated && !onboarded) return <Redirect href="/onboarding" />;
 
