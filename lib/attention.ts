@@ -3,9 +3,12 @@ import type { Reading } from './devices';
 import { confidentVerdicts } from './environment';
 import type { DayLight } from './insights';
 import { idealsFor } from './plantStatus';
+import { probeResolution, timeBasedSchedule } from './probeResolution';
+import { setupCompleteness } from './setupGaps';
 import { mixVerdict } from './soilRecipe';
 import { sensorSilence, soilDynamics } from './soilDynamics';
 import type { Plant } from './types';
+import { pendingWateringQuestion } from './unloggedWatering';
 import { waterAction } from './waterAction';
 import { wateringSchedule } from './waterBalance';
 
@@ -99,6 +102,25 @@ export function attentionFor(opts: {
    */
   const silence = sensorSilence(history, now);
 
+  /*
+   * CAN THIS PROBE READ THIS POT AT ALL? Asked before anything is judged on the
+   * reading, because in a gritty mix or a very deep pot the entire moisture range
+   * is smaller than the sensor's own jitter — and every branch below would then
+   * be reading noise with total confidence.
+   */
+  const probe = probeResolution(plant, history, ideal.band);
+  if (probe?.mode === 'time-based') {
+    const t = timeBasedSchedule(plant, history, probe, now);
+    const due = t.dueInDays != null && t.dueInDays <= 0;
+    return {
+      level: due ? 'soon' : t.intervalDays == null ? 'unknown' : 'fine',
+      priority: due ? 66 : t.intervalDays == null ? 28 : 18,
+      label: due ? 'Water (by timing)' : t.intervalDays == null ? 'Learning rhythm' : 'Fine',
+      reason: `${t.headline} — the probe can't read moisture in this pot, so Greenr goes by timing.`,
+      daysUntilWater: t.dueInDays,
+    };
+  }
+
   const act = waterAction({ plant, reading, history, now });
   const dyn = history.length ? soilDynamics(plant, history, ideal.band, now) : null;
   const schedule = history.length ? wateringSchedule(plant, history, ideal.band, now) : null;
@@ -107,13 +129,29 @@ export function attentionFor(opts: {
   // A stale reading can still show a problem — a plant that was already dry when
   // the sensor died is still dry — so a genuine alarm is kept and merely dated.
   // What must never survive staleness is the all-clear.
+  /*
+   * Staleness cuts both ways, and the first version of this only handled one.
+   *
+   * A stale all-clear is a lie — that was the original fix. But a stale ALARM is
+   * also wrong in its own way: in simulation a Monstera whose sensor had been
+   * silent for 159 hours was reported "water now, ~250 ml" off a week-old 28.8%
+   * reading while the pot was in fact sitting at its ceiling, because somebody
+   * had watered it in the meantime. Acting on that advice would over-water a full
+   * pot.
+   *
+   * The alarm is still worth showing — a plant that was dry when the sensor died
+   * is probably still dry — so it is kept and dated rather than suppressed. What
+   * it loses is PRECEDENCE: a problem we can currently see must always sort above
+   * one we are inferring from week-old data.
+   */
+  const STALE_PRIORITY_CAP = 65;
   const dated = (a: Attention): Attention =>
     silence?.stale
       ? {
           ...a,
-          level: a.level === 'fine' ? 'unknown' : a.level,
+          level: a.level === 'fine' ? 'unknown' : a.level === 'urgent' ? 'soon' : a.level,
           label: a.level === 'fine' ? 'Sensor quiet' : a.label,
-          priority: a.level === 'fine' ? 42 : a.priority,
+          priority: a.level === 'fine' ? 42 : Math.min(a.priority, STALE_PRIORITY_CAP),
           reason: a.level === 'fine'
             ? `No reading for ${silence.hoursSince < 48 ? `${Math.round(silence.hoursSince)} h` : `${Math.round(silence.hoursSince / 24)} days`} — this plant has not been checked, not confirmed healthy.`
             : `${a.reason} (from a reading ${silence.hoursSince < 48 ? `${Math.round(silence.hoursSince)} h` : `${Math.round(silence.hoursSince / 24)} days`} old)`,
@@ -167,13 +205,42 @@ export function attentionFor(opts: {
     });
   }
 
-  // 4 — wrong soil. Only actionable at a repot, so it never outranks anything live.
+  /*
+   * 4 — a watering the sensor saw that nobody recorded. Ranked here on purpose:
+   * it is not a problem with the PLANT, so it must never outrank one, but it is
+   * the cheapest thing on the list and the only item that makes every future
+   * answer for this pot more accurate. Left unasked the measurement is lost.
+   */
+  const ask = pendingWateringQuestion(plant, history, now);
+  if (ask) {
+    return dated({
+      level: 'watch', priority: 38, label: 'Did you water?',
+      reason: `Soil jumped ${Math.round(ask.fromPct)}% → ${Math.round(ask.settledPct ?? ask.peakPct)}% — tell Greenr how much and this pot gets measured.`,
+      daysUntilWater,
+    });
+  }
+
+  /*
+   * 5 — the app is missing something it needs. Ranked here because it is not a
+   * problem with the plant, but it IS the reason this plant's numbers are rough,
+   * and unlike everything above it costs a ruler and ten seconds.
+   */
+  const setup = setupCompleteness(plant);
+  if (setup.degraded && setup.worst) {
+    return dated({
+      level: 'watch', priority: 36, label: `Missing ${setup.worst.label.toLowerCase()}`,
+      reason: setup.headline,
+      daysUntilWater,
+    });
+  }
+
+  // 6 — wrong soil. Only actionable at a repot, so it never outranks anything live.
   const mix = mixVerdict(plant.species, plant.soilMix ?? null);
   if (mix.severity === 'major') {
     return dated({ level: 'watch', priority: 35, label: 'Wrong soil', reason: mix.headline, daysUntilWater });
   }
 
-  // 5 — fine. The rating still carries the schedule, because "fine for 6 days" and
+  // 6 — fine. The rating still carries the schedule, because "fine for 6 days" and
   // "fine until tomorrow" are different kinds of fine.
   if (daysUntilWater != null) {
     const soon = daysUntilWater <= 1.5;

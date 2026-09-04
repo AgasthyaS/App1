@@ -157,7 +157,19 @@ interface GreenrApi extends GreenrState {
      * whether this pour may calibrate the pot at all, and `suggestedMl` is what
      * lets the app grade its own advice afterwards.
      */
-    meta?: { predictedRisePts?: number | null; suggestedMl?: number | null; source?: WaterAmountSource },
+    meta?: {
+      predictedRisePts?: number | null;
+      suggestedMl?: number | null;
+      source?: WaterAmountSource;
+      /**
+       * When the watering actually happened. Defaults to now, but a watering
+       * being recorded AFTER the fact — because the sensor spotted the jump and
+       * asked — must be logged at the time of the jump. Log it at "now" and it
+       * pairs with no reading at all, so the amount teaches the model nothing,
+       * which is the entire point of having asked.
+       */
+      at?: string;
+    },
   ) => void;
   /** Log non-watering care (fertilized, misted, repotted, …) to the plant's history. */
   logCare: (plantId: string, note: string) => void;
@@ -183,6 +195,10 @@ interface GreenrApi extends GreenrState {
    * feeding while the roots re-establish.
    */
   repotPlant: (plantId: string, change: { soilMix?: SoilMix; hasDrainage?: boolean; potCm?: number | null; potHeightCm?: number | null }) => void;
+  /** Record that a detected soil jump was NOT a watering, so it stops being asked about. */
+  dismissSoilJump: (plantId: string, at: string) => void;
+  /** Carry a pot's measured figures forward so they outlive the reading window. */
+  rememberMeasurements: (plantId: string, m: NonNullable<Plant['measurementMemory']>) => void;
   reassignSensor: (sensorId: string, plantId: string) => void;
   recalibrateSensor: (sensorId: string) => void;
   /** §8: record a per-metric calibration (offset = reference − measured) */
@@ -375,9 +391,14 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   const logWaterAmount = useCallback((
     plantId: string,
     ml: number | null,
-    meta?: { predictedRisePts?: number | null; suggestedMl?: number | null; source?: WaterAmountSource },
+    meta?: {
+      predictedRisePts?: number | null;
+      suggestedMl?: number | null;
+      source?: WaterAmountSource;
+      at?: string;
+    },
   ) => {
-    const at = new Date().toISOString();
+    const at = meta?.at ?? new Date().toISOString();
     const source: WaterAmountSource = meta?.source ?? 'preset';
     setState((s) => ({
       ...s,
@@ -389,7 +410,13 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
         if (p.id !== plantId) return p;
         return {
           ...p,
-          lastWateredAt: at,
+          // A back-filled watering must not drag `lastWateredAt` backwards — that
+          // field gates the "just watered, wait for the sensor" logic and moving
+          // it into the past would un-mute alerts that are correctly muted.
+          lastWateredAt:
+            p.lastWateredAt && new Date(p.lastWateredAt).getTime() > new Date(at).getTime()
+              ? p.lastWateredAt
+              : at,
           waterLog: [...(p.waterLog ?? []), {
             at,
             ml,
@@ -641,6 +668,46 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const dismissSoilJump = useCallback((plantId: string, at: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) =>
+        p.id === plantId
+          ? { ...p, ignoredJumps: [...(p.ignoredJumps ?? []), at].slice(-40) }
+          : p,
+      ),
+    }));
+  }, []);
+
+  const rememberMeasurements = useCallback(
+    (plantId: string, m: NonNullable<Plant['measurementMemory']>) => {
+      setState((s) => {
+        const p = s.plants.find((x) => x.id === plantId);
+        if (!p) return s;
+        const prev = p.measurementMemory;
+        // Only write when something meaningful moved — this is called on a timer
+        // and an unconditional setState would re-render the whole garden and
+        // re-push the cloud blob every tick.
+        const same =
+          prev &&
+          prev.mlPerPoint === m.mlPerPoint &&
+          prev.mlPerPointBasis === m.mlPerPointBasis &&
+          prev.ceilingPct === m.ceilingPct &&
+          prev.retentionClass === m.retentionClass;
+        if (same) return s;
+        return {
+          ...s,
+          plants: s.plants.map((x) =>
+            x.id === plantId
+              ? { ...x, measurementMemory: { ...m, updatedAt: new Date().toISOString() } }
+              : x,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
   const reassignSensor = useCallback((sensorId: string, plantId: string) => {
     setState((s) => ({
       ...s,
@@ -820,6 +887,8 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       renamePlant,
       setPotDimensions,
       repotPlant,
+      dismissSoilJump,
+      rememberMeasurements,
       reassignSensor,
       recalibrateSensor,
       calibrateMetric,
@@ -830,7 +899,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPotDimensions, repotPlant, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPotDimensions, repotPlant, dismissSoilJump, rememberMeasurements, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

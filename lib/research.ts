@@ -90,6 +90,12 @@ export function buildResearchPayload(opts: {
   settings: Pick<Settings, 'researchOptIn' | 'unitsF'>;
   climateZone?: number | null;
   hemisphere?: string | null;
+  /**
+   * Build the payload even when research is opted out. The measurements are also
+   * used locally, as this device's memory of its own pots; only `syncResearch`
+   * uploads anything, and that stays gated on consent.
+   */
+  forceBuild?: boolean;
   now?: number;
 }): ResearchPayload {
   const { plants, settings, now = Date.now() } = opts;
@@ -104,7 +110,7 @@ export function buildResearchPayload(opts: {
     measurements: [],
     healthLog: [],
   };
-  if (!settings.researchOptIn) return payload;
+  if (!settings.researchOptIn && !opts.forceBuild) return payload;
 
   for (const { plant, history, hasSensor } of plants) {
     if (!plant?.id || !plant.species) continue;

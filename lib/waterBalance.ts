@@ -518,6 +518,7 @@ const median = (xs: number[]): number => {
  */
 export function perPointFor(
   plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog'>
+    & Pick<Plant, 'measurementMemory'>
     & { id?: string; species?: string; comfortBand?: [number, number] | null },
   history: Reading[],
   atPct: number,
@@ -553,6 +554,24 @@ export function perPointFor(
 
   const { pours } = poursAndCeiling(plant, history, now);
   const clean = pours.filter((p) => !p.saturated);
+
+  /*
+   * MEMORY. Everything above is computed from the last 30 days of readings, so a
+   * pot calibrated by four careful pours in spring silently reverts to a
+   * geometric guess in summer once those pours scroll out of the window. The
+   * conclusion is still valid — the pot has not changed — so it is carried
+   * forward when the evidence behind it ages out.
+   *
+   * Deliberately subordinate to live evidence: a remembered figure is used only
+   * when the window holds NO clean pours of its own. Anything measurable today
+   * beats anything remembered, because pots genuinely do change as roots fill
+   * them, and `rootBoundSignal` exists precisely because that drift is real.
+   */
+  const remembered = plant.measurementMemory;
+  const rememberedPerPoint =
+    !clean.length && remembered?.mlPerPoint != null && remembered.mlPerPoint > 0
+      ? remembered.mlPerPoint
+      : null;
   const saturated = pours.filter((p) => p.saturated);
   const fromPours = clean.length ? median(clean.map((p) => p.mlPerPoint)) : null;
   // The smallest saturating pour proves the most: the pot topped out at or below
@@ -572,6 +591,10 @@ export function perPointFor(
 
   // ── Combine, by inverse variance in log space ──
   const terms: { value: number; sd: number }[] = [{ value: fromModel, sd: SD_MODEL }];
+  if (rememberedPerPoint != null) {
+    // Held at the confidence it had when measured, minus a step for age.
+    terms.push({ value: rememberedPerPoint, sd: SD_POUR_FLOOR * 2.5 });
+  }
   if (fromPours != null) {
     // Bigger rises are measured more precisely; sensor noise sets the floor.
     const rises = clean.map((p) => p.risePts);
@@ -601,6 +624,7 @@ export function perPointFor(
 
   const basis: PerPointBasis =
     clean.length >= 2 ? 'measured'
+      : rememberedPerPoint != null ? 'measured'
       : bounded ? 'bounded'
         : clean.length === 1 || fromBalance != null ? 'blended'
           : 'modelled';

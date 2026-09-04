@@ -3,6 +3,7 @@
  * species' ideal ranges (from lib/plants.ts) — never generic thresholds.
  * Before the first reading, every metric is N/A (no fake defaults).
  */
+import { blendBand, empiricalBandFor } from './empirical';
 import { getSpecies, type PlantSpecies } from './plants';
 
 export type Tone = 'good' | 'warn' | 'bad' | 'unknown';
@@ -18,8 +19,22 @@ const NA: Status = { label: 'N/A', tone: 'unknown' };
 /** Resolve a plant's ideal ranges from the species DB, with safe fallbacks. */
 export function idealsFor(speciesCommon: string, comfortBand?: [number, number]) {
   const s: PlantSpecies | undefined = getSpecies(speciesCommon);
+  /*
+   * MEASURED REALITY OUTRANKS THE BOOK, once there is enough of it.
+   *
+   * The soil band a care sheet prints is inherited opinion. `species_env_stats`
+   * holds the range that plants of this species were ACTUALLY thriving in, and
+   * `blendBand` weights the two by sample size — so the textbook leads at twenty
+   * plants and reality leads at two hundred. An explicit per-plant `comfortBand`
+   * still wins over both, because that is the owner overriding on purpose.
+   */
+  const book: [number, number] = s?.band ?? [30, 55];
+  const measured = empiricalBandFor(speciesCommon);
+  const blended = measured?.soil
+    ? blendBand(book, measured.soil, measured.samplePlants).band
+    : book;
   return {
-    band: comfortBand ?? s?.band ?? [30, 55],
+    band: comfortBand ?? blended,
     dli: s?.dli ?? [2, 8],
     temp: s?.temp ?? [60, 82], // °F
     rhFloor: s?.rhFloor ?? 45,

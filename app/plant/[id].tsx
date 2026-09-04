@@ -40,6 +40,9 @@ import { metricSummary } from '@/lib/dailyStats';
 import { PROBE, profileCorrection, perchedWaterTableCm, probeFit, profileBands, rootZoneFromReading, inferWaterTableDepth } from '@/lib/soilProfile';
 import { retentionEstimate, RETENTION_LABEL } from '@/lib/soilRetention';
 import { doseAccuracy } from '@/lib/doseAccuracy';
+import { pendingWateringQuestion } from '@/lib/unloggedWatering';
+import { setupCompleteness } from '@/lib/setupGaps';
+import { probeResolution } from '@/lib/probeResolution';
 import { mixVerdict, recipeLine, soilRecipeFor } from '@/lib/soilRecipe';
 import { buildHydrationModel, rootBoundSignal } from '@/lib/hydration';
 import { pestRisks } from '@/lib/pestRisk';
@@ -206,7 +209,7 @@ export default function PlantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, spots, sensors, settings, profile, calibrations, lightDaily, recordLightDay, logWaterAmount, logCare, archivePlant, setPlantPhoto, renamePlant, setPotDimensions, setLightInverted } =
+  const { plants, spots, sensors, settings, profile, calibrations, lightDaily, recordLightDay, logWaterAmount, dismissSoilJump, logCare, archivePlant, setPlantPhoto, renamePlant, setPotDimensions, setLightInverted } =
     useGreenr();
   const plant = plants.find((p) => p.id === id);
   const [depthInput, setDepthInput] = useState('');
@@ -218,6 +221,7 @@ export default function PlantDetail() {
   const [careOpen, setCareOpen] = useState(false);
   const [signsOpen, setSignsOpen] = useState(false);
   const [waterOpen, setWaterOpen] = useState(false);
+  const [jumpMl, setJumpMl] = useState('');
   const [customMl, setCustomMl] = useState('');
   const [waterLoggedMsg, setWaterLoggedMsg] = useState<string | null>(null);
   const [loggedCare, setLoggedCare] = useState<string | null>(null);
@@ -337,6 +341,23 @@ export default function PlantDetail() {
   const settling = useMemo(() => (plant ? settlingState(plant) : null), [plant]);
   // The best substrate for this species, and whether what it is in now will do.
   const soilRecipe = useMemo(() => soilRecipeFor(plant?.species), [plant?.species]);
+  /**
+   * A watering the sensor saw and nobody recorded. Asking about it is how the
+   * app recovers a measurement it would otherwise lose entirely.
+   */
+  // What the app is missing for this plant, and whether the probe can even read it.
+  const setup = useMemo(() => (plant ? setupCompleteness(plant) : null), [plant]);
+  const probe = useMemo(
+    () =>
+      plant && calHistory.length
+        ? probeResolution(plant, calHistory, idealsFor(plant.species, plant.comfortBand).band)
+        : null,
+    [plant, calHistory],
+  );
+  const unlogged = useMemo(
+    () => (plant && calHistory.length ? pendingWateringQuestion(plant, calHistory) : null),
+    [plant, calHistory],
+  );
   // How well the app's own amounts have held up against what was actually poured.
   const doseCheck = useMemo(
     () => (plant && calHistory.length ? doseAccuracy(plant, calHistory) : null),
@@ -1179,6 +1200,162 @@ export default function PlantDetail() {
         </View>
 
         <View style={{ paddingHorizontal: layout.margin }}>
+          {/* ══════════ WHAT'S MISSING ══════════
+              Shown high because it is the cheapest accuracy on the page and the
+              only thing here the app cannot work out for itself. Only when a
+              MATERIAL field is missing — the pot shape alone is not worth a
+              card. */}
+          {setup?.degraded && setup.worst && (
+            <Card style={{ marginTop: 18, borderWidth: 1.5, borderColor: accent.sunbeam }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="construct-outline" size={18} color={accent.sunbeam} />
+                <Text style={[type.micro, { color: accent.sunbeam, letterSpacing: 0.6, flex: 1 }]}>
+                  GREENR IS MISSING SOMETHING
+                </Text>
+                <Text style={[type.numBold as any, { color: accent.sunbeam }]}>{setup.score}%</Text>
+              </View>
+              <Text style={[type.ritualTitle, { color: dark.ink, fontSize: 21, marginTop: 8 }]}>
+                {setup.worst.label}
+              </Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {setup.worst.consequence}
+              </Text>
+              {setup.gaps.length > 1 && (
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 15 }]}>
+                  Also missing: {setup.gaps.slice(1).map((g) => g.label.toLowerCase()).join(', ')}.
+                </Text>
+              )}
+              <Pressable
+                onPress={() => {
+                  if (setup.worst!.fix === 'repot') router.push(`/repot/${plant.id}` as any);
+                  else {
+                    setWidthInput(String(plant.potCm ?? ''));
+                    setDepthInput(String(plant.potHeightCm ?? ''));
+                    setPotSizeEditing(true);
+                  }
+                }}
+                style={{
+                  minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: accent.sunbeam, marginTop: 14,
+                }}
+              >
+                <Text style={[type.cardTitle, { color: '#08110B', fontSize: 15 }]}>Set it now</Text>
+              </Pressable>
+            </Card>
+          )}
+
+          {/* ══════════ DID YOU WATER? ══════════
+              Placed above everything, including "do this now", because it is the
+              cheapest high-value action on the screen: one tap turns a watering
+              the sensor already witnessed into a measurement of this exact pot.
+              Left unasked, that data is gone for good. */}
+          {unlogged && (
+            <Card style={{ marginTop: 18, borderWidth: 1.5, borderColor: accent.verdant }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="help-circle-outline" size={18} color={accent.verdant} />
+                <Text style={[type.micro, { color: accent.verdant, letterSpacing: 0.6, flex: 1 }]}>
+                  DID YOU WATER THIS?
+                </Text>
+              </View>
+              <Text style={[type.ritualTitle, { color: dark.ink, fontSize: 21, marginTop: 8 }]}>
+                Soil jumped {Math.round(unlogged.fromPct)}% → {Math.round(unlogged.settledPct ?? unlogged.peakPct)}%
+              </Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {unlogged.text}
+              </Text>
+
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+                {[
+                  unlogged.estimatedMl ?? 250,
+                  Math.max(25, Math.round(((unlogged.estimatedMl ?? 250) * 0.5) / 25) * 25),
+                  Math.round(((unlogged.estimatedMl ?? 250) * 2) / 25) * 25,
+                ]
+                  .filter((v, i, a) => a.indexOf(v) === i)
+                  .map((ml, i) => (
+                    <Pressable
+                      key={ml}
+                      onPress={() => {
+                        logWaterAmount(plant.id, ml, {
+                          at: new Date(unlogged.at).toISOString(),
+                          source: 'preset',
+                          predictedRisePts: unlogged.risePts,
+                        });
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+                        setWaterLoggedMsg(`Logged ${ml} ml 💧`);
+                        setTimeout(() => setWaterLoggedMsg((m) => (m ? null : m)), 1800);
+                      }}
+                      style={{
+                        flexGrow: 1, minWidth: 92, minHeight: 48, borderRadius: 12,
+                        alignItems: 'center', justifyContent: 'center',
+                        borderWidth: i === 0 ? 2 : 1,
+                        borderColor: i === 0 ? accent.verdant : dark.hairline,
+                        backgroundColor: dark.surface2,
+                      }}
+                    >
+                      <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>{ml} ml</Text>
+                      {i === 0 && (
+                        <Text style={[type.micro, { color: accent.verdant }]}>
+                          {unlogged.estimateBasis === 'measured' ? 'best guess' : 'rough guess'}
+                        </Text>
+                      )}
+                    </Pressable>
+                  ))}
+              </View>
+
+              {/* Typing the real number is worth far more than any preset, so the
+                  input sits right here rather than behind another tap. */}
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <View
+                  style={{
+                    flex: 1, flexDirection: 'row', alignItems: 'center', borderWidth: 1,
+                    borderColor: dark.hairline, borderRadius: 12, paddingHorizontal: 12, minHeight: 48,
+                  }}
+                >
+                  <TextInput
+                    value={jumpMl}
+                    onChangeText={setJumpMl}
+                    placeholder="or type the exact amount"
+                    placeholderTextColor={dark.inkMuted}
+                    keyboardType="number-pad"
+                    style={{ flex: 1, color: dark.ink, fontSize: 15, paddingVertical: 10 }}
+                  />
+                  <Text style={[type.caption, { color: dark.inkMuted }]}>ml</Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    const ml = parseInt(jumpMl.replace(/[^0-9]/g, ''), 10);
+                    if (!Number.isFinite(ml) || ml <= 0) return;
+                    logWaterAmount(plant.id, Math.min(ml, 5000), {
+                      at: new Date(unlogged.at).toISOString(),
+                      source: 'measured',
+                      predictedRisePts: unlogged.risePts,
+                    });
+                    setJumpMl('');
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+                    setWaterLoggedMsg(`Logged ${Math.min(ml, 5000)} ml 💧`);
+                    setTimeout(() => setWaterLoggedMsg((m) => (m ? null : m)), 1800);
+                  }}
+                  style={{
+                    minHeight: 48, paddingHorizontal: 18, borderRadius: 12,
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: jumpMl ? accent.verdant : dark.surface2,
+                  }}
+                >
+                  <Text style={[type.cardTitle, { color: jumpMl ? '#08110B' : dark.inkMuted, fontSize: 14 }]}>Log</Text>
+                </Pressable>
+              </View>
+
+              <Pressable
+                onPress={() => dismissSoilJump(plant.id, new Date(unlogged.at).toISOString())}
+                style={{ minHeight: 40, justifyContent: 'center', marginTop: 6 }}
+              >
+                <Text style={[type.caption, { color: dark.inkMuted }]}>
+                  No — that wasn&apos;t me watering
+                </Text>
+              </Pressable>
+            </Card>
+          )}
+
           {/* ══════════ DO THIS NOW ══════════
               The single most urgent thing, at the very top, before any data.
               Someone opening this page usually wants "is anything wrong, and what
@@ -1931,6 +2108,40 @@ export default function PlantDetail() {
             </View>
             <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark.inkMuted} />
           </Pressable>
+
+          {/* ── What this probe can and cannot see in this pot ── */}
+          {detailsOpen && sensored && probe && probe.mode !== 'direct' && (
+            <Card style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: accent.sunbeam }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="eye-off-outline" size={18} color={accent.sunbeam} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  WHAT THE PROBE CAN SEE HERE
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{probe.headline}</Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {probe.detail}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>THIS POT&apos;S RANGE</Text>
+                  <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>
+                    {probe.observedLow.toFixed(0)}–{probe.observedHigh.toFixed(0)}%
+                  </Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>SENSOR NOISE</Text>
+                  <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>±{probe.noisePts}</Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>USABLE STEPS</Text>
+                  <Text style={[type.numBold as any, { color: probe.mode === 'time-based' ? accent.clay : accent.verdant, fontSize: 16 }]}>
+                    {probe.signalToNoise}
+                  </Text>
+                </View>
+              </View>
+            </Card>
+          )}
 
           {/* ── Was the amount we recommended right? Graded against real pours ── */}
           {detailsOpen && sensored && doseCheck && (

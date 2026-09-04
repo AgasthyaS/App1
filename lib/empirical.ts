@@ -135,3 +135,34 @@ export function blendBand(
   const hi = book[1] * (1 - w) + measured[1] * w;
   return { band: [lo, hi], basis: w > 0.75 ? 'measured' : 'blended', weight: w };
 }
+
+/* ─────────────────── THE SYNCHRONOUS HOP INTO THE CARE BANDS ───────────────────
+ *
+ * `loadEmpiricalBands` has existed, correct and complete, and was never called
+ * from anywhere — so measured reality has never once overridden a textbook band.
+ * The blocker was shape, not intent: `idealsFor` is synchronous and sits in every
+ * hot path in the app, and making it async would mean rewriting every screen.
+ *
+ * So the fetch happens once, into a module-level cache, and `idealsFor` reads it
+ * synchronously. Before the fetch lands — and forever, if the backend is absent
+ * or the sample is thin — the book values are used exactly as before. Nothing
+ * waits on the network and nothing breaks without it.
+ */
+
+let primed = false;
+
+/** Fetch the measured bands once, so `idealsFor` can consult them synchronously. */
+export async function primeEmpiricalBands(): Promise<void> {
+  if (primed) return;
+  primed = true;
+  try { await loadEmpiricalBands(); } catch { /* book values remain in use */ }
+}
+
+/**
+ * The measured band for a species, or undefined. Synchronous by design — it only
+ * ever reads the cache that `primeEmpiricalBands` filled.
+ */
+export function empiricalBandFor(species: string | undefined): EmpiricalBands | undefined {
+  if (!species || !bandsCache) return undefined;
+  return bandsCache.get(species);
+}

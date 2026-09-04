@@ -187,6 +187,33 @@ export interface Plant {
    * feeding actually starts helping, and flags when a repot is due.
    */
   lastRepottedAt?: string | null;
+  /**
+   * Soil jumps the owner has confirmed were NOT waterings — a nudged probe, a
+   * draught, rain on a balcony. Recorded so the app asks once and then lets it
+   * go; a question that keeps coming back after being answered is worse than one
+   * never asked.
+   */
+  ignoredJumps?: string[];
+  /**
+   * What the model has MEASURED about this pot, kept outside the reading window.
+   *
+   * Every derived figure is recomputed from the last 30 days of readings, which
+   * means a pot with six months of history reasons over one month of it and
+   * forgets the rest. Worse, the forgetting is silent: a pot calibrated from four
+   * careful pours in spring quietly reverts to a geometric guess in summer once
+   * those pours age out. This carries the conclusions forward when the evidence
+   * behind them scrolls off.
+   */
+  measurementMemory?: {
+    mlPerPoint?: number | null;
+    mlPerPointBasis?: string | null;
+    /** how many clean pours the remembered figure rested on */
+    cleanPours?: number | null;
+    ceilingPct?: number | null;
+    retentionClass?: string | null;
+    dryDownDays?: number | null;
+    updatedAt?: string;
+  };
   /** last watering the user reported (asked at registration, updated by logs) */
   lastWateredAt?: string | null;
   /** logged waterings with amounts — sharpens the estimate cycle */

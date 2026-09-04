@@ -834,6 +834,98 @@ const GENUS_RECIPE: Record<string, RecipePatch> = {
   Ilex: { headline: 'Free-draining, slightly acidic mix', components: [LOAM(2), ERICACEOUS(1), GRIT(1)], ph: [5.5, 6.5], why: 'Hollies prefer slightly acidic, well-drained soil. Berries need a female plant with a male nearby — soil is rarely the reason one has none.' },
   Buxus: { headline: 'Free-draining, alkaline-tolerant loam', components: [LOAM(3), GRIT(1), COMPOST(1)], ph: [6.5, 7.5], why: 'Box tolerates lime and drought once established but rots in wet compost, and box blight spreads fastest where air cannot move through damp foliage.' },
   Lonicera: { headline: 'Rich loam with cool roots', components: [LOAM(2), COMPOST(2), GRIT(1)], why: 'Honeysuckles want rich soil, cool shaded roots and their tops in sun — the same arrangement clematis ask for.' },
+
+  /* ── SECOND PASS. Each of these says something a category baseline cannot: a
+     habitat, a root architecture, or the specific way the plant is usually
+     killed. Genera added only where that is true — padding the table with
+     restatements of the category would raise the "genus-specific" percentage
+     while telling the owner nothing new, which is precision theatre. ── */
+  Aspidistra: {
+    headline: 'Ordinary compost — genuinely unfussy',
+    components: [COMPOST(3), PERLITE(1)],
+    why: 'The cast-iron plant earns the name: deep shade, drought and neglect are all survivable. The usual cause of death is kindness in the form of too much water.',
+    avoid: ['Over-watering — by far the most common way one is lost', 'Direct sun, which bleaches the leaves'],
+  },
+  Yucca: {
+    headline: 'Sharp gritty mix for a trunked succulent',
+    components: [PUMICE(2), COMPOST(1), GRIT(1)],
+    mix: 'Gritty / cactus',
+    drainage: 'Fast',
+    why: 'Yuccas store water in a woody trunk and rot at the base in damp compost. They also grow top-heavy, so the pot needs weight as much as the mix needs drainage.',
+    avoid: ['Damp compost around the trunk base', 'A light pot — a mature yucca will topple'],
+  },
+  Cordyline: {
+    headline: 'Free-draining mix, and never tap water',
+    components: [COIR(2), PERLITE(1), BARK(1)],
+    water: 'low-mineral',
+    why: 'Ti plants brown at the leaf tips from fluoride and accumulated fertiliser salts long before they object to anything else — the tips are a water-quality readout, not a humidity one.',
+    avoid: ['Fluoridated tap water', 'Letting salts build up — flush the pot through every few months'],
+  },
+  Schefflera: {
+    headline: 'Free-draining, weighty houseplant mix',
+    components: [COMPOST(2), PERLITE(1), BARK(1)],
+    why: 'Umbrella trees drop leaves at the slightest waterlogging or root disturbance. Getting the drainage right and then leaving them alone beats any amount of attention.',
+    avoid: ['Repotting more often than every 2–3 years'],
+  },
+  Codiaeum: {
+    headline: 'Rich, evenly moist mix',
+    components: [COIR(3), PERLITE(1), CASTINGS(1)],
+    drainage: 'Moderate',
+    why: 'Crotons drop their leaves at any check at all — a dry-out, a cold draught, a move across the room — and hold their colour only in strong light.',
+    avoid: ['Draughts and sudden moves', 'Letting it dry out even once'],
+  },
+  Oxalis: {
+    headline: 'Free-draining bulb mix',
+    components: [COMPOST(2), PERLITE(1), GRIT(1)],
+    mix: 'Gritty / cactus',
+    drainage: 'Fast',
+    why: 'Wood sorrels grow from small bulbs and go properly dormant — foliage dying back is the cycle, not a failure. Kept dry through it, they return.',
+    avoid: ['Watering through dormancy, which rots the bulbs', 'Throwing the pot out when the leaves die down'],
+  },
+  Chamaedorea: {
+    headline: 'Free-draining palm mix',
+    components: [COMPOST(3), PERLITE(1), BARK(1)],
+    water: 'low-mineral',
+    why: 'Parlour palms are understory plants, so low light genuinely suits them — but dry air and fluoridated water scorch the tips.',
+  },
+  Howea: {
+    headline: 'Loam-based palm mix',
+    components: [LOAM(2), COMPOST(1), GRIT(1)],
+    why: 'Kentia palms are slow, long-lived and hate root disturbance. Pot up rarely, and never bury the stem deeper than it grew.',
+    avoid: ['Frequent repotting', 'Burying the stem'],
+  },
+  Dypsis: {
+    headline: 'Free-draining palm mix, flushed regularly',
+    components: [COMPOST(3), PERLITE(1), GRIT(1)],
+    water: 'low-mineral',
+    why: 'Areca palms drink heavily and have fine roots that burn from fertiliser salts and fluoride — the brown tips people blame on humidity are usually water quality.',
+    avoid: ['Hard tap water', 'Letting feed accumulate — flush the pot through every couple of months'],
+  },
+  Strelitzia: {
+    headline: 'Heavy, rich mix for a big feeder',
+    components: [LOAM(2), COMPOST(2), GRIT(1)],
+    why: 'Bird of paradise has thick fleshy roots that will genuinely crack a plastic pot, and it flowers only once quite root-bound — so resist potting it up.',
+    avoid: ['Potting up too eagerly, which delays flowering by years'],
+  },
+  Rhaphidophora: {
+    headline: 'Chunky, airy climbing mix',
+    components: [BARK(2), COIR(2), PERLITE(2)],
+    why: 'Mini monsteras are fast climbers that want a pole; in dense compost the fine roots rot before the plant can use them.',
+  },
+  Davallia: {
+    headline: 'Open mix — rhizomes stay ON the surface',
+    components: [BARK(2), COIR(2), PERLITE(1)],
+    drainage: 'Fast',
+    why: 'Rabbit-foot ferns creep across the top on furry rhizomes that must stay above the mix. Burying them, which looks like tidying, rots the plant.',
+    avoid: ['Burying the rhizomes'],
+  },
+  Phlebodium: {
+    headline: 'Open, epiphyte-leaning fern mix',
+    components: [BARK(2), COIR(2), PERLITE(1)],
+    drainage: 'Fast',
+    why: 'Blue star fern is epiphytic with the same surface rhizomes as Davallia — an open mix, and the rhizomes left exposed.',
+    avoid: ['Burying the rhizomes', 'Dense compost'],
+  },
 };
 
 /** Prayer plants and their relatives: fine roots, constant damp, and no tap water. */

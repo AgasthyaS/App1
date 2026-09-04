@@ -8,9 +8,11 @@ import { accent, dark, type } from '@/constants/theme';
 import { isCalibrated } from '@/lib/calibration';
 import { assignDeviceToPlant, renameDevice, releaseDevice } from '@/lib/devices';
 import { confirmAction, notify } from '@/lib/platform';
+import { sensorHealth } from '@/lib/sensorHealth';
 import { activePlants, useGreenr } from '@/lib/store';
 import type { SensorStatus } from '@/lib/types';
 import { useMyDevices, type EnrichedDevice } from '@/lib/useDevices';
+import { useAllReadingHistories } from '@/lib/useLiveReading';
 import { isSupabaseConfigured } from '@/lib/supabase';
 
 const connToSensorStatus = (s: 'online' | 'idle' | 'offline'): SensorStatus =>
@@ -32,6 +34,7 @@ export default function Devices() {
   const router = useRouter();
   const { plants, spots, sensors, calibrations } = useGreenr();
   const { devices, loading, reload } = useMyDevices();
+  const histories = useAllReadingHistories();
 
   const [openId, setOpenId] = useState<string | null>(null);
   const [mode, setMode] = useState<'rename' | 'assign' | null>(null);
@@ -90,6 +93,17 @@ export default function Devices() {
         : `~${nextReport.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
     const cal = isCalibrated(calibrations[device.id]);
     const isOpen = openId === device.id;
+    /*
+     * The verdict on the DEVICE, not the plant. Five of the nine registered here
+     * had never sent a reading and one had been orphaned for over a month, and
+     * none of it appeared anywhere — a sensor that never worked looked exactly
+     * like one working perfectly.
+     */
+    const health = sensorHealth({
+      history: device.plant_key ? histories.get(device.plant_key) ?? [] : [],
+      paired: !!device.plant_key,
+      lastSeenAt: device.last_seen,
+    });
 
     return (
       <Card key={device.id} style={{ marginBottom: 10 }}>
@@ -106,6 +120,29 @@ export default function Devices() {
           <StatusDot status={connToSensorStatus(connection.status)} />
           <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={16} color={dark.inkMuted} />
         </Pressable>
+
+        {health.fault !== 'healthy' && (
+          <View
+            style={{
+              marginTop: 10, padding: 10, borderRadius: 10,
+              backgroundColor: dark.surface2,
+              borderLeftWidth: 3,
+              borderLeftColor: health.severity >= 70 ? accent.clay : accent.sunbeam,
+            }}
+          >
+            <Text style={[type.caption, { color: health.severity >= 70 ? accent.clay : accent.sunbeamText }]}>
+              {health.headline}
+            </Text>
+            <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, lineHeight: 15 }]}>
+              {health.detail}
+            </Text>
+            {health.action && (
+              <Text style={[type.micro, { color: dark.ink, marginTop: 6, lineHeight: 15 }]}>
+                → {health.action}
+              </Text>
+            )}
+          </View>
+        )}
 
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 10, borderTopWidth: 1, borderTopColor: dark.hairline, paddingTop: 6 }}>
           <Field label="Plant" value={plant?.name ?? 'Unassigned'} tone={plant ? dark.ink : accent.sunbeamText} />

@@ -177,22 +177,34 @@ export default function GardenTab() {
             {/* long-press quick actions */}
             {quickFor === p.id && (
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                <GButton
-                  title="Log water"
-                  kind="secondary"
-                  style={{ flex: 1, minHeight: 44 }}
-                  onPress={() => {
-                    // Nobody stated an amount here — this is the app's own
-                    // suggestion. Recording it as `assumed` keeps "it was
-                    // watered" (which mutes the nag) while keeping the number
-                    // out of the calibration, where it would only confirm itself.
-                    logWaterAmount(p.id, waterAmount(p).ml, {
-                      suggestedMl: waterAmount(p).ml,
-                      source: 'assumed',
-                    });
-                    setQuickFor(null);
-                  }}
-                />
+                {/* Three amounts instead of one "log water" button.
+                    A single button had to assume an amount, and an assumed
+                    amount can never calibrate the pot — so the quick action was
+                    structurally incapable of teaching the app anything. Naming
+                    the amount costs the same one tap and turns every watering
+                    into a measurement. */}
+                {[
+                  { label: 'Half', factor: 0.5 },
+                  { label: `${waterAmount(p).ml} ml`, factor: 1 },
+                  { label: 'Double', factor: 2 },
+                ].map((o) => {
+                  const ml = Math.max(25, Math.round((waterAmount(p).ml * o.factor) / 25) * 25);
+                  return (
+                    <GButton
+                      key={o.label}
+                      title={o.label}
+                      kind="secondary"
+                      style={{ flex: 1, minHeight: 44 }}
+                      onPress={() => {
+                        logWaterAmount(p.id, ml, {
+                          suggestedMl: waterAmount(p).ml,
+                          source: 'preset',
+                        });
+                        setQuickFor(null);
+                      }}
+                    />
+                  );
+                })}
                 {p.sensorId && (
                   <GButton
                     title="Sensor"

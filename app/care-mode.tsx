@@ -58,16 +58,34 @@ export default function CareMode() {
 
   const advance = () => setIndex((i) => i + 1);
 
+  /** The watering task waiting on an amount, if any. */
+  const [askAmountFor, setAskAmountFor] = useState<typeof task | null>(null);
+
+  /** Record the stated amount, then carry on through the session. */
+  const confirmAmount = (ml: number) => {
+    const t = askAmountFor;
+    if (!t) return;
+    logWaterAmount(t.plantId, ml, { suggestedMl: t.ml, source: 'preset' });
+    setLoggedWater((n) => n + 1);
+    setDoneCount((n) => n + 1);
+    setAskAmountFor(null);
+    advance();
+  };
+
   const complete = () => {
     if (!task) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     if (task.kind === 'water' || task.kind === 'water-check') {
-      // Completing a water task IS the watering log — this is what sharpens the cycle.
-      // Completing the task says it WAS watered, not how much — the amount shown
-      // was the app's own suggestion, so it is logged as assumed and never
-      // calibrates the pot.
-      logWaterAmount(task.plantId, task.ml, { suggestedMl: task.ml, source: 'assumed' });
-      setLoggedWater((n) => n + 1);
+      /*
+       * Ask, rather than assume. Completing the task used to log the SUGGESTED
+       * amount as though it had been poured, which is the one kind of log that
+       * can never calibrate anything — the app would be grading its own
+       * suggestion against itself. Opening the amount picker costs one tap and
+       * turns the most common watering path in the app from a dead end into the
+       * main source of measurements.
+       */
+      setAskAmountFor(task);
+      return;
     } else if (task.kind === 'light') {
       logCare(task.plantId, 'Moved to a brighter spot (from Care Mode).');
     } else if (task.kind === 'humidity') {
@@ -141,6 +159,47 @@ export default function CareMode() {
     humidity: '💨',
     feed: '🧪',
   };
+
+  /* The amount question. It blocks the session on purpose: this is the moment
+     the information exists, and a "skip" that silently logs the suggestion is
+     how the calibration got poisoned in the first place. Not knowing is a valid
+     answer — it just records the watering without an amount. */
+  if (askAmountFor) {
+    const suggested = askAmountFor.ml ?? 250;
+    const options = [
+      Math.max(25, Math.round((suggested * 0.5) / 25) * 25),
+      suggested,
+      Math.round((suggested * 2) / 25) * 25,
+    ].filter((v, i, a) => a.indexOf(v) === i);
+    return (
+      <Screen mode="light" scroll={false} style={{ justifyContent: 'center' }}>
+        <Text style={[type.ritualTitle, { color: light.ink }]}>How much did you pour?</Text>
+        <Text style={[type.body, { color: light.inkMuted, marginTop: 10, lineHeight: 22 }]}>
+          Greenr suggested {suggested} ml for {askAmountFor.plantName}. Telling it the real amount —
+          even if it was nothing like that — is what makes every future amount for this pot right.
+        </Text>
+        <View style={{ gap: 10, marginTop: 22 }}>
+          {options.map((ml) => (
+            <GButton key={ml} title={`${ml} ml`} onPress={() => confirmAmount(ml)} />
+          ))}
+          <GButton
+            title="I didn't measure it"
+            kind="secondary"
+            onPress={() => {
+              const t = askAmountFor;
+              // Records THAT it was watered, with no amount — honest, and it
+              // still mutes the "needs water" prompt until the sensor confirms.
+              logWaterAmount(t.plantId, null, { suggestedMl: t.ml, source: 'assumed' });
+              setLoggedWater((n) => n + 1);
+              setDoneCount((n) => n + 1);
+              setAskAmountFor(null);
+              advance();
+            }}
+          />
+        </View>
+      </Screen>
+    );
+  }
 
   return (
     <Screen mode="light" scroll={false}>
