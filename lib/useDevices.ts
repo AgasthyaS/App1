@@ -38,7 +38,7 @@ export function useMyDevices(): { devices: EnrichedDevice[]; loading: boolean; r
       devs.map(async (d) => ({
         device: d,
         latest: await getLatestReading(d.id),
-        connection: connectionFrom(d.last_seen),
+        connection: connectionFrom(d.last_seen, d.wake_seconds),
       })),
     );
     if (alive.current) {

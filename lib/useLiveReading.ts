@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 
-import { getReadingsSince, type Reading } from './devices';
+import { getReadingsSince, type Device, type Reading } from './devices';
 import { supabase } from './supabase';
+import { fleetUploadHealth, uploadHealth, type FleetUpload, type UploadHealth } from './uploadHealth';
 
 /**
  * SENSOR DATA FOR THE WHOLE GARDEN — fetched ONCE, shared by every screen.
@@ -50,11 +51,21 @@ export interface PlantReadings {
 
 interface Snapshot {
   byPlant: Map<string, PlantReadings>;
+  /**
+   * Every device on the account, paired or not.
+   *
+   * Carried here rather than fetched again by whoever needs it, because the
+   * device row is the ONLY record of a sensor that outlives the reading window.
+   * After 30 days of silence `byPlant` holds nothing for that plant, and without
+   * these rows the app would forget the sensor had ever existed — losing the
+   * outage at exactly the point it became serious.
+   */
+  devices: Device[];
   fetchedAt: number;
   loading: boolean;
 }
 
-let snapshot: Snapshot = { byPlant: new Map(), fetchedAt: 0, loading: false };
+let snapshot: Snapshot = { byPlant: new Map(), devices: [], fetchedAt: 0, loading: false };
 const listeners = new Set<() => void>();
 let inflight: Promise<void> | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -67,10 +78,12 @@ function publish(next: Snapshot) {
 
 async function fetchAll(): Promise<void> {
   if (!supabase) return;
+  // Unpaired devices are kept too. They cannot contribute a reading to any
+  // plant, but a sensor that has never uploaded is worth saying out loud, and
+  // filtering it out in the query made it unsayable.
   const { data: devs } = await supabase
     .from('devices')
-    .select('id,plant_key,last_seen')
-    .not('plant_key', 'is', null)
+    .select('id,label,plant_key,wake_seconds,battery_pct,last_seen')
     .order('last_seen', { ascending: false, nullsFirst: false });
   if (!devs) return;
 
@@ -84,7 +97,7 @@ async function fetchAll(): Promise<void> {
   const next = new Map<string, PlantReadings>();
 
   await Promise.all(
-    (devs as { id: string; plant_key: string | null }[]).map(async (d) => {
+    (devs as Device[]).map(async (d) => {
       if (!d.plant_key || claimed.has(d.plant_key)) return;
       claimed.add(d.plant_key);
       const history = await getReadingsSince(d.id, since);
@@ -99,7 +112,7 @@ async function fetchAll(): Promise<void> {
     }),
   );
 
-  publish({ byPlant: next, fetchedAt: Date.now(), loading: false });
+  publish({ byPlant: next, devices: devs as Device[], fetchedAt: Date.now(), loading: false });
 }
 
 /** Refresh now, coalescing concurrent callers onto one request. */
@@ -167,6 +180,25 @@ export function useAllReadingHistories(): Map<string, Reading[]> {
 /** True while a refresh is in flight — for pull-to-refresh spinners. */
 export function useReadingsRefreshing(): boolean {
   return useSnapshot().loading;
+}
+
+/**
+ * Whether the readings are actually still arriving — per sensor, and once for
+ * the whole account.
+ *
+ * Reads the snapshot everything else reads, so the banner on Home cannot claim
+ * a sensor is fine while the plant screen shows a two-week-old number. The
+ * per-device reading history is looked up by device id rather than by plant, so
+ * an unpaired sensor is still judged.
+ */
+export function useSensorUploadHealth(now?: number): { list: UploadHealth[]; fleet: FleetUpload | null } {
+  const snap = useSnapshot();
+  const byDevice = new Map<string, Reading[]>();
+  snap.byPlant.forEach((v) => byDevice.set(v.deviceId, v.history));
+  const list = snap.devices.map((device) =>
+    uploadHealth({ device, history: byDevice.get(device.id) ?? [], now }),
+  );
+  return { list, fleet: fleetUploadHealth(list) };
 }
 
 /**

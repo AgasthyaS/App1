@@ -264,25 +264,102 @@ const sentConfig = new Map<string, string>();
 const sentCare = new Set<string>();
 
 /**
- * Push the payload. Every failure is swallowed on purpose: research collection
- * must never interrupt, slow, or break the app someone is using to look after a
- * plant. If the tables do not exist yet, this quietly does nothing.
+ * WHAT THE LAST UPLOAD ACTUALLY DID.
+ *
+ * Added after finding the whole pipeline dead. Every write below is
+ * best-effort — research collection must never interrupt or break the app
+ * someone opened to look after a plant — but "swallow the failure" had been
+ * implemented as "never find out", and the two are not the same thing.
+ *
+ * The live database was checked on 2026-09-05: `profiles` held zero rows and
+ * `plant_profiles`, `plant_measurements` and `plant_health_log` did not exist,
+ * because the deployed schema was an older generation than the one this file
+ * writes. Every upload had been failing on its very first statement — the
+ * profile upsert, rejected for `column climate_zone does not exist` — for as
+ * long as the feature had existed. Nothing anywhere said so.
+ *
+ * Worse, it could not have said so. `attempt()` wrapped the calls in try/catch,
+ * and the Supabase client does not THROW on a rejected write: it resolves with
+ * `{ data, error }`. So the catch block could never fire and the code was
+ * structurally incapable of noticing failure, which is a stronger claim than it
+ * merely not noticing. The error is now read off the result, not waited for as
+ * an exception.
  */
-export async function syncResearch(userId: string, payload: ResearchPayload, now = Date.now()): Promise<void> {
-  if (!supabase || !userId || !payload.profile.research_opt_in) return;
+export interface ResearchSyncStatus {
+  optedIn: boolean;
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+  /** the message from the most recent failure, or null if the last run was clean */
+  lastError: string | null;
+  /** rows accepted on the last run, per table */
+  written: Record<string, number>;
+}
 
-  // The Postgrest builder is thenable but not a Promise, so callers `await`
-  // inside their own body rather than returning it.
-  const attempt = async (fn: () => Promise<unknown> | unknown) => {
-    try { await fn(); } catch { /* research data is never worth an error in front of a user */ }
+let status: ResearchSyncStatus = {
+  optedIn: false,
+  lastAttemptAt: null,
+  lastSuccessAt: null,
+  lastError: null,
+  written: {},
+};
+
+/** What the last upload did — for the line under the research toggle. */
+export function researchSyncStatus(): ResearchSyncStatus {
+  return status;
+}
+
+export async function syncResearch(userId: string, payload: ResearchPayload, now = Date.now()): Promise<void> {
+  if (!supabase || !userId) return;
+  if (!payload.profile.research_opt_in) {
+    status = { ...status, optedIn: false };
+    return;
+  }
+
+  const written: Record<string, number> = {};
+  let failure: string | null = null;
+
+  /*
+   * One write, and what became of it.
+   *
+   * `rows` is what we TRIED to send, recorded only when the write came back
+   * clean — so the status line reports what the database accepted rather than
+   * what the app hoped for. The first error is kept rather than the last: it is
+   * the one that explains the others (a missing table makes everything after it
+   * fail too, and the last message would just be the least informative).
+   */
+  const attempt = async (table: string, rows: number, fn: () => PromiseLike<{ error: unknown } | unknown>) => {
+    try {
+      const res = (await fn()) as { error?: { message?: string; code?: string } | null } | null;
+      const err = res?.error;
+      if (err) {
+        failure ??= `${table}: ${err.message ?? err.code ?? 'rejected'}`;
+        return;
+      }
+      written[table] = (written[table] ?? 0) + rows;
+    } catch (e) {
+      failure ??= `${table}: ${e instanceof Error ? e.message : 'failed'}`;
+    }
   };
 
-  await attempt(() =>
+  const okBefore = (table: string) => written[table] ?? 0;
+
+  await attempt('profiles', 1, () =>
     supabase!.from('profiles').upsert(
       { user_id: userId, ...payload.profile, updated_at: new Date(now).toISOString() },
       { onConflict: 'user_id' },
     ),
   );
+
+  /*
+   * The profile row is the CONSENT record, and every other table's rows hang off
+   * it. If it did not land, this account is not registered as opted in, so the
+   * writes below would either be rejected too or — worse — stored without the
+   * consent that makes them legitimate. A failure here stops the run.
+   */
+  if (failure) {
+    status = { optedIn: true, lastAttemptAt: now, lastSuccessAt: status.lastSuccessAt, lastError: failure, written };
+    return;
+  }
 
   // Configuration: only write when it has actually CHANGED, and close the old
   // row rather than editing it — that versioning is what keeps old readings
@@ -292,48 +369,93 @@ export async function syncResearch(userId: string, payload: ResearchPayload, now
     const fp = String(row._fingerprint);
     if (sentConfig.get(key) === fp) continue;
     const { _fingerprint, ...clean } = row as Record<string, unknown> & { _fingerprint: string };
-    await attempt(async () => {
-      await supabase!.from('plant_profiles')
+    const before = okBefore('plant_profiles');
+    await attempt('plant_profiles', 0, () =>
+      supabase!.from('plant_profiles')
         .update({ valid_to: new Date(now).toISOString() })
-        .eq('user_id', userId).eq('plant_key', key).is('valid_to', null);
-      await supabase!.from('plant_profiles')
-        .insert({ user_id: userId, ...clean, valid_from: new Date(now).toISOString() });
-    });
-    sentConfig.set(key, fp);
+        .eq('user_id', userId).eq('plant_key', key).is('valid_to', null),
+    );
+    await attempt('plant_profiles', 1, () =>
+      supabase!.from('plant_profiles')
+        .insert({ user_id: userId, ...clean, valid_from: new Date(now).toISOString() }),
+    );
+    /*
+     * REMEMBER IT AS SENT ONLY IF IT WAS. This used to run unconditionally, so a
+     * rejected write still marked the configuration as delivered and it was
+     * never retried for the lifetime of the process. With the pipeline failing
+     * every time, that meant every plant was recorded as uploaded and dropped.
+     */
+    if (okBefore('plant_profiles') > before) sentConfig.set(key, fp);
   }
 
-  const freshCare = payload.careEvents.filter((c) => {
-    const key = `${c.plant_key}|${c.at}`;
-    if (sentCare.has(key)) return false;
-    sentCare.add(key);
-    return true;
-  });
+  // Same rule for care events: the de-duplication key is only committed once the
+  // database has accepted the row, so a failed batch is offered again next run.
+  const freshCare = payload.careEvents.filter((c) => !sentCare.has(`${c.plant_key}|${c.at}`));
   if (freshCare.length) {
-    await attempt(() =>
+    const before = okBefore('care_events');
+    await attempt('care_events', freshCare.length, () =>
       supabase!.from('care_events').upsert(
         freshCare.map((c) => ({ user_id: userId, ...c })),
         { onConflict: 'user_id,plant_key,kind,at' },
       ),
     );
+    if (okBefore('care_events') > before) {
+      for (const c of freshCare) sentCare.add(`${c.plant_key}|${c.at}`);
+    }
   }
 
+  // The interval timers move only on success too — a rejected push must not buy
+  // itself another six hours of silence.
   if (now - lastMeasurementPushAt > MEASUREMENT_INTERVAL_H * 3600000 && payload.measurements.length) {
-    lastMeasurementPushAt = now;
-    await attempt(() =>
+    const before = okBefore('plant_measurements');
+    await attempt('plant_measurements', payload.measurements.length, () =>
       supabase!.from('plant_measurements').insert(
         payload.measurements.map((m) => ({ user_id: userId, ...m })),
       ),
     );
+    if (okBefore('plant_measurements') > before) lastMeasurementPushAt = now;
   }
 
   if (now - lastHealthPushAt > HEALTH_LOG_INTERVAL_H * 3600000 && payload.healthLog.length) {
-    lastHealthPushAt = now;
-    await attempt(() =>
+    const before = okBefore('plant_health_log');
+    await attempt('plant_health_log', payload.healthLog.length, () =>
       supabase!.from('plant_health_log').insert(
         payload.healthLog.map((h) => ({ user_id: userId, ...h })),
       ),
     );
+    if (okBefore('plant_health_log') > before) lastHealthPushAt = now;
   }
+
+  status = {
+    optedIn: true,
+    lastAttemptAt: now,
+    lastSuccessAt: failure ? status.lastSuccessAt : now,
+    lastError: failure,
+    written,
+  };
+}
+
+/**
+ * One line describing the last upload, for the research toggle.
+ *
+ * Deliberately plain rather than alarming. Someone who turned research on is
+ * entitled to know whether anything is actually being contributed — and when the
+ * answer is "nothing, ever", saying so is the entire point of the line.
+ */
+export function researchSyncLine(now = Date.now()): string {
+  const st = status;
+  if (!st.optedIn) return 'Off — nothing is uploaded.';
+  if (st.lastAttemptAt == null) return 'On. Nothing uploaded yet this session.';
+  if (st.lastError) {
+    return `On, but the last upload was rejected (${st.lastError}). Nothing is reaching the database.`;
+  }
+  const rows = Object.entries(st.written)
+    .filter(([, n]) => n > 0)
+    .map(([t, n]) => `${n} ${t.replace(/_/g, ' ')}`)
+    .join(', ');
+  const mins = Math.max(0, Math.round((now - (st.lastSuccessAt ?? now)) / 60000));
+  const when = mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
+  return rows ? `On. Last upload ${when} — ${rows}.` : `On. Last checked ${when}; nothing new to send.`;
 }
 
 /** Clears the in-memory de-duplication state — used on sign-out. */
@@ -342,4 +464,5 @@ export function resetResearchSync(): void {
   lastMeasurementPushAt = 0;
   sentConfig.clear();
   sentCare.clear();
+  status = { optedIn: false, lastAttemptAt: null, lastSuccessAt: null, lastError: null, written: {} };
 }

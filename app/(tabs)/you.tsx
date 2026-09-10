@@ -222,7 +222,7 @@ export default function YouTab() {
           <Text style={[type.caption, { color: dark.inkMuted }]}>No sensors paired yet.</Text>
         )}
         {devices.map((d) => {
-          const conn = connectionFrom(d.device.last_seen);
+          const conn = connectionFrom(d.device.last_seen, d.device.wake_seconds);
           return (
             <Pressable
               key={d.device.id}

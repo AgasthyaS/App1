@@ -36,17 +36,27 @@ export interface DeviceConnection {
 
 /**
  * Connection quality from how recently the device last reported. Sensors
- * deep-sleep (~3 h idle), so "online" spans a full reporting cycle before a
+ * deep-sleep between readings, so "online" spans a full reporting cycle before a
  * device is considered idle/offline (else a healthy sensor would look offline
  * right before its next report). Honest: derived from real last_seen, not a
  * fabricated RSSI (the firmware doesn't report Wi-Fi signal strength).
+ *
+ * The cycle length comes from the device's own `wake_seconds` — the interval the
+ * server hands back to the firmware on every upload — rather than the 210/420
+ * minute constants this used to hardcode. Those constants assumed every sensor
+ * reports every three hours, so a device deliberately set to report once a day
+ * would have been called offline every single day of its life, and one set to
+ * report every ten minutes could go three hours dark without a word.
  */
-export function connectionFrom(lastSeen: string | null): DeviceConnection {
+export function connectionFrom(lastSeen: string | null, wakeSeconds?: number | null): DeviceConnection {
   if (!lastSeen) return { status: 'offline', quality: 'Unknown', sinceLabel: 'never reported' };
   const mins = (Date.now() - new Date(lastSeen).getTime()) / 60000;
   const sinceLabel = mins < 1 ? 'just now' : relTime(mins);
-  if (mins < 210) return { status: 'online', quality: 'Good', sinceLabel }; // within one ~3 h cycle
-  if (mins < 420) return { status: 'idle', quality: 'Fair', sinceLabel }; // missed a report
+  // A cycle, with a floor so a fast-reporting sensor isn't called offline for
+  // being a minute late, and a ceiling so a corrupt value can't hide an outage.
+  const cycle = Math.min(1440, Math.max(15, (wakeSeconds && wakeSeconds > 0 ? wakeSeconds : 10800) / 60));
+  if (mins < cycle * 1.17) return { status: 'online', quality: 'Good', sinceLabel }; // still inside its cycle
+  if (mins < cycle * 2.33) return { status: 'idle', quality: 'Fair', sinceLabel };   // missed a report
   return { status: 'offline', quality: 'Weak', sinceLabel };
 }
 

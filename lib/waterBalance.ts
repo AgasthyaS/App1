@@ -873,12 +873,33 @@ export function wateringSchedule(
    */
   const { ceiling } = poursAndCeiling(plant, history, now);
   const modelledFull = th.capacityReading;
-  // The HIGHEST reading ever recorded is a hard lower bound on what this pot
-  // shows when full — it did show it. No `confirmed` gate here: confirmation
-  // decides whether a POUR was saturating, which is a different question, and
-  // requiring it left these two pots on a modelled 23.5% while they were sitting
-  // at 69% and 53% in front of us.
-  const capacityAt = Math.min(Math.max(ceiling?.pct ?? 0, modelledFull), band[1]);
+  /*
+   * The HIGHEST reading ever recorded is a hard LOWER bound on what this pot
+   * shows when full — it did show it. That was the whole rule here, with no
+   * `confirmed` gate, because requiring confirmation left two real pots on a
+   * modelled 23.5% while they sat at 69% and 53% in front of us.
+   *
+   * But a lower bound alone is only half the truth, and the missing half is the
+   * case the owner actually complained about. Take a fast, gritty, well-drained
+   * pot that has been watered generously several times and has never once read
+   * above 38%, against a model that says 45%. `max()` picks 45, and the four
+   * points between are water that cannot enter the soil: it runs through and
+   * stands in the saucer.
+   *
+   * `strong` is the evidence that separates the two cases — NOT `confirmed`,
+   * which with a band present means `max >= band[1] + 8` and therefore answers
+   * the completely different question "is this pot being flooded". `strong`
+   * means waterings of materially different VOLUMES all ended at the same
+   * reading, so the pot has been offered several times the water and refused it.
+   * When that has happened the pot outranks the model in both directions; when
+   * it has not, the old lower-bound rule stands. The species ceiling still caps
+   * everything, because for a plant that resents wet feet "full" means the top
+   * of its band, not the top of the pot.
+   */
+  const capacityAt = Math.min(
+    ceiling?.strong ? ceiling.pct : Math.max(ceiling?.pct ?? 0, modelledFull),
+    band[1],
+  );
 
   /*
    * SQUEEZED RANGE. A very retentive mix can put the substrate's refill threshold

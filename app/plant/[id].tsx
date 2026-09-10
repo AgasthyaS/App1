@@ -42,7 +42,7 @@ import { retentionEstimate, RETENTION_LABEL } from '@/lib/soilRetention';
 import { doseAccuracy } from '@/lib/doseAccuracy';
 import { pendingWateringQuestion } from '@/lib/unloggedWatering';
 import { setupCompleteness } from '@/lib/setupGaps';
-import { probeResolution } from '@/lib/probeResolution';
+import { probeResolution, relativeThreshold, relativeWetness } from '@/lib/probeResolution';
 import { mixVerdict, recipeLine, soilRecipeFor } from '@/lib/soilRecipe';
 import { buildHydrationModel, rootBoundSignal } from '@/lib/hydration';
 import { pestRisks } from '@/lib/pestRisk';
@@ -2122,6 +2122,38 @@ export default function PlantDetail() {
               <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
                 {probe.detail}
               </Text>
+              {/*
+                THE RESCALED READING ITSELF — the thing rescaling is FOR, and the
+                one thing this card never showed. `probeResolution` could return
+                mode 'rescaled' and `relativeWetness` existed to act on it, but
+                nothing anywhere called it, so a pot living between 5% and 12%
+                was still only ever described to its owner as "9%".
+
+                Note this is a DISPLAY transform and nothing more. The mapping is
+                affine and monotone, so judging a rescaled reading against a
+                rescaled threshold gives exactly the same verdict as judging the
+                raw numbers — it changes what a person can read, never what the
+                app decides. The threshold is shown alongside for the same
+                reason: 68 means nothing until you know the floor is at 34.
+              */}
+              {probe.mode === 'rescaled' && calReading?.soil_pct != null && (
+                <View style={{ marginTop: 12, backgroundColor: dark.surface2, borderRadius: 10, padding: 12 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>IN THIS POT&apos;S OWN RANGE</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 2 }}>
+                    <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 24 }]}>
+                      {Math.round(relativeWetness(calReading.soil_pct, probe))}
+                    </Text>
+                    <Text style={[type.body, { color: dark.inkMuted, marginBottom: 3 }]}>
+                      of 100 &middot; floor sits at {Math.round(relativeThreshold(ideal.band[0], probe))}
+                    </Text>
+                  </View>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 16 }]}>
+                    The raw {calReading.soil_pct.toFixed(1)}% is real but unreadable — this pot only ever
+                    moves between {probe.observedLow.toFixed(1)}% and {probe.observedHigh.toFixed(1)}%. Stretched
+                    across its own range, the same reading becomes something you can actually judge.
+                  </Text>
+                </View>
+              )}
               <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
                 <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
                   <Text style={[type.micro, { color: dark.inkMuted }]}>THIS POT&apos;S RANGE</Text>

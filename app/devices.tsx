@@ -6,7 +6,7 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { Card, Chip, GButton, Hairline, Row, Screen, SectionHeader, StatusDot } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
 import { isCalibrated } from '@/lib/calibration';
-import { assignDeviceToPlant, renameDevice, releaseDevice } from '@/lib/devices';
+import { assignDeviceToPlant, renameDevice, releaseDevice, setWakeInterval } from '@/lib/devices';
 import { confirmAction, notify } from '@/lib/platform';
 import { sensorHealth } from '@/lib/sensorHealth';
 import { activePlants, useGreenr } from '@/lib/store';
@@ -37,7 +37,7 @@ export default function Devices() {
   const histories = useAllReadingHistories();
 
   const [openId, setOpenId] = useState<string | null>(null);
-  const [mode, setMode] = useState<'rename' | 'assign' | null>(null);
+  const [mode, setMode] = useState<'rename' | 'assign' | 'cadence' | null>(null);
   const [renameText, setRenameText] = useState('');
 
   const openActions = (id: string) => {
@@ -56,6 +56,38 @@ export default function Devices() {
     await assignDeviceToPlant(id, plantId);
     setMode(null);
     reload();
+  };
+
+  /*
+   * HOW OFTEN THIS SENSOR REPORTS.
+   *
+   * `setWakeInterval` has existed since the firmware learned to take its cadence
+   * from the server — the RPC hands `wake_seconds` back on every upload and the
+   * board adopts it, no reflash — and nothing in the app has ever called it. So
+   * every sensor has sat on the 3-hour default for its whole life with no way to
+   * change it short of editing the database by hand.
+   *
+   * It is worth having for two opposite reasons. Hourly turns a week of
+   * calibration into a day, because the dose engine learns from dry-down curves
+   * and a denser curve is a better-fitted one. Six-hourly roughly doubles
+   * battery life on a sensor somewhere awkward to reach. Both are now the
+   * owner's call rather than a constant.
+   */
+  const CADENCES: { label: string; seconds: number; why: string }[] = [
+    { label: 'Every hour', seconds: 3600, why: 'Learns a pot fastest — best while calibrating.' },
+    { label: 'Every 3 hours', seconds: 10800, why: 'The default. Enough detail for watering, easy on the battery.' },
+    { label: 'Every 6 hours', seconds: 21600, why: 'Roughly doubles battery life. Slower to spot a problem.' },
+    { label: 'Once a day', seconds: 86400, why: 'For a plant that barely changes — a mature succulent.' },
+  ];
+
+  const doCadence = async (id: string, seconds: number) => {
+    await setWakeInterval(id, seconds);
+    setMode(null);
+    reload();
+    notify(
+      'Reporting interval changed',
+      'The sensor picks this up on its next upload, so the change takes effect after its current cycle rather than immediately.',
+    );
   };
 
   const doRemove = (d: EnrichedDevice) => {
@@ -168,6 +200,7 @@ export default function Devices() {
               <ActionBtn icon="create-outline" label="Rename" onPress={() => { setMode(mode === 'rename' ? null : 'rename'); setRenameText(device.label ?? ''); }} />
               <ActionBtn icon="leaf-outline" label="Assign" onPress={() => setMode(mode === 'assign' ? null : 'assign')} />
               <ActionBtn icon="options-outline" label="Calibrate" onPress={() => router.push(`/calibrate/${device.id}` as any)} />
+              <ActionBtn icon="time-outline" label="Reporting" onPress={() => setMode(mode === 'cadence' ? null : 'cadence')} />
               <ActionBtn icon="trash-outline" label="Remove" danger onPress={() => doRemove(d)} />
             </View>
 
@@ -183,6 +216,25 @@ export default function Devices() {
                   style={{ color: dark.ink, backgroundColor: dark.surface2, borderRadius: 10, paddingHorizontal: 12, minHeight: 44, marginTop: 4, fontSize: 15 }}
                 />
                 <GButton title="Save name" onPress={() => doRename(device.id)} style={{ marginTop: 10, minHeight: 42 }} />
+              </View>
+            )}
+
+            {mode === 'cadence' && (
+              <View style={{ marginTop: 12 }}>
+                <Text style={[type.micro, { color: dark.inkMuted, marginBottom: 4 }]}>HOW OFTEN IT REPORTS</Text>
+                {CADENCES.map((c) => (
+                  <Pressable
+                    key={c.seconds}
+                    onPress={() => doCadence(device.id, c.seconds)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 46, paddingVertical: 4 }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.body, { color: dark.ink }]}>{c.label}</Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1, lineHeight: 15 }]}>{c.why}</Text>
+                    </View>
+                    {device.wake_seconds === c.seconds && <Chip label="current" color={accent.sage} />}
+                  </Pressable>
+                ))}
               </View>
             )}
 

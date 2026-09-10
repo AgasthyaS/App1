@@ -10,6 +10,7 @@ import { BUILD_STAMP } from '@/lib/build';
 import * as bleGateway from '@/lib/bleGateway';
 import * as notifications from '@/lib/notifications';
 import { confirmAction, notify, shareContent } from '@/lib/platform';
+import { researchSyncLine } from '@/lib/research';
 import { useGreenr } from '@/lib/store';
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -26,6 +27,9 @@ export default function SettingsScreen() {
   const greenr = useGreenr();
   const { settings, setSettings, resetApp, profile, signOut } = greenr;
   const { user, signOut: authSignOut, enabled: authEnabled, deleteAccount } = useAuth();
+  // Read at render rather than subscribed to: the sync runs hourly in the
+  // background, so opening this screen is already the freshest moment there is.
+  const syncLine = researchSyncLine();
 
   const cycle = <T,>(list: readonly T[], current: T): T =>
     list[(list.findIndex((v) => JSON.stringify(v) === JSON.stringify(current)) + 1) % list.length];
@@ -238,6 +242,15 @@ export default function SettingsScreen() {
         />
         <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4 }]}>
           Your readings and outcomes, stripped of identity, improve care models for everyone.
+        </Text>
+        {/*
+          What the last upload actually did. Worth the two lines: the whole
+          pipeline had been rejected on its first statement since the day it
+          shipped, and because every failure was swallowed, "on" and "working"
+          were indistinguishable from here.
+        */}
+        <Text style={[type.micro, { color: syncLine.includes('rejected') ? accent.sunbeam : dark.inkMuted, marginTop: 3 }]}>
+          {syncLine}
         </Text>
         <Row
           title="Delete account"

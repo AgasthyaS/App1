@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
-import { RefreshControl, ScrollView, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Card, Chip, SectionHeader } from '@/components/greenr/UI';
@@ -18,7 +18,7 @@ import { storedLightAvg } from '@/lib/insights';
 import { idealsFor, lightStatus, soilStatus, tempStatus } from '@/lib/plantStatus';
 import { activePlants, useGreenr } from '@/lib/store';
 import { soilDynamics, wateredSinceLastReading, wateringDidNotRegister } from '@/lib/soilDynamics';
-import { refreshReadings, useAllLiveReadings, useAllReadingHistories, useReadingsRefreshing } from '@/lib/useLiveReading';
+import { refreshReadings, useAllLiveReadings, useAllReadingHistories, useReadingsRefreshing, useSensorUploadHealth } from '@/lib/useLiveReading';
 import { useWeather } from '@/lib/useWeather';
 import { waterAction } from '@/lib/waterAction';
 import { cToF } from '@/lib/weather';
@@ -42,6 +42,10 @@ export default function HomeTab() {
   const liveReadings = useAllLiveReadings();
   const histories = useAllReadingHistories();   // needed to tell "draining" from "over-watered"
   const readingsRefreshing = useReadingsRefreshing();
+  // Whether the numbers below are still being fed. Every card on this screen
+  // shows a soil percentage, and a fortnight-old one looks exactly like a fresh
+  // one — which is how three dead sensors went unnoticed for thirteen days.
+  const { fleet } = useSensorUploadHealth();
   const weather = useWeather();
   const insets = useSafeAreaInsets();
 
@@ -187,6 +191,33 @@ export default function HomeTab() {
         {avg != null && <VitalityRing score={avg} size={28} showLabel={false} />}
       </View>
       <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2 }]}>Right now in your garden</Text>
+
+      {/*
+        SENSORS NOT REPORTING. Deliberately above the weather and the alerts:
+        everything under it is derived from readings, so if the readings stopped
+        the rest of this screen is history rather than news. It renders nothing
+        at all when the sensors are fine — a banner that is always there is a
+        banner nobody reads.
+      */}
+      {fleet && (
+        <Pressable onPress={() => router.push('/device-health' as any)}>
+          <Card
+            style={{ marginTop: 10 }}
+            accentBorder={fleet.severity >= 65 ? accent.clay : accent.sunbeam}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons
+                name={fleet.severity >= 65 ? 'cloud-offline-outline' : 'alert-circle-outline'}
+                size={16}
+                color={fleet.severity >= 65 ? accent.clay : accent.sunbeam}
+              />
+              <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]}>{fleet.headline}</Text>
+              <Ionicons name="chevron-forward" size={14} color={dark.inkMuted} />
+            </View>
+            <Text style={[type.body, { color: dark.inkMuted, marginTop: 6 }]}>{fleet.detail}</Text>
+          </Card>
+        </Pressable>
+      )}
 
       {/* current weather — only when something lives outdoors */}
       {hasOutdoor && <WeatherCard w={weather} unitsF={settings.unitsF} />}

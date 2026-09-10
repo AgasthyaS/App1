@@ -3,7 +3,7 @@ import { buildHydrationModel } from './hydration';
 import { idealsFor } from './plantStatus';
 import { soilDynamics, wateredSinceLastReading, wateringDidNotRegister } from './soilDynamics';
 import { withMeasuredRetention } from './soilRetention';
-import { perPointFor } from './waterBalance';
+import { perPointFor, poursAndCeiling } from './waterBalance';
 import type { Plant } from './types';
 import { pourStep, type PourStep } from './watering';
 
@@ -73,7 +73,47 @@ export function waterAction(opts: {
     return none('ok', 'Awaiting first reading', 'No soil reading yet.');
   }
   const soil = reading.soil_pct;
-  const target = Math.round((lo + hi) / 2);
+
+  /*
+   * AIM AT WHAT THE POT CAN ACTUALLY HOLD, not at the middle of the book band.
+   *
+   * The target used to be `(lo + hi) / 2` unconditionally, and that is where the
+   * "it said 900 ml and 400 ml was plenty" complaint came from. Some pots simply
+   * never reach the middle of their species' band: a fast, gritty, well-drained
+   * mix tops out several points lower, and the water asked for above that point
+   * does not enter the soil at all — it runs through and stands in the saucer,
+   * which is the condition that rots roots rather than the one that prevents it.
+   *
+   * This clamp already existed — in `doseFor`, which nothing has ever called.
+   * The live path is `waterAction → pourStep`, and while that caps the pour by
+   * VOLUME (a quarter of the pot, an absolute maximum), no cap in reading-space
+   * existed, so the deficit itself was overstated before any of those applied.
+   *
+   * ─────────────────── WHICH FLAG, AND WHY NOT THE OBVIOUS ONE ───────────────
+   *
+   * `ceiling.confirmed` is the wrong test here and using it produced a clamp
+   * that could never once fire. Read what it means: with a band present it
+   * requires `max >= band[1] + 8`, i.e. it answers "is this pot being FLOODED",
+   * topping out well above where the plant wants to sit. A ceiling satisfying
+   * that is by definition above the band midpoint, so `confirmed && pct <
+   * bandMid` is a contradiction. It type-checked, read sensibly, and was dead.
+   *
+   * `strong` is the flag that means what is needed: two or more waterings of
+   * MATERIALLY DIFFERENT VOLUMES that all ended at the same reading. A 300 ml
+   * pour and a 900 ml pour both landing at 38% is not a pot nobody has filled —
+   * it is a pot that was offered three times the water and put it in the saucer.
+   * That is a physical ceiling wherever it sits, above the band or below it, and
+   * it is the one honest way to tell a low ceiling from an un-watered one.
+   *
+   * It was already being computed on every call, and read by nothing.
+   */
+  const { ceiling } = history.length ? poursAndCeiling(plant, history, now) : { ceiling: null };
+  const bandMid = Math.round((lo + hi) / 2);
+  const cappedByCeiling = ceiling?.strong === true && ceiling.pct < bandMid;
+  const target = cappedByCeiling ? Math.round(ceiling!.pct) : bandMid;
+  const ceilingNote = cappedByCeiling
+    ? ` Different-sized waterings have all topped this pot out at ${Math.round(ceiling!.pct)}%, so Greenr aims there rather than at ${bandMid}% — the rest would run straight out of the base.`
+    : '';
 
   // The pot's own measured millilitres-per-point, once its pours agree. Built
   // here rather than per-surface so every screen quotes the same figure.
@@ -132,8 +172,8 @@ export function waterAction(opts: {
       predictedRisePts: step.predictedRisePts,
       line: `Water now — soil ${Math.round(soil)}% · add ~${step.ml} ml`,
       detail: step.isTrial
-        ? `Soil is ${Math.round(soil)}%, below ${plant.species}'s ${lo}% floor. ${step.note}`
-        : `Soil is ${Math.round(soil)}%, below ${plant.species}'s ${lo}% floor.`,
+        ? `Soil is ${Math.round(soil)}%, below ${plant.species}'s ${lo}% floor. ${step.note}${ceilingNote}`
+        : `Soil is ${Math.round(soil)}%, below ${plant.species}'s ${lo}% floor.${ceilingNote}`,
       urgent: true,
       step,
     };

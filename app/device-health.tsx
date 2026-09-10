@@ -7,23 +7,33 @@ import { Card, GButton, Hairline, Screen, SectionHeader } from '@/components/gre
 import { accent, dark, type } from '@/constants/theme';
 import { type EnrichedDevice } from '@/lib/useDevices';
 import { useMyDevices } from '@/lib/useDevices';
+import { useSensorUploadHealth } from '@/lib/useLiveReading';
+import type { UploadHealth } from '@/lib/uploadHealth';
 import { useGreenr } from '@/lib/store';
 
 type Health = 'good' | 'warn' | 'bad';
 interface Issue { tone: Health; text: string; fix?: string }
 
-function assess(d: EnrichedDevice): { health: Health; issues: Issue[]; battery: number | null } {
+/*
+ * The verdict now comes from `uploadHealth` rather than from the connection dot.
+ *
+ * The dot only ever answered "did anything arrive recently", which misses the
+ * failure that actually costs data: a sensor delivering half its readings is
+ * never late enough to look offline, but half the drying curve is gone and every
+ * watering amount derived from it gets vaguer. `uploadHealth` measures delivery
+ * against the cadence the device was CONFIGURED with, so a slowdown cannot pass
+ * itself off as the new normal.
+ */
+function assess(d: EnrichedDevice, up: UploadHealth | undefined): { health: Health; issues: Issue[]; battery: number | null } {
   const issues: Issue[] = [];
   const battery = d.latest?.battery_pct ?? d.device.battery_pct ?? null;
 
-  if (d.connection.status === 'offline') {
+  if (up && up.state !== 'steady') {
     issues.push({
-      tone: 'bad',
-      text: `Hasn't reported (${d.connection.sinceLabel})`,
-      fix: 'Check it has power and your 2.4 GHz Wi-Fi is up. Moved house or changed your router? It reopens Bluetooth setup on its own — run Wi-Fi setup to point it at the new network.',
+      tone: up.severity >= 65 ? 'bad' : 'warn',
+      text: up.headline,
+      fix: up.action ? `${up.detail} ${up.action}` : up.detail,
     });
-  } else if (d.connection.status === 'idle') {
-    issues.push({ tone: 'warn', text: `Late — last seen ${d.connection.sinceLabel}`, fix: 'Usually catches up on its next wake. If not, check power.' });
   }
   if (battery != null && battery >= 0 && battery < 20) {
     issues.push({ tone: battery < 10 ? 'bad' : 'warn', text: `Battery low (${Math.round(battery)}%)`, fix: 'Recharge or swap the battery so it keeps reporting.' });
@@ -44,12 +54,16 @@ export default function DeviceHealth() {
   const { devices, loading, reload } = useMyDevices();
   const [helpOpen, setHelpOpen] = useState(false);
 
+  const { list: upload } = useSensorUploadHealth();
+  const uploadById = new Map(upload.map((u) => [u.deviceId, u]));
+
   const rows = devices.map((d) => {
     const plant = plants.find((p) => p.id === d.device.plant_key);
-    return { d, plant: plant?.name ?? null, ...assess(d) };
+    const up = uploadById.get(d.device.id);
+    return { d, plant: plant?.name ?? null, up, ...assess(d, up) };
   });
   const needAttention = rows.filter((r) => r.health !== 'good').length;
-  const online = rows.filter((r) => r.d.connection.status === 'online').length;
+  const online = rows.filter((r) => (r.up ? r.up.state === 'steady' : r.d.connection.status === 'online')).length;
 
   return (
     <Screen>
@@ -87,7 +101,7 @@ export default function DeviceHealth() {
         </Card>
       )}
 
-      {rows.map(({ d, plant, health, issues, battery }) => {
+      {rows.map(({ d, plant, up, health, issues, battery }) => {
         const w = d.device.wake_seconds;
         const cadence = w >= 3600 ? `every ${Math.round(w / 3600)} h` : `every ${Math.round(w / 60)} min`;
         const next = d.device.last_seen
@@ -109,6 +123,13 @@ export default function DeviceHealth() {
               <Field label="Battery" value={battery == null || battery < 0 ? 'Not reported' : `${Math.round(battery)}%`} tone={battery != null && battery >= 0 && battery < 20 ? accent.clay : undefined} />
               <Field label="Last seen" value={d.connection.sinceLabel} />
               <Field label="Reporting" value={cadence} />
+              {/* Delivery is the number the old screen had no way to show: not
+                  "is it on now" but "how much of what it owed has it paid". */}
+              <Field
+                label="Delivered"
+                value={up?.deliveredShare == null ? '—' : `${Math.round(up.deliveredShare * 100)}% of ${up.windowDays} d`}
+                tone={up?.deliveredShare != null && up.deliveredShare < 0.7 ? accent.sunbeam : undefined}
+              />
               <Field label="Next report" value={next ? (next.getTime() < Date.now() ? 'overdue' : `~${next.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`) : '—'} />
             </View>
 

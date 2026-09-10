@@ -57,6 +57,22 @@ create table if not exists public.profiles (
 comment on table public.profiles is
   'One row per account. Consent to research use, plus the coarsest geography needed for regional answers.';
 
+-- CONVERGE AN EXISTING DATABASE, not just an empty one.
+--
+-- `create table if not exists` is a no-op against a table that already exists —
+-- it does NOT add the new columns — and that is not a hypothetical: an earlier
+-- `profiles` from supabase-moat.sql was already deployed with three columns, so
+-- this file ran clean, changed nothing, and every research upload afterwards
+-- failed with "column climate_zone does not exist". Silently, because
+-- `syncResearch` swallows its errors by design.
+--
+-- So every table below is followed by idempotent `add column if not exists`
+-- statements. Running this file twice is safe; running it over the old schema
+-- now actually migrates it.
+alter table public.profiles add column if not exists climate_zone int;
+alter table public.profiles add column if not exists hemisphere   text;
+alter table public.profiles add column if not exists created_at   timestamptz not null default now();
+
 alter table public.profiles enable row level security;
 drop policy if exists "own profile" on public.profiles;
 create policy "own profile" on public.profiles
@@ -134,12 +150,26 @@ create table if not exists public.care_events (
 comment on table public.care_events is
   'What the owner did and when. For waterings: poured vs suggested, how the amount was arrived at, and what the soil did in response.';
 
+-- Same migration as above: the old `care_events` had only (ml, note), so the
+-- columns that make a watering GRADEABLE were missing and every upsert 400'd.
+alter table public.care_events add column if not exists suggested_ml  int;
+alter table public.care_events add column if not exists amount_source text;
+alter table public.care_events add column if not exists rise_points   numeric;
+alter table public.care_events add column if not exists saturated     boolean;
+
 alter table public.care_events enable row level security;
 drop policy if exists "own care events" on public.care_events;
 create policy "own care events" on public.care_events
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create index if not exists care_events_lookup on public.care_events (plant_key, at desc);
+
+-- The de-duplication key the app upserts on. Declared inline above for a fresh
+-- database; declared again here as an index so an EXISTING table gets it too —
+-- without it PostgREST rejects `on_conflict=user_id,plant_key,kind,at` outright
+-- and the app re-sends the same waterings forever.
+create unique index if not exists care_events_dedupe
+  on public.care_events (user_id, plant_key, kind, at);
 
 
 -- ───────────────────────────────────────────────────────────────────────────
@@ -237,13 +267,32 @@ create index if not exists plant_health_lookup on public.plant_health_log (plant
 -- ═══════════════════════════════════════════════════════════════════════════
 --  THE ANSWERS — each view is a question, phrased as one
 --  All read only from opted-in accounts, all enforce a minimum sample.
+--
+--  Every view below is `security_invoker = on`, meaning it runs with the
+--  PERMISSIONS OF WHOEVER READS IT rather than of whoever created it. Without
+--  that, Postgres runs a view as its owner, which quietly bypasses the row-level
+--  security on every table underneath — an elevation nobody declared and nobody
+--  can see when reading the view. (Supabase's advisor flags exactly this, as
+--  `security_definer_view`, and it is right to.)
+--
+--  The consequence is worth stating plainly: read in the SQL editor, these views
+--  see the whole dataset, because the editor connects as the owner. Read through
+--  the API by a signed-in user, they see only that user's own rows. That is the
+--  correct trade for ANALYSIS views, which is all these are — nothing in the app
+--  queries them.
+--
+--  The three aggregates the app DOES read across users live in supabase-moat.sql
+--  and are built the other way round: a confined SECURITY DEFINER function in a
+--  private schema, wrapped in a privilege-free public view. Use that pattern if
+--  one of these ever needs to answer for everybody at once — never plain view
+--  ownership.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- How much data is there, per species? ──────────────────────────────────────
 -- Read this FIRST. Everything below is gated on sample size, so an empty result
 -- there means "not enough data yet", not "this species has no requirements".
 -- This view is the honest picture of how far the dataset has actually got.
-create or replace view public.v_data_coverage as
+create or replace view public.v_data_coverage with (security_invoker = on) as
 select
   h.species,
   count(distinct h.plant_key)                                              as plants,
@@ -266,7 +315,7 @@ comment on view public.v_data_coverage is
 -- What conditions do THRIVING plants of this species actually live in? ──────
 -- The interquartile range, not the mean: it describes where the middle half of
 -- successful plants sat, which is what a care band should be.
-create or replace view public.v_thriving_conditions as
+create or replace view public.v_thriving_conditions with (security_invoker = on) as
 select
   h.species,
   count(distinct h.plant_key)                                       as sample_plants,
@@ -294,7 +343,7 @@ comment on view public.v_thriving_conditions is
 -- How much water, how often, for a pot this size? ───────────────────────────
 -- Grouped by pot volume because the answer is meaningless without it: the same
 -- species in a 1 L pot and a 16 L pot are different watering problems.
-create or replace view public.v_watering_norms as
+create or replace view public.v_watering_norms with (security_invoker = on) as
 select
   pp.species,
   width_bucket(pp.pot_liters, 0, 20, 10) * 2                    as pot_liters_bucket,
@@ -320,7 +369,7 @@ comment on view public.v_watering_norms is
 
 
 -- Does this species do well where I live? ───────────────────────────────────
-create or replace view public.v_survival_by_region as
+create or replace view public.v_survival_by_region with (security_invoker = on) as
 select
   h.species,
   p.climate_zone,
@@ -344,7 +393,7 @@ comment on view public.v_survival_by_region is
 -- What actually kills this species? ─────────────────────────────────────────
 -- Every plant that dies without a recorded cause is a training example lost for
 -- good, which is why the autopsy flow matters more than it looks.
-create or replace view public.v_what_kills as
+create or replace view public.v_what_kills with (security_invoker = on) as
 select
   h.species,
   coalesce(h.cause, 'unrecorded')                    as cause,
@@ -366,7 +415,7 @@ comment on view public.v_what_kills is
 -- Is the app''s own watering advice any good? ────────────────────────────────
 -- Grades Greenr, not the plant. `poured ÷ suggested` says whether people follow
 -- the advice; the saturation rate says whether following it floods the pot.
-create or replace view public.v_advice_accuracy as
+create or replace view public.v_advice_accuracy with (security_invoker = on) as
 select
   pp.species,
   count(*)                                                                  as graded_waterings,
