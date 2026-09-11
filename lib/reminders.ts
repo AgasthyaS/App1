@@ -42,25 +42,39 @@ function hmToMin(hm: string): number {
 }
 
 /** Is `date` inside the quiet-hours window (which may wrap past midnight)? */
+/**
+ * Settings are persisted, and persisted shapes outlive the code that wrote them.
+ * A `quietHours` that is missing, null, or half-filled — from an older install
+ * or a partial write — indexed straight into `[0]` and took the entire
+ * notification feed down with it, which is a hard failure for a soft feature.
+ */
+const QUIET_FALLBACK: [string, string] = ["21:00", "08:00"];
+const safeQuiet = (q: unknown): [string, string] =>
+  Array.isArray(q) && typeof q[0] === 'string' && typeof q[1] === 'string'
+    ? [q[0], q[1]]
+    : QUIET_FALLBACK;
+
 function inQuiet(date: Date, quiet: [string, string]): boolean {
+  const q = safeQuiet(quiet);
   const mins = date.getHours() * 60 + date.getMinutes();
-  const start = hmToMin(quiet[0]);
-  const end = hmToMin(quiet[1]);
+  const start = hmToMin(q[0]);
+  const end = hmToMin(q[1]);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
   return start <= end ? mins >= start && mins < end : mins >= start || mins < end;
 }
 
 /** Set a date's clock time to "H:MM", same calendar day. */
 function atTime(base: Date, hm: string): Date {
-  const [h, m] = hm.split(':').map((x) => parseInt(x, 10));
+  const [h, m] = (typeof hm === 'string' ? hm : '9:00').split(':').map((x) => parseInt(x, 10));
   const d = new Date(base);
-  d.setHours(h || 0, m || 0, 0, 0);
+  d.setHours(Number.isFinite(h) ? h : 9, Number.isFinite(m) ? m : 0, 0, 0);
   return d;
 }
 
 /** Push a fire time out of quiet hours to the moment quiet hours end. */
 function outOfQuiet(date: Date, quiet: [string, string]): Date {
   if (!inQuiet(date, quiet)) return date;
-  const end = atTime(date, quiet[1]);
+  const end = atTime(date, safeQuiet(quiet)[1]);
   // If quiet wraps midnight and we're before the end time, end is later today;
   // otherwise it's tomorrow morning.
   if (end.getTime() <= date.getTime()) end.setDate(end.getDate() + 1);

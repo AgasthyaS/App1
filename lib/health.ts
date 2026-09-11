@@ -1,4 +1,5 @@
 import { applyCalibration, type SensorCalibration } from './calibration';
+import { plantLabel } from './format';
 import type { Reading } from './devices';
 import { pct2 } from './format';
 import { isNight, USEFUL_LIGHT_MIN } from './insights';
@@ -75,7 +76,7 @@ function moistureComponent(
     estimate: false,
   };
   if (soil == null) {
-    return { ...base, earned: 0, tone: 'unknown', value: 'N/A', reason: `Waiting for a soil reading to judge against ${species}'s ${lo}–${hi}% ideal.`, recommendation: '' };
+    return { ...base, earned: 0, tone: 'unknown', value: 'N/A', reason: `Waiting for a soil reading to judge against ${plantLabel(species)}'s ${lo}–${hi}% ideal.`, recommendation: '' };
   }
 
   // Freshly watered soil reads saturated — that is the watering WORKING, not a
@@ -106,7 +107,7 @@ function moistureComponent(
     earned,
     tone,
     value: pct2(soil),
-    reason: `${species} prefers ${lo}–${hi}% soil moisture; the sensor reads ${Math.round(soil)}%.`,
+    reason: `${plantLabel(species)} prefers ${lo}–${hi}% soil moisture; the sensor reads ${Math.round(soil)}%.`,
     recommendation,
   };
 }
@@ -144,7 +145,7 @@ function lightComponent(
       earned: Math.round(WEIGHTS.light * 0.8),
       tone: 'unknown',
       value: 'Awaiting daytime',
-      reason: `It's night — a dark reading now doesn't reflect ${species}'s daylight. This settles as daytime readings accumulate into an average.`,
+      reason: `It's night — a dark reading now doesn't reflect ${plantLabel(species)}'s daylight. This settles as daytime readings accumulate into an average.`,
       recommendation: '',
     };
   }
@@ -165,8 +166,8 @@ function lightComponent(
   if (st.tone !== 'good') {
     if (daysBehind >= MIN_DAYS_FOR_MOVE) {
       recommendation = st.label.includes('dark') || st.label.includes('Low')
-        ? `Move ${species} closer to a brighter window, or add a grow light.`
-        : `Filter the light or move it back — this is stronger than ${species} wants.`;
+        ? `Move ${plantLabel(species)} closer to a brighter window, or add a grow light.`
+        : `Filter the light or move it back — this is stronger than ${plantLabel(species)} wants.`;
     } else {
       recommendation = `Still measuring this spot — light varies a lot day to day, so Greenr waits for ${MIN_DAYS_FOR_MOVE} days of readings before suggesting a move.`;
     }
@@ -179,8 +180,8 @@ function lightComponent(
     tone: st.tone,
     value: `${st.label} (${Math.round(idx)}/100${tag})`,
     reason: useAvg
-      ? `${species} wants ${wants}; its daytime light${multiDay ? ` over ${opts!.days} days` : ''} averages ${Math.round(idx)}/100.`
-      : `${species} wants ${wants}; the sensor reads a relative ${Math.round(idx)}/100.`,
+      ? `${plantLabel(species)} wants ${wants}; its daytime light${multiDay ? ` over ${opts!.days} days` : ''} averages ${Math.round(idx)}/100.`
+      : `${plantLabel(species)} wants ${wants}; the sensor reads a relative ${Math.round(idx)}/100.`,
     recommendation,
   };
 }
@@ -196,14 +197,14 @@ function temperatureComponent(species: string, tempC: number | null | undefined,
   const tone = tempStatus(tempC, tempF).tone;
   const shown = unitsF ? `${Math.round(f)}°F` : `${Math.round(tempC)}°C`;
   let recommendation = '';
-  if (f < lo) recommendation = `Move ${species} away from cold drafts and windows; it likes ${lo}–${hi}°F.`;
+  if (f < lo) recommendation = `Move ${plantLabel(species)} away from cold drafts and windows; it likes ${lo}–${hi}°F.`;
   else if (f > hi) recommendation = `Give it more air or a cooler spot; above ${hi}°F soil dries fast and leaves stress.`;
   return {
     ...base,
     earned,
     tone,
     value: shown,
-    reason: `${species} is comfortable at ${lo}–${hi}°F; it's ${shown} here.`,
+    reason: `${plantLabel(species)} is comfortable at ${lo}–${hi}°F; it's ${shown} here.`,
     recommendation,
   };
 }
@@ -223,7 +224,7 @@ function humidityComponent(species: string, rh: number | null | undefined, floor
     earned,
     tone,
     value: pct2(rh),
-    reason: `${species} wants at least ${floor}% humidity; the air here is ${Math.round(rh)}%.`,
+    reason: `${plantLabel(species)} wants at least ${floor}% humidity; the air here is ${Math.round(rh)}%.`,
     recommendation,
   };
 }
@@ -252,7 +253,10 @@ export function computeHealth(
   const r = reading ? applyCalibration(reading, calibration) : reading;
   const night = reading ? isNightHour(reading.created_at) : false;
   const components: HealthComponent[] = [
-    moistureComponent(species, r?.soil_pct, ideal.band, soilDyn),
+    // A non-finite reading is not a low reading — it is no reading. Passed
+    // through, it made the whole vitality score NaN, which then rendered as the
+    // headline number on the garden card.
+    moistureComponent(species, Number.isFinite(r?.soil_pct as number) ? r?.soil_pct : null, ideal.band, soilDyn),
     lightComponent(species, r?.light_lux, ideal.dli, { avg: lightAvg?.avg, days: lightAvg?.days, night }),
     temperatureComponent(species, r?.temp_c, ideal.temp, unitsF),
     humidityComponent(species, r?.humidity_pct, ideal.rhFloor),
@@ -270,7 +274,7 @@ export function computeHealth(
   } else if (worst) {
     summary = worst.recommendation;
   } else {
-    summary = `${species} is in great shape — every reading sits inside its ideal range.`;
+    summary = `${plantLabel(species)} is in great shape — every reading sits inside its ideal range.`;
   }
 
   return {
@@ -342,6 +346,41 @@ export function vitalityFor(
    *  there's no sensor but the user has logged real care behaviour */
   careScore?: number | null,
 ): Vitality {
+  /*
+   * SANITISE AT THE DOOR. A non-finite temperature or humidity flowed straight
+   * through every weighted component and made the WHOLE SCORE NaN — the single
+   * biggest number on the garden card, rendered as "NaN". Randomised testing
+   * found three separate routes in (temp, humidity, and the care score), which
+   * is the sign that guarding them one component at a time is the wrong shape:
+   * the next one added would have the same hole.
+   *
+   * Note `null` and `NaN` mean different things and both must be handled the
+   * same way here: a missing metric is already understood downstream, and
+   * turning a corrupt one into a missing one is exactly right — we genuinely do
+   * not know it. The `!= null` checks scattered through the components are
+   * correct once nothing non-finite can reach them.
+   */
+  const num = (v: number | null | undefined): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
+  reading = reading
+    ? {
+        ...reading,
+        soil_pct: num(reading.soil_pct),
+        temp_c: num(reading.temp_c),
+        humidity_pct: num(reading.humidity_pct),
+        light_lux: num(reading.light_lux),
+        dli: num(reading.dli),
+        battery_pct: num(reading.battery_pct),
+      }
+    : reading;
+  careScore = num(careScore);
+  if (lightAvg && typeof lightAvg === 'object') {
+    const avg = num((lightAvg as { avg?: number }).avg);
+    lightAvg = avg == null ? null : { ...(lightAvg as object), avg } as typeof lightAvg;
+  } else {
+    lightAvg = num(lightAvg as number | null | undefined) as typeof lightAvg;
+  }
+
   if (hasSensor) {
     const h = computeHealth(plant.species, plant.comfortBand, reading, [], unitsF, calibration, lightAvg);
     return {

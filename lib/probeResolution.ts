@@ -1,5 +1,6 @@
 import type { Reading } from './devices';
 import { containerThresholds } from './soilProfile';
+import { potVolume } from './watering';
 import type { Plant } from './types';
 
 /**
@@ -51,6 +52,10 @@ const MIN_SNR_TO_RESCALE = 3;
 const MIN_SNR_FOR_RAW = 8;
 /** Trim this share off each end of the observed range — one spike is not a range. */
 const OUTLIER_TRIM = 0.05;
+/** A watering of at least this share of the pot counts as a real drink (Waller). */
+const ADEQUATE_POUR_FRACTION = 0.08;
+/** …and the pot must have topped out at the same level this many separate times. */
+const MIN_TOP_OUTS = 3;
 
 export type ProbeMode = 'direct' | 'rescaled' | 'time-based';
 
@@ -83,7 +88,8 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-type ResolutionPlant = Pick<Plant, 'potHeightCm' | 'soilMix' | 'soilRetention' | 'probeDepthCm'>;
+type ResolutionPlant = Pick<Plant,
+  'potHeightCm' | 'soilMix' | 'soilRetention' | 'probeDepthCm' | 'potCm' | 'potShape' | 'waterLog'>;
 
 /**
  * How much this probe can actually tell us about this pot.
@@ -147,7 +153,75 @@ export function probeResolution(
   const overlap = band
     ? Math.min(observedHigh, band[1]) - Math.max(observedLow, band[0])
     : Infinity;
-  const bandUnreachable = band != null && rangePts > 0 && overlap < rangePts * 0.25;
+
+  /*
+   * …BUT "NEVER REACHES" HAS TO MEAN CANNOT, NOT HAS NOT.
+   *
+   * The overlap test alone fires on a pot that is simply under-watered, and that
+   * is the worst possible place to get this wrong. A Monstera given two modest
+   * drinks in two months sat between 22% and 32% against a 30% floor — barely
+   * overlapping — and was declared unreadable, which SWITCHED OFF the "this
+   * plant needs water" advice for a plant whose whole problem was needing water.
+   * The one thing it needed to be told was the one thing the diagnosis
+   * suppressed.
+   *
+   * A pot that physically cannot reach its band has been offered the water and
+   * failed to get there. So two conditions have to hold as well as the overlap:
+   *
+   *   IT HAS BEEN GIVEN A REAL DRINK — at least one watering of about a tenth of
+   *   the pot's volume, Prof. Waller's rule for an irrigation. Without that we
+   *   have no evidence about where the pot tops out, only about how much its
+   *   owner pours.
+   *
+   *   AND IT TOPPED OUT THERE REPEATEDLY — the observed high was reached on
+   *   several separate occasions, so it is a ceiling rather than the highest
+   *   point of one wet week.
+   */
+  const potMl = potVolume({
+    potSize: 'M',
+    potCm: plant.potCm ?? null,
+    potHeightCm: plant.potHeightCm ?? null,
+    potShape: plant.potShape,
+  }).liters * 1000;
+  const hadRealDrink = (plant.waterLog ?? []).some(
+    (w) => typeof w.ml === 'number' && w.ml >= potMl * ADEQUATE_POUR_FRACTION);
+
+  // Separate excursions to the top of the range, at least a day apart.
+  const stamps = history
+    .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct))
+    .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }))
+    .filter((x) => Number.isFinite(x.t))
+    .sort((a, b) => a.t - b.t);
+  let topOuts = 0;
+  let lastTop = -Infinity;
+  for (const x of stamps) {
+    if (x.v >= observedHigh - 2 && x.t - lastTop > 24 * 3600000) {
+      topOuts++;
+      lastTop = x.t;
+    }
+  }
+
+  /*
+   * …AND IT HAS TO BE THE DRY SIDE. This fired on a pot that never reached its
+   * band because it sat permanently ABOVE it — a Monstera watered 1.5 litres
+   * every four days into a pot with no drainage hole, operating between 50% and
+   * 78% against a 30–55% band. The overlap test cannot tell the two apart: a
+   * succulent that can never get wet enough and a plant that is drowning both
+   * "never reach the band".
+   *
+   * They could not be more different. The first needs the level ignored and the
+   * calendar followed; the second needs somebody told to stop watering it. And
+   * because the time-based verdict short-circuits the rating, the drowning plant
+   * was reported as "Fine — about 4 days to go" while `soilDynamics` was
+   * simultaneously saying "Still waterlogged, the water isn't draining".
+   *
+   * A pot whose ceiling is above the band's ceiling is not one this probe cannot
+   * read. It is one that is too wet, which is a diagnosis, not a limitation.
+   */
+  const bandUnreachable =
+    band != null && rangePts > 0 && overlap < rangePts * 0.25
+    && observedHigh <= band[1]
+    && hadRealDrink && topOuts >= MIN_TOP_OUTS;
 
   const mode: ProbeMode =
     bandUnreachable ? 'time-based'

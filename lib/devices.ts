@@ -159,11 +159,35 @@ function maybeRawToPct(v: number, lo: number, hi: number): number {
  * converting unconditionally is correct; any pre-raw rows age out of the reading
  * window within a day or so.
  */
+/**
+ * A metric, or null when it is not a real number.
+ *
+ * NaN and Infinity are not "unknown" — they are worse, because `x != null` is
+ * TRUE for both and that is the guard nearly every consumer in this codebase
+ * uses. So a single corrupt row propagates: it passes the null check, poisons
+ * every average it touches, and comes out the far end as user-visible text. The
+ * app has shipped "Soil is Infinity%" once already, and an audit found the same
+ * thing still reachable for NaN through `soilDynamics` and the vitality score.
+ *
+ * Patching each consumer would mean remembering, in perpetuity, at every one of
+ * a few dozen filters. Collapsing it to null HERE means every `!= null` guard
+ * already written becomes correct, and this is the choke point every fetched
+ * reading passes through.
+ */
+const finite = (v: number | null | undefined): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+
 export function normalizeReading(r: Reading): Reading {
+  const soil = finite(r.soil_pct);
+  const light = finite(r.light_lux);
   return {
     ...r,
-    soil_pct: r.soil_pct == null ? r.soil_pct : maybeRawToPct(r.soil_pct, SOIL_DRY_ADC, SOIL_WET_ADC),
-    light_lux: r.light_lux == null ? r.light_lux : rawToPct(r.light_lux, LIGHT_DARK_ADC, LIGHT_BRIGHT_ADC),
+    soil_pct: soil == null ? null : maybeRawToPct(soil, SOIL_DRY_ADC, SOIL_WET_ADC),
+    light_lux: light == null ? null : rawToPct(light, LIGHT_DARK_ADC, LIGHT_BRIGHT_ADC),
+    temp_c: finite(r.temp_c),
+    humidity_pct: finite(r.humidity_pct),
+    dli: finite(r.dli),
+    battery_pct: finite(r.battery_pct),
   };
 }
 
@@ -295,6 +319,39 @@ export const REPORT_INTERVAL_H = IDLE_WAKE_SECONDS / 3600;
  *  offline. Curve fitting must not bridge such gaps. Derived from the cadence
  *  (1.5× a reporting cycle), not a magic number. */
 export const OFFLINE_GAP_H = REPORT_INTERVAL_H * 1.5;
+
+/**
+ * How long a gap between readings can be before it means the sensor was OFFLINE
+ * rather than simply between reports — measured from the trace, not assumed.
+ *
+ * `OFFLINE_GAP_H` above is 4.5 hours, which is one reporting cycle plus slack
+ * for the three-hourly default and catastrophically wrong for anything else.
+ * A sensor set to report every SIX hours has every one of its gaps classified as
+ * an outage, so no interval is ever counted and every time-weighted average over
+ * it comes back EMPTY — not approximate, absent. That went from theoretical to
+ * live the moment the app grew a control for the reporting interval: choosing
+ * "Every 6 hours" silently emptied the daily averages, the multi-day light
+ * verdict and the whole day-and-season record, with nothing to say why.
+ *
+ * The median gap is the sensor's real cadence — robust to a missed report in a
+ * way a mean is not — and anything up to half again as long is a normal
+ * interval. The floor keeps a fast sensor bridging a brief hiccup; the ceiling
+ * stops a daily sensor bridging a genuine week-long outage.
+ *
+ * Exported so `dailyStats` and `insights` share one definition. Three modules
+ * each deciding privately what "offline" means is how they end up disagreeing.
+ */
+export function bridgeGapH(timestampsMs: number[]): number {
+  const gaps: number[] = [];
+  for (let i = 1; i < timestampsMs.length; i++) {
+    const g = (timestampsMs[i] - timestampsMs[i - 1]) / 3600000;
+    if (Number.isFinite(g) && g > 0) gaps.push(g);
+  }
+  if (!gaps.length) return OFFLINE_GAP_H;
+  const sorted = gaps.sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  return Math.max(OFFLINE_GAP_H, Math.min(36, median * 1.5));
+}
 
 /** Set how often the device wakes to read (server-controlled; no reflash). */
 export async function setWakeInterval(deviceId: string, seconds: number): Promise<void> {

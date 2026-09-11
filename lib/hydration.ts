@@ -238,7 +238,7 @@ export function buildHydrationModel(
   band: [number, number],
 ): HydrationModel | null {
   const soils = history
-    .filter((r) => r.soil_pct != null)
+    .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct))
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }))
     .sort((a, b) => a.t - b.t);
   if (soils.length < 3) return null;

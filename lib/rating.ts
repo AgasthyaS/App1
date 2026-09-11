@@ -1,4 +1,5 @@
 import type { Reading } from './devices';
+import { plantLabel } from './format';
 import { idealsFor } from './plantStatus';
 
 /**
@@ -174,31 +175,31 @@ export function rateMetrics(
       'soil', 'Soil moisture', '%', 'water',
       (r) => r.soil_pct,
       (v) => gradeRange(v, lo, hi, soilSoft),
-      `${species} wants ${lo}–${hi}% soil moisture`,
+      `${plantLabel(species)} wants ${lo}–${hi}% soil moisture`,
     ),
     build(
       'light', 'Light', '/100', 'sunny',
       (r) => r.light_lux,
       (v) => gradeRange(v, lightLo, lightHi, 30),
       wantsHigh
-        ? `${species} wants strong daytime light (55+/100)`
+        ? `${plantLabel(species)} wants strong daytime light (55+/100)`
         : wantsLow
-          ? `${species} is happy in gentle light (8–60/100)`
-          : `${species} wants bright indirect daylight (25–75/100)`,
+          ? `${plantLabel(species)} is happy in gentle light (8–60/100)`
+          : `${plantLabel(species)} wants bright indirect daylight (25–75/100)`,
       { daytimeOnly: true },
     ),
     build(
       'temperature', 'Temperature', unitsF ? '°F' : '°C', 'thermometer',
       (r) => r.temp_c,
       (v) => gradeRange((v * 9) / 5 + 32, tempLoF, tempHiF, 12),
-      `${species} is comfortable at ${tempLoF}–${tempHiF}°F`,
+      `${plantLabel(species)} is comfortable at ${tempLoF}–${tempHiF}°F`,
       { toDisplay: toDisplayTemp },
     ),
     build(
       'humidity', 'Humidity', '%', 'rainy',
       (r) => r.humidity_pct,
       (v) => gradeRange(v, ideal.rhFloor, 85, 25),
-      `${species} wants at least ${ideal.rhFloor}% humidity`,
+      `${plantLabel(species)} wants at least ${ideal.rhFloor}% humidity`,
     ),
   ];
 }

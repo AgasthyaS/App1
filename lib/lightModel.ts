@@ -83,10 +83,20 @@ export function estimateDli(index: number, photoperiodH = PHOTOPERIOD_H): DliEst
 
 /** The inverse: what light index corresponds to a target DLI (for labelling axes/goals). */
 export function dliToIndex(dli: number, photoperiodH = PHOTOPERIOD_H): number {
+  /*
+   * A negative or non-finite DLI has to clamp, not propagate.
+   *
+   * `Math.log` of a negative number is NaN, and NaN survives both `Math.min` and
+   * `Math.max` untouched — so the clamp that looks like it bounds this to 0–100
+   * returned NaN for any negative input. That is reachable: an inverted light
+   * sensor (the app has a `setLightInverted` switch precisely because they
+   * exist) or a miscalibrated one can produce one.
+   */
+  if (!Number.isFinite(dli) || dli <= 0) return 0;
   const ppfd = (dli * 1e6) / (photoperiodH * 3600);
   const lux = ppfd / LUX_TO_PPFD;
   const i = 100 * (Math.log(lux / LUX_MIN) / Math.log(LUX_MAX / LUX_MIN));
-  return Math.max(0, Math.min(100, i));
+  return Number.isFinite(i) ? Math.max(0, Math.min(100, i)) : 0;
 }
 
 /** A plain-language bracket for a DLI value, independent of any species. */

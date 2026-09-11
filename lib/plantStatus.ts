@@ -33,8 +33,27 @@ export function idealsFor(speciesCommon: string, comfortBand?: [number, number])
   const blended = measured?.soil
     ? blendBand(book, measured.soil, measured.samplePlants).band
     : book;
+  /*
+   * A STORED BAND CAN BE MALFORMED, and `?? blended` only catches null.
+   *
+   * `comfortBand` is persisted per plant and editable, so it reaches here as
+   * `[NaN, NaN]`, `[]`, or the pair the wrong way round. Any of those flowed
+   * through untouched, and randomised testing traced a NaN vitality score — the
+   * biggest number on the garden card — straight back to it. Reversed bounds are
+   * repaired rather than discarded, since the intent is obvious; anything that
+   * is not two real numbers falls back to what the species says, which is what
+   * `null` already did.
+   */
+  const usable: [number, number] | null =
+    Array.isArray(comfortBand)
+      && comfortBand.length === 2
+      && Number.isFinite(comfortBand[0])
+      && Number.isFinite(comfortBand[1])
+      ? [Math.min(comfortBand[0], comfortBand[1]), Math.max(comfortBand[0], comfortBand[1])]
+      : null;
+
   return {
-    band: comfortBand ?? blended,
+    band: usable ?? blended,
     dli: s?.dli ?? [2, 8],
     temp: s?.temp ?? [60, 82], // °F
     rhFloor: s?.rhFloor ?? 45,

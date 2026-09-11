@@ -187,7 +187,7 @@ export function notificationsFor(ctx: NotifyContext): Alert[] {
   // Sustained low light — needs history to prove it's been low, not a blip.
   const now = Date.now();
   const recentLight = history
-    .filter((r) => r.light_lux != null && now - new Date(r.created_at).getTime() < 2 * DAY)
+    .filter((r) => r.light_lux != null && Number.isFinite(r.light_lux) && now - new Date(r.created_at).getTime() < 2 * DAY)
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.light_lux as number }));
   if (recentLight.length >= 3) {
     const spanCovered = recentLight[0] && (now - Math.min(...recentLight.map((p) => p.t))) >= 1.5 * DAY;

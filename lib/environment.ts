@@ -1,4 +1,5 @@
 import { dailyStats, type DayStat, type MetricKey } from './dailyStats';
+import { plantLabel } from './format';
 import type { Reading } from './devices';
 import { lightThresholds, lightVerdict, type DayLight } from './insights';
 import { waterProfileFor } from './plants';
@@ -153,7 +154,7 @@ export function environmentVerdicts(opts: {
         headline: isBright
           ? `This spot is too bright for ${plantName}`
           : `This spot is too dark for ${plantName}`,
-        detail: `Daytime light has averaged ${verdict.avg}/100 across ${hit.days} day${hit.days === 1 ? '' : 's'}, and ${hit.daysOut} of them were outside what ${species} needs. This isn't one dull day — it's what the spot is like.`,
+        detail: `Daytime light has averaged ${verdict.avg}/100 across ${hit.days} day${hit.days === 1 ? '' : 's'}, and ${hit.daysOut} of them were outside what ${plantLabel(species)} needs. This isn't one dull day — it's what the spot is like.`,
         action: isBright
           ? 'Move it somewhere shadier, or filter the window with a sheer curtain.'
           : 'Move it closer to a bright window, or add a grow light. Most plants need to be within a metre of the glass.',
@@ -184,7 +185,7 @@ export function environmentVerdicts(opts: {
         daysOut: j.daysOut,
         avg: avgF,
         headline: cold ? `Too cold here for ${plantName}` : `Too warm here for ${plantName}`,
-        detail: `It has averaged ${show(avgF)} over ${j.days} days (${j.daysOut} of them outside range). ${species} is comfortable at ${show(loF)}–${show(hiF)}.`,
+        detail: `It has averaged ${show(avgF)} over ${j.days} days (${j.daysOut} of them outside range). ${plantLabel(species)} is comfortable at ${show(loF)}–${show(hiF)}.`,
         action: cold
           ? 'Move it off the cold windowsill and away from draughts — glass gets much colder than the room at night.'
           : 'Move it away from the radiator or hot glass, and give it more air movement.',
@@ -208,7 +209,7 @@ export function environmentVerdicts(opts: {
         daysOut: j.daysOut,
         avg,
         headline: `The air here is dry for ${plantName}`,
-        detail: `Humidity has averaged ${Math.round(avg)}% over ${j.days} days; ${species} wants at least ${floor}%. Dry air shows up as crisping leaf edges before anything else.`,
+        detail: `Humidity has averaged ${Math.round(avg)}% over ${j.days} days; ${plantLabel(species)} wants at least ${floor}%. Dry air shows up as crisping leaf edges before anything else.`,
         action: 'Group it with other plants, stand it on a pebble tray, or run a humidifier nearby — no need to move it.',
       });
     }
@@ -233,7 +234,7 @@ export function environmentVerdicts(opts: {
         daysOut: dryJ.daysOut,
         avg,
         headline: `${plantName} is being under-watered`,
-        detail: `Soil has averaged ${Math.round(avg)}% over ${dryJ.days} days — below ${species}'s ${lo}–${hi}% ideal on ${dryJ.daysOut} of them. This is a pattern, not a one-off dry day.`,
+        detail: `Soil has averaged ${Math.round(avg)}% over ${dryJ.days} days — below ${plantLabel(species)}'s ${lo}–${hi}% ideal on ${dryJ.daysOut} of them. This is a pattern, not a one-off dry day.`,
         action: 'Water more often, and pour slowly until it runs from the drainage holes so the whole root ball wets through.',
       });
     } else if (avg > hi + 8) {
@@ -246,7 +247,7 @@ export function environmentVerdicts(opts: {
         daysOut: wetJ.daysOut,
         avg,
         headline: `${plantName} is being over-watered`,
-        detail: `Soil has averaged ${Math.round(avg)}% over ${wetJ.days} days, above ${species}'s ${hi}% ceiling on ${wetJ.daysOut} of them. Roots that never dry out start to rot.`,
+        detail: `Soil has averaged ${Math.round(avg)}% over ${wetJ.days} days, above ${plantLabel(species)}'s ${hi}% ceiling on ${wetJ.daysOut} of them. Roots that never dry out start to rot.`,
         action: 'Wait until the top of the soil dries before watering again, and check the pot drains freely.',
       });
     }

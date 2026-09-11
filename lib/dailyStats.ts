@@ -1,4 +1,4 @@
-import type { Reading } from './devices';
+import { bridgeGapH, type Reading } from './devices';
 import { localDayKey } from './insights';
 
 /**
@@ -18,7 +18,6 @@ import { localDayKey } from './insights';
  */
 
 const MS_H = 3600000;
-const MAX_GAP_H = 4.5;
 
 export type MetricKey = 'soil' | 'temp' | 'humidity' | 'light';
 
@@ -58,9 +57,32 @@ export function dailyStats(history: Reading[], metric: MetricKey, maxDays = 14):
     byDay.set(day, d);
   };
 
+  /*
+   * HOW BIG A GAP COUNTS AS THE SENSOR BEING OFFLINE — and it cannot be a constant.
+   *
+   * This was a flat 4.5 hours, which is the right allowance for a sensor
+   * reporting every three: one interval plus slack. It is catastrophically wrong
+   * for any other cadence. A sensor set to report every SIX hours has every
+   * single one of its gaps rejected as an outage, so no interval is ever
+   * counted, every day weighs zero, and this function returns an EMPTY ARRAY.
+   * Not wrong numbers — no numbers.
+   *
+   * That went from theoretical to live the moment the app grew a control for the
+   * reporting interval: choosing "Every 6 hours" or "Once a day" silently
+   * emptied the daily averages, the multi-day light verdict, and the whole
+   * day-and-season record, with nothing anywhere to say why.
+   *
+   * So the allowance is measured from what this sensor actually does. The median
+   * gap is its real cadence — robust to the odd missed report, unlike a mean —
+   * and anything up to half again as long is a normal interval rather than an
+   * outage. The 4.5-hour floor is kept so a fast-reporting sensor still bridges
+   * a short hiccup.
+   */
+  const maxGapH = bridgeGapH(pts.map((p) => p.t));
+
   for (let i = 1; i < pts.length; i++) {
     const gapH = (pts[i].t - pts[i - 1].t) / MS_H;
-    if (gapH > MAX_GAP_H) continue;                 // sensor was offline — don't invent hours
+    if (gapH > maxGapH) continue;                   // sensor was offline — don't invent hours
     // Attribute the span to the day it started in; spans are short relative to a
     // day, so this stays accurate without splitting across midnight.
     add(localDayKey(pts[i - 1].t), (pts[i - 1].v + pts[i].v) / 2, gapH);
@@ -74,7 +96,10 @@ export function dailyStats(history: Reading[], metric: MetricKey, maxDays = 14):
       max: d.max,
       hours: d.weight,
     }))
-    .filter((d) => d.hours >= 1)                    // a day with minutes of data says nothing
+    // A day with only minutes of data says nothing. A daily-reporting sensor
+    // legitimately attributes a whole span to the day it started in, so this bar
+    // stays low rather than excluding that cadence altogether.
+    .filter((d) => d.hours >= 1)
     .sort((a, b) => (a.day < b.day ? -1 : 1))
     .slice(-maxDays);
 }

@@ -36,13 +36,17 @@ import { groomingTip, tipsFor } from '@/lib/tips';
 import { potVolume, pourStep, recommendedPourMl, waterPlan, wateringAdvice, wettingFor } from '@/lib/watering';
 import { pourOutcome, reviewWatering, settlingState, soilDynamics, wateredSinceLastReading, wateringDidNotRegister } from '@/lib/soilDynamics';
 import { confidentVerdicts } from '@/lib/environment';
+import { buildDayRecords } from '@/lib/climateLog';
 import { metricSummary } from '@/lib/dailyStats';
 import { PROBE, profileCorrection, perchedWaterTableCm, probeFit, profileBands, rootZoneFromReading, inferWaterTableDepth } from '@/lib/soilProfile';
 import { retentionEstimate, RETENTION_LABEL } from '@/lib/soilRetention';
 import { doseAccuracy } from '@/lib/doseAccuracy';
 import { pendingWateringQuestion } from '@/lib/unloggedWatering';
 import { setupCompleteness } from '@/lib/setupGaps';
+import { probeInsertion } from '@/lib/probeInsertion';
 import { probeResolution, relativeThreshold, relativeWetness } from '@/lib/probeResolution';
+import { PROBE_CASING_ADVICE, salinityAssessment } from '@/lib/salinity';
+import { calibrationPlan, substrateCalibration } from '@/lib/substrateCalibration';
 import { mixVerdict, recipeLine, soilRecipeFor } from '@/lib/soilRecipe';
 import { buildHydrationModel, rootBoundSignal } from '@/lib/hydration';
 import { pestRisks } from '@/lib/pestRisk';
@@ -209,7 +213,7 @@ export default function PlantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, spots, sensors, settings, profile, calibrations, lightDaily, recordLightDay, logWaterAmount, dismissSoilJump, logCare, archivePlant, setPlantPhoto, renamePlant, setPotDimensions, setLightInverted } =
+  const { plants, spots, sensors, settings, profile, calibrations, lightDaily, climateDaily, recordLightDay, recordClimateDays, logWaterAmount, dismissSoilJump, logCare, archivePlant, setPlantPhoto, renamePlant, setPotDimensions, setLightInverted } =
     useGreenr();
   const plant = plants.find((p) => p.id === id);
   const [depthInput, setDepthInput] = useState('');
@@ -289,6 +293,20 @@ export default function PlantDetail() {
     if (todayLight) recordLightDay(plant.id, todayLight);
     if (yesterdayLight) recordLightDay(plant.id, yesterdayLight);
   }, [plant?.id, todayLight, yesterdayLight, recordLightDay]);
+
+  /*
+   * Fold the reading window into daily rows and merge them into the long record.
+   *
+   * Done here because this screen already holds the calibrated history, and done
+   * on every visit because the window only reaches back thirty days: a plant not
+   * opened for a month loses that month permanently unless something writes the
+   * days down while they are still visible. The store merges and no-ops when
+   * nothing changed, so this is cheap to call.
+   */
+  React.useEffect(() => {
+    if (!plant || !calHistory.length) return;
+    recordClimateDays(plant.id, buildDayRecords(calHistory));
+  }, [plant?.id, calHistory, recordClimateDays]);
   // What the soil is DOING: draining after a drink, settled, or drying out. This
   // is what stops a freshly watered plant scoring 0/30 for moisture.
   const soilDyn = useMemo(
@@ -356,6 +374,24 @@ export default function PlantDetail() {
   );
   const unlogged = useMemo(
     () => (plant && calHistory.length ? pendingWateringQuestion(plant, calHistory) : null),
+    [plant, calHistory],
+  );
+  // What this pot is made of, measured rather than taken from its label; whether
+  // the probe is actually in it; and whether salts are drifting the readings.
+  const substrate = useMemo(
+    () => (plant && calHistory.length ? substrateCalibration(plant, calHistory) : null),
+    [plant, calHistory],
+  );
+  const calPlan = useMemo(
+    () => (plant ? calibrationPlan(plant, calHistory) : null),
+    [plant, calHistory],
+  );
+  const insertion = useMemo(
+    () => (plant && calHistory.length ? probeInsertion(plant, calHistory) : null),
+    [plant, calHistory],
+  );
+  const salt = useMemo(
+    () => (plant && calHistory.length ? salinityAssessment(plant, calHistory) : null),
     [plant, calHistory],
   );
   // How well the app's own amounts have held up against what was actually poured.
@@ -2175,6 +2211,113 @@ export default function PlantDetail() {
             </Card>
           )}
 
+          {/* ── Is the probe actually in the soil? Prof. Scott Jones's question ── */}
+          {sensored && insertion && insertion.verdict !== 'seated' && insertion.verdict !== 'unknown' && (
+            <Card
+              style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: insertion.severity >= 70 ? accent.clay : accent.sunbeam }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="git-commit-outline" size={18} color={insertion.severity >= 70 ? accent.clay : accent.sunbeam} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  HOW DEEP IS THE PROBE?
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{insertion.headline}</Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {insertion.detail}
+              </Text>
+              {insertion.action && (
+                <Text style={[type.body, { color: accent.verdant, marginTop: 8, lineHeight: 21 }]}>
+                  {insertion.action}
+                </Text>
+              )}
+            </Card>
+          )}
+
+          {/* ── What this pot is actually made of — Prof. Neil Mattson's calibration ── */}
+          {detailsOpen && sensored && substrate && (
+            <Card style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="flask-outline" size={18} color={accent.verdant} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  THIS POT&apos;S SUBSTRATE, MEASURED
+                </Text>
+                {substrate.basis !== 'insufficient' && (
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>
+                    {Math.round(substrate.confidence * 100)}% confident
+                  </Text>
+                )}
+              </View>
+              <Text style={[type.cardTitle, { color: substrate.contradictsStated ? accent.sunbeam : dark.ink, marginTop: 8 }]}>
+                {substrate.headline}
+              </Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {substrate.detail}
+              </Text>
+
+              {substrate.mlPerPoint != null && (
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted }]}>ML PER POINT</Text>
+                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>{substrate.mlPerPoint}</Text>
+                  </View>
+                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted }]}>DENSITY</Text>
+                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16, textTransform: 'capitalize' }]}>
+                      {substrate.densityClass ?? '—'}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted }]}>DRAINS OFF</Text>
+                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>
+                      {substrate.airFilledPorosity != null ? `${Math.round(substrate.airFilledPorosity * 100)}%` : '—'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* The guided procedure: one instruction, and the reason for it. */}
+              {calPlan && calPlan.stage !== 'complete' && (
+                <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: `${accent.verdant}14` }}>
+                  <Text style={[type.micro, { color: accent.verdant, letterSpacing: 0.4 }]}>
+                    NEXT STEP TO MEASURE IT
+                  </Text>
+                  <Text style={[type.body, { color: dark.ink, marginTop: 4, lineHeight: 21 }]}>
+                    {calPlan.instruction}
+                  </Text>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 16 }]}>
+                    {calPlan.why}
+                  </Text>
+                </View>
+              )}
+            </Card>
+          )}
+
+          {/* ── Salt build-up — Prof. Dana Porter's question ── */}
+          {detailsOpen && sensored && salt && salt.risk !== 'unknown' && salt.risk !== 'low' && (
+            <Card style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: salt.severity >= 45 ? accent.clay : accent.sunbeam }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="water-outline" size={18} color={salt.severity >= 45 ? accent.clay : accent.sunbeam} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  SALT BUILD-UP
+                </Text>
+                <Text style={[type.micro, { color: dark.inkMuted }]}>
+                  {salt.cycles} cycles · {salt.observedDays} d
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{salt.headline}</Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>{salt.detail}</Text>
+              {salt.action && (
+                <Text style={[type.body, { color: accent.verdant, marginTop: 8, lineHeight: 21 }]}>{salt.action}</Text>
+              )}
+              {salt.risk === 'likely' && (
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 16 }]}>
+                  {PROBE_CASING_ADVICE}
+                </Text>
+              )}
+            </Card>
+          )}
+
           {/* ── Was the amount we recommended right? Graded against real pours ── */}
           {detailsOpen && sensored && doseCheck && (
             <Card style={{ marginTop: 14 }}>
@@ -2935,6 +3078,24 @@ export default function PlantDetail() {
                 )}
               </Card>
             </>
+          )}
+
+          {/* ── The record: day-by-day and season-by-season averages ── */}
+          {detailsOpen && sensored && (
+          <Card style={{ marginTop: 10 }} onPress={() => router.push(`/climate/${plant.id}` as any)}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Text style={{ fontSize: 22 }}>📅</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Day &amp; season record</Text>
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                  {(climateDaily?.[plant.id]?.length ?? 0) > 0
+                    ? `${climateDaily[plant.id].length} days recorded — soil, temperature, humidity and light, averaged by day and by season.`
+                    : 'Soil, temperature, humidity and light, averaged by day and by season. Fills in from the first full day of readings.'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
+            </View>
+          </Card>
           )}
 
           {/* ── Growth journal: the outcome dimension no sensor can read ── */}

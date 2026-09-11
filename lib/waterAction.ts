@@ -3,7 +3,8 @@ import { buildHydrationModel } from './hydration';
 import { idealsFor } from './plantStatus';
 import { soilDynamics, wateredSinceLastReading, wateringDidNotRegister } from './soilDynamics';
 import { withMeasuredRetention } from './soilRetention';
-import { perPointFor, poursAndCeiling } from './waterBalance';
+import { insertionBlocksLearning, probeInsertion } from './probeInsertion';
+import { perPointFor, poursAndCeiling, wateringSchedule } from './waterBalance';
 import type { Plant } from './types';
 import { pourStep, type PourStep } from './watering';
 
@@ -48,6 +49,15 @@ export interface WaterAction {
   step: PourStep | null;
 }
 
+/** The same insertion test, callable before `insertion` is in scope. */
+function probeUnreliableEarly(
+  plant: Parameters<typeof probeInsertion>[0],
+  history: Parameters<typeof probeInsertion>[1],
+  now: number,
+): boolean {
+  return insertionBlocksLearning(probeInsertion(plant, history, now));
+}
+
 export function waterAction(opts: {
   plant: Plant;
   /** calibration-corrected latest reading */
@@ -63,6 +73,14 @@ export function waterAction(opts: {
   // retention feeds the leaching fraction and the depth correction, so two
   // screens using different values would quote different millilitres again.
   const plant = history.length ? withMeasuredRetention(statedPlant, history) : statedPlant;
+  /*
+   * A plant can reach here with no species — mid-add, or restored from an older
+   * store — and the name goes into the sentence the owner reads. Interpolated
+   * raw it produced "Soil is 0%, below null's 30% floor".
+   */
+  const speciesName = typeof plant.species === 'string' && plant.species.trim()
+    ? plant.species.trim()
+    : 'this plant';
   const ideal = idealsFor(plant.species, plant.comfortBand);
   const [lo, hi] = ideal.band;
   const none = (kind: WaterActionKind, line: string, detail: string, urgent = false): WaterAction => ({
@@ -98,35 +116,68 @@ export function waterAction(opts: {
    * that is by definition above the band midpoint, so `confirmed && pct <
    * bandMid` is a contradiction. It type-checked, read sensibly, and was dead.
    *
-   * `strong` is the flag that means what is needed: two or more waterings of
-   * MATERIALLY DIFFERENT VOLUMES that all ended at the same reading. A 300 ml
-   * pour and a 900 ml pour both landing at 38% is not a pot nobody has filled —
-   * it is a pot that was offered three times the water and put it in the saucer.
-   * That is a physical ceiling wherever it sits, above the band or below it, and
-   * it is the one honest way to tell a low ceiling from an un-watered one.
+   * `strong` — two or more waterings of MATERIALLY DIFFERENT VOLUMES all ending
+   * at the same reading — was the first attempt at that evidence, and it is good
+   * evidence, but it is too narrow to be the only test. Somebody who waters
+   * 300 ml every time produces no volume spread at all, so `strong` never fires,
+   * and their pot can demonstrably top out at 33% while this went on asking it
+   * to reach 42%.
    *
-   * It was already being computed on every call, and read by nothing.
+   * ──────────────── AND WHY IT ASKS THE SCHEDULE, NOT THE CEILING ─────────────
+   *
+   * Because the app already has a definition of where a pot tops out, and having
+   * a second one here is precisely how two screens end up quoting different
+   * millilitres. `wateringSchedule.capacityAt` is that definition: the observed
+   * ceiling and the modelled capacity reconciled, then capped at the species'
+   * own ceiling. An audit found this surface asking for 1 540 ml on a pot whose
+   * schedule was quoting 350 — a four-fold disagreement between two cards in the
+   * same app, neither of them obviously wrong on its own.
+   *
+   * They still answer different questions — "you are at 8%, here is a drink"
+   * against "routinely, this much this often" — and it is right that the numbers
+   * differ. What is not right is disagreeing about how full the pot can get.
    */
   const { ceiling } = history.length ? poursAndCeiling(plant, history, now) : { ceiling: null };
   const bandMid = Math.round((lo + hi) / 2);
-  const cappedByCeiling = ceiling?.strong === true && ceiling.pct < bandMid;
-  const target = cappedByCeiling ? Math.round(ceiling!.pct) : bandMid;
+  const reachable = history.length
+    ? wateringSchedule(plant, history, ideal.band, now)?.capacityAt ?? null
+    : null;
+  const cappedByCeiling = reachable != null && reachable < bandMid - 1;
+  const target = cappedByCeiling && reachable != null ? Math.round(reachable) : bandMid;
   const ceilingNote = cappedByCeiling
-    ? ` Different-sized waterings have all topped this pot out at ${Math.round(ceiling!.pct)}%, so Greenr aims there rather than at ${bandMid}% — the rest would run straight out of the base.`
+    ? ` This pot tops out around ${Math.round(reachable!)}%, so Greenr aims there rather than at ${bandMid}% — the difference would run straight out of the base.${
+        ceiling?.strong ? ' Waterings of different sizes have all ended at the same reading, which is what shows it is a real ceiling rather than a pot nobody has filled.' : ''
+      }`
     : '';
 
   // The pot's own measured millilitres-per-point, once its pours agree. Built
   // here rather than per-surface so every screen quotes the same figure.
-  const hydration = history.length
+  const hydration = history.length && !probeUnreliableEarly(plant, history, now)
     ? buildHydrationModel(history, plant.waterLog, { size: plant.potSize, material: plant.potMaterial, cm: plant.potCm }, ideal.band)
     : null;
   const calibration = hydration && hydration.fit.n >= 2
     ? { mlPerPoint: hydration.fit.k, pairs: hydration.fit.n, r2: hydration.fit.r2 }
     : null;
 
-  // What a millilitre actually does in THIS pot, reconciled from its geometry,
-  // every logged pour, and the ceiling it has been shown to top out at.
-  const balance = history.length ? perPointFor(plant, history, soil, now) : null;
+  /*
+   * WHAT A MILLILITRE DOES IN THIS POT — reconciled from its geometry, every
+   * logged pour, and the ceiling it has been shown to top out at.
+   *
+   * Unless the probe is not in the soil, in which case none of that evidence is
+   * evidence. A blade sitting in air under-reports every rise, so `ml ÷ rise`
+   * comes out enormous: in simulation a pot needing about 300 ml was measured at
+   * 123 ml per point and told to take 1 540 ml — five times what it wanted,
+   * poured into a plant that was probably already wet. The measurement is not
+   * merely noisy there, it is systematically and dangerously wrong in one
+   * direction, so it is discarded rather than blended, and the geometric prior
+   * stands alone until the probe is seated.
+   */
+  const insertion = history.length ? probeInsertion(plant, history, now) : null;
+  const probeUnreliable = insertion != null && insertionBlocksLearning(insertion);
+  const balance = history.length && !probeUnreliable ? perPointFor(plant, history, soil, now) : null;
+  const probeNote = probeUnreliable
+    ? ' This amount is from the pot\'s size alone: the probe looks like it is not pushed far enough into the soil, so the readings cannot be used to size a watering until it is.'
+    : '';
 
   const step = pourStep(plant, {
     soilPct: soil,
@@ -172,8 +223,8 @@ export function waterAction(opts: {
       predictedRisePts: step.predictedRisePts,
       line: `Water now — soil ${Math.round(soil)}% · add ~${step.ml} ml`,
       detail: step.isTrial
-        ? `Soil is ${Math.round(soil)}%, below ${plant.species}'s ${lo}% floor. ${step.note}${ceilingNote}`
-        : `Soil is ${Math.round(soil)}%, below ${plant.species}'s ${lo}% floor.${ceilingNote}`,
+        ? `Soil is ${Math.round(soil)}%, below ${speciesName}'s ${lo}% floor. ${step.note}${ceilingNote}${probeNote}`
+        : `Soil is ${Math.round(soil)}%, below ${speciesName}'s ${lo}% floor.${ceilingNote}${probeNote}`,
       urgent: true,
       step,
     };

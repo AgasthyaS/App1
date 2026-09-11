@@ -1,4 +1,5 @@
 import { estimateWaterSchedule } from './estimate';
+import { plantLabel } from './format';
 import { getSpecies, nicheFor } from './plants';
 import type { Grade } from './rating';
 import { GRADE_WORD } from './rating';
@@ -158,7 +159,7 @@ export function computeCareScore(plant: Plant, spot: Spot | undefined, nowMs = D
       key: 'rhythm',
       label: 'Watering rhythm',
       fit,
-      detail: `You water about every ${medGap.toFixed(1)} days; ${plant.species} in this pot wants roughly every ${plan.intervalDays.toFixed(1)}.`,
+      detail: `You water about every ${medGap.toFixed(1)} days; ${plantLabel(plant.species)} in this pot wants roughly every ${plan.intervalDays.toFixed(1)}.`,
       recommendation: off
         ? off === 'under-watering'
           ? `Water a little more often — you're stretching the gap ${(ratio).toFixed(1)}× longer than ideal.`
@@ -204,7 +205,7 @@ export function computeCareScore(plant: Plant, spot: Spot | undefined, nowMs = D
       key: 'environment',
       label: 'Spot suitability',
       fit,
-      detail: `${spot.name}: ~${spot.dli.toFixed(1)} DLI, ${Math.round(tempMid)}°F, ${spot.rh}% RH vs ${plant.species}'s needs.`,
+      detail: `${spot.name}: ~${spot.dli.toFixed(1)} DLI, ${Math.round(tempMid)}°F, ${spot.rh}% RH vs ${plantLabel(plant.species)}'s needs.`,
       recommendation: weakest.f < 0.7 ? `Consider a better spot — ${weakest.txt}.` : '',
     });
   }

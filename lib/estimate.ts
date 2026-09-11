@@ -93,6 +93,15 @@ function intervalFor(plant: Plant, now: Date): { days: number; learned: boolean 
 }
 
 export function estimateWaterSchedule(plant: Plant, nowMs: number = Date.now()): EstimateSchedule {
+  /*
+   * A plant can reach here without a species — mid-add, or restored from an
+   * older store — and the name goes straight into prose. Interpolated raw it
+   * read "48 days past what undefined typically needs", which is the kind of
+   * sentence that destroys trust in every other number on the screen.
+   */
+  const speciesName = typeof plant.species === 'string' && plant.species.trim()
+    ? plant.species.trim()
+    : 'this plant';
   const now = new Date(nowMs);
   const { days: intervalDays, learned } = intervalFor(plant, now);
 
@@ -111,17 +120,34 @@ export function estimateWaterSchedule(plant: Plant, nowMs: number = Date.now()):
       daysSinceWater: null,
       dueAt: null,
       whenLabel: 'Log a watering to start',
-      detail: `${plant.species} typically wants water about every ${Math.round(intervalDays)} days — log a watering and Greenr will time it from there.`,
+      detail: `${speciesName} typically wants water about every ${Math.round(intervalDays)} days — log a watering and Greenr will time it from there.`,
     };
   }
 
   const last = new Date(lastIso);
+  /*
+   * A corrupt `waterLog[].at` makes this NaN, and NaN survives `Math.max` and
+   * `Math.floor` untouched — so it reached the owner as "Last watered NaN days
+   * ago". An unparseable date is not a date: fall back to the no-history answer.
+   */
+  if (!Number.isFinite(last.getTime())) {
+    return {
+      status: 'unknown',
+      intervalDays,
+      learned,
+      lastWateredAt: null,
+      daysSinceWater: null,
+      dueAt: null,
+      whenLabel: 'Log a watering to start timing',
+      detail: `${speciesName} typically wants water about every ${Math.round(intervalDays)} days — log a watering and Greenr will time it from there.`,
+    };
+  }
   const daysSince = Math.max(0, Math.floor((nowMs - last.getTime()) / DAY));
   const dueAt = new Date(last.getTime() + intervalDays * DAY);
   const msUntil = dueAt.getTime() - nowMs;
   const basis = learned
     ? `your own rhythm (~every ${Math.round(intervalDays)} days from your logs)`
-    : `what ${plant.species} typically needs (~every ${Math.round(intervalDays)} days)`;
+    : `what ${speciesName} typically needs (~every ${Math.round(intervalDays)} days)`;
 
   if (msUntil <= 0) {
     const overdueDays = Math.floor(-msUntil / DAY);

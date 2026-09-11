@@ -1,5 +1,8 @@
 import type { Reading } from './devices';
 import { metricSummary } from './dailyStats';
+import { probeInsertion } from './probeInsertion';
+import { salinityAssessment } from './salinity';
+import { substrateCalibration } from './substrateCalibration';
 import { vitalityFor } from './health';
 import { idealsFor } from './plantStatus';
 import { retentionEstimate } from './soilRetention';
@@ -184,6 +187,19 @@ export function buildResearchPayload(opts: {
     const sched = wateringSchedule(plant, history, ideal.band, now);
     const { ceiling } = poursAndCeiling(plant, history, now);
 
+    /*
+     * Measured rather than declared. These three answer the questions the
+     * reviewing professors raised — what the substrate actually is, whether
+     * salts are drifting the readings, and whether the probe is even in the
+     * soil — and all three are properties of THIS pot that no care sheet can
+     * supply. A pot whose probe is not seated contributes a `probe_insertion`
+     * of 'likely-shallow', which is how the aggregate stays honest: those rows
+     * can be excluded downstream rather than quietly poisoning an average.
+     */
+    const sub = substrateCalibration(plant, history, now);
+    const salt = salinityAssessment(plant, history, now);
+    const ins = probeInsertion(plant, history, now);
+
     payload.measurements.push({
       plant_key: plant.id,
       measured_at: new Date(now).toISOString(),
@@ -200,6 +216,22 @@ export function buildResearchPayload(opts: {
       capacity_at_pct: sched ? Math.round(sched.capacityAt * 10) / 10 : null,
       suggested_ml: sched?.ml ?? null,
       interval_days: sched?.everyDays != null ? Math.round(sched.everyDays * 10) / 10 : null,
+      /*
+       * The measured substrate, which is the part of this row that is
+       * comparable BETWEEN pots. Everything above depends on how big the pot
+       * is; ml-per-point-per-litre does not, so it is the first figure here
+       * that two different growers' plants can be averaged over honestly.
+       */
+      ml_per_point_per_liter: sub?.mlPerPointPerLiter ?? null,
+      density_class: sub?.densityClass ?? null,
+      air_filled_porosity: sub?.airFilledPorosity != null ? Math.round(sub.airFilledPorosity * 1000) / 1000 : null,
+      sensed_water_fraction: sub?.sensedWaterFraction != null ? Math.round(sub.sensedWaterFraction * 1000) / 1000 : null,
+      behaves_like_mix: sub?.behavesLike ?? null,
+      stated_mix: plant.soilMix ?? null,
+      substrate_confidence: sub?.confidence ?? null,
+      salt_risk: salt?.risk === 'unknown' ? null : salt?.risk ?? null,
+      salt_drift_pts_month: salt?.driftPtsPerMonth != null ? Math.round(salt.driftPtsPerMonth * 100) / 100 : null,
+      probe_insertion: ins?.verdict === 'unknown' ? null : ins?.verdict ?? null,
     });
 
     // ── How it is doing, and in what conditions ──

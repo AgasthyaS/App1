@@ -122,6 +122,19 @@ export function plantsForEnvironment(
    *  book values in proportion to how much evidence stands behind them */
   empirical?: Map<string, import('./empirical').EmpiricalBands> | null,
 ): Match[] {
+  /*
+   * A NON-FINITE INPUT IS NOT A MEASUREMENT, and `!= null` does not say so. NaN
+   * passes that guard, flows through every factor, and comes out as a score —
+   * which the UI then formats, so the suggestion list read "NaN% ±2.9" for every
+   * species. Reachable from a sensor that has reported a corrupt value, or from
+   * a spot with no temperature at all.
+   */
+  const real = (v: number | null | undefined): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
+  lightIdx = real(lightIdx);
+  tempC = real(tempC);
+  humidity = real(humidity);
+
   const dliEst = lightIdx != null ? estimateDli(lightIdx) : null;
   const tempF = tempC != null ? (tempC * 9) / 5 + 32 : null;
 

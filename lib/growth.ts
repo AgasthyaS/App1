@@ -51,7 +51,21 @@ function slopePerDay(points: Series[]): number | null {
 
 /** Takes just the growth log, so callers can pass a not-yet-loaded plant safely. */
 export function growthSummary(plant: { growth?: GrowthEntry[] } | null | undefined): GrowthSummary {
-  const entries = [...(plant?.growth ?? [])].sort((a, b) => +new Date(a.at) - +new Date(b.at));
+  /*
+   * Drop entries that are not real measurements before anything is derived.
+   *
+   * A growth entry is hand-typed, so a corrupt height or an unparseable date is
+   * exactly the kind of thing that reaches this — and both were propagating: one
+   * NaN height turned the first height, the delta, the per-month rate and the
+   * days-tracked count all into NaN, which then rendered on the plant page. A
+   * malformed entry is not a measurement of zero; it is not a measurement.
+   */
+  const entries = [...(plant?.growth ?? [])]
+    .filter((e) => e != null
+      && Number.isFinite(+new Date(e.at))
+      && (e.heightCm == null || Number.isFinite(e.heightCm))
+      && (e.leaves == null || Number.isFinite(e.leaves)))
+    .sort((a, b) => +new Date(a.at) - +new Date(b.at));
   const photos = entries.filter((e) => e.photoUri);
 
   const heightSeries: Series[] = entries

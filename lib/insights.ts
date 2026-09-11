@@ -1,4 +1,5 @@
-import { OFFLINE_GAP_H, type Reading } from './devices';
+import { bridgeGapH, OFFLINE_GAP_H, type Reading } from './devices';
+import { plantLabel } from './format';
 import { idealsFor } from './plantStatus';
 
 /**
@@ -116,17 +117,20 @@ export interface DaytimeLight {
 /** Time-weighted daytime light average over the last ~26 h. Null until ≥5 h of daytime is covered. */
 export function daytimeLightAvg(history: Reading[], now = Date.now()): DaytimeLight | null {
   const pts = history
-    .filter((r) => r.light_lux != null)
+    .filter((r) => r.light_lux != null && Number.isFinite(r.light_lux))
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.light_lux as number }))
     .filter((p) => now - p.t < 26 * MS_H)
     .sort((x, y) => x.t - y.t);
   if (pts.length < 2) return null;
 
+  // Measured from this sensor rather than assumed — see `bridgeGapH`.
+  const gapLimitH = bridgeGapH(pts.map((p) => p.t));
+
   let weighted = 0;
   let weight = 0;
   for (let i = 1; i < pts.length; i++) {
     const gap = pts[i].t - pts[i - 1].t;
-    if (gap > GAP_H * MS_H) continue; // sensor was offline — don't invent hours
+    if (gap > gapLimitH * MS_H) continue; // sensor was offline — don't invent hours
     const v = (pts[i - 1].v + pts[i].v) / 2;
     const ov = litOverlap(pts[i - 1].t, pts[i].t, v);
     if (ov <= 0) continue;
@@ -187,11 +191,19 @@ export function dayLight(history: Reading[], within = Date.now()): DayLight | nu
   start.setHours(0, 0, 0, 0);
   const from = start.getTime();
   const to = from + 86400000;
+  // The whole trace decides the cadence, not just the slice inside this day —
+  // a single day can hold too few readings to measure a median from.
+  const windowGapH = bridgeGapH(
+    history
+      .map((r) => new Date(r.created_at).getTime())
+      .filter((t) => Number.isFinite(t))
+      .sort((a, b) => a - b),
+  );
   const pts = history
-    .filter((r) => r.light_lux != null)
+    .filter((r) => r.light_lux != null && Number.isFinite(r.light_lux))
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.light_lux as number }))
     // include a point just before midnight so the morning span has a left edge
-    .filter((p) => p.t >= from - GAP_H * MS_H && p.t < to)
+    .filter((p) => p.t >= from - windowGapH * MS_H && p.t < to)
     .sort((x, y) => x.t - y.t);
   if (pts.length < 2) return null;
 
@@ -199,7 +211,7 @@ export function dayLight(history: Reading[], within = Date.now()): DayLight | nu
   let weight = 0;
   let artificial = false;
   for (let i = 1; i < pts.length; i++) {
-    if (pts[i].t - pts[i - 1].t > GAP_H * MS_H) continue; // offline gap — don't bridge
+    if (pts[i].t - pts[i - 1].t > windowGapH * MS_H) continue; // offline gap — don't bridge
     const a = Math.max(pts[i - 1].t, from);
     const b = Math.min(pts[i].t, to);
     const v = (pts[i - 1].v + pts[i].v) / 2;
@@ -353,7 +365,7 @@ export function lightVerdict(
     tone,
     headline,
     avg,
-    detail: `Daytime light has averaged ${avg}/100 ${span} (nights excluded, readings weighted by the time they cover) — ${species} wants ${needs}.`,
+    detail: `Daytime light has averaged ${avg}/100 ${span} (nights excluded, readings weighted by the time they cover) — ${plantLabel(species)} wants ${needs}.`,
   };
 }
 
@@ -402,13 +414,13 @@ export function insightsFor(history: Reading[], species: string, band: [number, 
   if (day) {
     const a = Math.round(day.avg);
     if (a >= 70) out.push({ icon: 'sunny', text: `This spot gets strong daylight (daytime average ${a}/100).` });
-    else if (a < 25) out.push({ icon: 'moon', text: `Daytime here averages only ${a}/100 — ${species} may prefer brighter.` });
+    else if (a < 25) out.push({ icon: 'moon', text: `Daytime here averages only ${a}/100 — ${plantLabel(species)} may prefer brighter.` });
     else out.push({ icon: 'partly-sunny', text: `Daylight here is moderate and steady (daytime average ${a}/100).` });
   }
 
   // Watering cycle — detect refill events (soil jumps up) and measure the gap.
   const soils = history
-    .filter((r) => r.soil_pct != null)
+    .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct))
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }));
   const refills: number[] = [];
   for (let i = 1; i < soils.length; i++) {
@@ -417,22 +429,24 @@ export function insightsFor(history: Reading[], species: string, band: [number, 
   if (refills.length >= 2) {
     const gaps = refills.slice(1).map((t, i) => (t - refills[i]) / 864e5);
     const days = Math.round(avg(gaps));
-    if (days >= 1) out.push({ icon: 'water', text: `You water ${species} about every ${days} day${days > 1 ? 's' : ''} — I'll time reminders to that.` });
+    if (days >= 1) out.push({ icon: 'water', text: `You water ${plantLabel(species)} about every ${days} day${days > 1 ? 's' : ''} — I'll time reminders to that.` });
   }
 
   // Temperature vs ideal
-  const temps = history.map((r) => r.temp_c).filter((v): v is number => v != null);
+  // A non-finite temperature passes `!= null` and then poisons the average, which
+  // reached the screen as "Runs warm here (avg Infinity°F)".
+  const temps = history.map((r) => r.temp_c).filter((v): v is number => v != null && Number.isFinite(v));
   if (temps.length >= 6) {
     const aF = (avg(temps) * 9) / 5 + 32;
-    if (aF < ideal.temp[0]) out.push({ icon: 'thermometer', text: `Runs cooler than ${species} likes (avg ${Math.round(aF)}°F).` });
+    if (aF < ideal.temp[0]) out.push({ icon: 'thermometer', text: `Runs cooler than ${plantLabel(species)} likes (avg ${Math.round(aF)}°F).` });
     else if (aF > ideal.temp[1]) out.push({ icon: 'thermometer', text: `Runs warm here (avg ${Math.round(aF)}°F) — watch for faster drying.` });
   }
 
   // Humidity vs ideal
-  const hums = history.map((r) => r.humidity_pct).filter((v): v is number => v != null);
+  const hums = history.map((r) => r.humidity_pct).filter((v): v is number => v != null && Number.isFinite(v));
   if (hums.length >= 6) {
     const a = avg(hums);
-    if (a < ideal.rhFloor - 8) out.push({ icon: 'rainy', text: `Humidity averages ${Math.round(a)}% — below ${species}'s comfort; grouping plants or a humidifier helps.` });
+    if (a < ideal.rhFloor - 8) out.push({ icon: 'rainy', text: `Humidity averages ${Math.round(a)}% — below ${plantLabel(species)}'s comfort; grouping plants or a humidifier helps.` });
   }
 
   return out;

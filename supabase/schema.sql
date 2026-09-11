@@ -209,6 +209,30 @@ create table if not exists public.plant_measurements (
 comment on table public.plant_measurements is
   'Physical properties of a specific pot, measured rather than assumed: ml per display point, how long it holds water, where it tops out.';
 
+-- ── MEASURED SUBSTRATE PROPERTIES ────────────────────────────────────────────
+-- Added 2026-09-09, after Prof. Neil Mattson's point that a substrate cannot be
+-- modelled from its name: particle size, pore structure and composition decide
+-- how water is held, and two bags with the same label behave differently.
+--
+-- These are the outputs of `lib/substrateCalibration.ts`, which measures them
+-- from a known volume of water and the sensor's response rather than asking. The
+-- reason they belong in the shared database rather than only on the device is
+-- that they are the first properties here that are COMPARABLE ACROSS POTS:
+-- ml-per-point depends on how big the pot is, but ml-per-point-per-litre does
+-- not, so one grower's Monstera and another's are finally measuring the same
+-- quantity. That comparability is what makes an aggregate mean anything.
+alter table public.plant_measurements add column if not exists ml_per_point_per_liter numeric;
+alter table public.plant_measurements add column if not exists density_class          text;    -- open | light | medium | dense
+alter table public.plant_measurements add column if not exists air_filled_porosity     numeric; -- v/v, a LOWER bound at 3-hourly reporting
+alter table public.plant_measurements add column if not exists sensed_water_fraction   numeric; -- water to cross the observed range, v/v
+alter table public.plant_measurements add column if not exists behaves_like_mix        text;    -- what it acts like, whatever it is called
+alter table public.plant_measurements add column if not exists stated_mix              text;    -- what the owner called it
+alter table public.plant_measurements add column if not exists substrate_confidence    numeric; -- 0-1
+-- Prof. Dana Porter's salt question, and Prof. Scott Jones's insertion question.
+alter table public.plant_measurements add column if not exists salt_risk               text;    -- low | watch | likely
+alter table public.plant_measurements add column if not exists salt_drift_pts_month    numeric;
+alter table public.plant_measurements add column if not exists probe_insertion         text;    -- seated | suspect | likely-shallow
+
 alter table public.plant_measurements enable row level security;
 drop policy if exists "own measurements" on public.plant_measurements;
 create policy "own measurements" on public.plant_measurements
@@ -434,3 +458,89 @@ having count(*) >= 20;
 
 comment on view public.v_advice_accuracy is
   'How Greenr''s own watering amounts held up: how closely people followed them, and how often following them filled the pot.';
+
+
+-- What does a compost SOLD AS this actually behave like? ────────────────────
+-- The most commercially interesting question in this database, and one nobody
+-- without sensors in homes can answer. Growers buy a bag labelled "houseplant
+-- compost" and the app is asked to model it; this measures what came out of the
+-- bag. A named mix whose pots mostly behave like something else is not a
+-- labelling curiosity — it is the reason care advice keyed to the name fails.
+create or replace view public.v_mix_reality with (security_invoker = on) as
+select
+  m.stated_mix,
+  count(distinct m.plant_key)                                            as sample_plants,
+  count(distinct m.user_id)                                              as growers,
+  mode() within group (order by m.behaves_like_mix)                      as usually_behaves_like,
+  round(100.0 * sum(case when m.behaves_like_mix is distinct from m.stated_mix then 1 else 0 end)
+        / nullif(count(*), 0), 1)                                        as pct_behaving_otherwise,
+  percentile_cont(0.25) within group (order by m.ml_per_point_per_liter) as ml_per_point_per_liter_p25,
+  percentile_cont(0.50) within group (order by m.ml_per_point_per_liter) as ml_per_point_per_liter_median,
+  percentile_cont(0.75) within group (order by m.ml_per_point_per_liter) as ml_per_point_per_liter_p75,
+  percentile_cont(0.50) within group (order by m.dry_down_days)          as dry_down_days_median,
+  mode() within group (order by m.density_class)                         as usual_density
+from public.plant_measurements m
+join public.profiles p on p.user_id = m.user_id and p.research_opt_in
+where m.stated_mix is not null
+  and m.ml_per_point_basis in ('measured', 'blended')
+  and m.substrate_confidence >= 0.5
+group by m.stated_mix
+having count(distinct m.plant_key) >= 10;
+
+comment on view public.v_mix_reality is
+  'What a compost sold under each name actually does, measured in real pots. The share behaving unlike their label is the number that says why name-keyed care advice fails.';
+
+
+-- Which species thrive in which MEASURED substrate, not which named one? ────
+-- The scientifically stronger version of `v_thriving_conditions`: it groups by
+-- what the medium was measured to be rather than by what its owner called it,
+-- which removes the largest single source of noise in the whole dataset.
+create or replace view public.v_thriving_by_substrate with (security_invoker = on) as
+select
+  h.species,
+  m.density_class,
+  count(distinct h.plant_key)                                       as sample_plants,
+  count(distinct h.user_id)                                         as growers,
+  avg(case when h.status in ('thriving','recovered') then 1.0 else 0 end) as success_rate,
+  percentile_cont(0.50) within group (order by m.dry_down_days)     as dry_down_days_median,
+  percentile_cont(0.50) within group (order by m.interval_days)     as interval_days_median,
+  percentile_cont(0.50) within group (order by h.avg_soil)          as soil_median
+from public.plant_health_log h
+join public.profiles p on p.user_id = h.user_id and p.research_opt_in
+join lateral (
+  select m2.*
+    from public.plant_measurements m2
+   where m2.user_id = h.user_id and m2.plant_key = h.plant_key
+     and m2.measured_at <= h.at
+     and m2.density_class is not null
+   order by m2.measured_at desc
+   limit 1
+) m on true
+where coalesce(h.days_owned, 0) >= 30
+group by h.species, m.density_class
+having count(distinct h.plant_key) >= 10;
+
+comment on view public.v_thriving_by_substrate is
+  'Success rate per species against the substrate actually MEASURED in the pot, rather than the one it was labelled with. The label is the noisiest field in the dataset; this removes it.';
+
+
+-- Where sensors are being defeated ─────────────────────────────────────────
+-- Aggregates the two hardware failures the professors raised: salts drifting the
+-- readings, and probes not pushed far enough in. Both are invisible per-pot and
+-- obvious in aggregate, and both tell the hardware side what to change.
+create or replace view public.v_sensor_conditions with (security_invoker = on) as
+select
+  m.stated_mix,
+  count(distinct m.plant_key)                                                     as sample_plants,
+  count(distinct m.user_id)                                                       as growers,
+  avg(case when m.salt_risk = 'likely' then 1.0 else 0 end)                       as salt_rate,
+  percentile_cont(0.50) within group (order by m.salt_drift_pts_month)            as drift_median,
+  avg(case when m.probe_insertion = 'likely-shallow' then 1.0 else 0 end)         as shallow_probe_rate
+from public.plant_measurements m
+join public.profiles p on p.user_id = m.user_id and p.research_opt_in
+where m.salt_risk is not null or m.probe_insertion is not null
+group by m.stated_mix
+having count(distinct m.plant_key) >= 10;
+
+comment on view public.v_sensor_conditions is
+  'How often salts drift the readings and how often probes sit too shallow, per substrate. Per-pot these are invisible; in aggregate they are a hardware roadmap.';

@@ -129,7 +129,15 @@ export const ML_PER_PT_PER_LITER = mlPerPointPerLiter(30);
 const CONTAINER_CAPACITY_PCT = 70;
 
 /** Hard ceiling on any single suggested pour, whatever the stored pot size. */
-const ABSOLUTE_MAX_POUR_ML = 10000;
+/**
+ * Hard ceiling on any single suggested pour, whatever the pot.
+ *
+ * Exported because `wateringSchedule` was NOT applying it — it capped only at a
+ * quarter of the pot's volume, so a very large planter produced a routine dose
+ * of 22 litres while every other path in the app stopped at 10. One constant,
+ * applied everywhere, or the surfaces disagree at the extremes.
+ */
+export const ABSOLUTE_MAX_POUR_ML = 10000;
 
 /**
  * Where a soak-and-dry plant should be taken TO when it is watered.
@@ -289,7 +297,7 @@ export function wateringAdvice(
   speciesName: string,
 ): Watering | null {
   const soils = history
-    .filter((r) => r.soil_pct != null)
+    .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct))
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }));
   if (soils.length === 0) return null;
 

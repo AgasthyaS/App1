@@ -36,9 +36,17 @@ const cToF = (c: number) => (c * 9) / 5 + 32;
  * each zone spans 10 °F; the a/b halves split each zone at 5 °F.
  */
 export function zoneFromMinC(minC: number): { zone: number; label: string } {
+  /*
+   * A non-finite minimum has to be clamped before it reaches the label, not
+   * after. `Math.max`/`Math.min` pass NaN straight through, so the clamp that
+   * appears to bound this to 1-13 did nothing, and the template below rendered
+   * the result as the literal string "Zone NaNa". Reachable whenever the
+   * forecast the annual minimum is extrapolated from has a gap in it.
+   */
+  if (!Number.isFinite(minC)) return { zone: 1, label: 'Zone unknown' };
   const minF = cToF(minC);
   const raw = (minF + 60) / 10 + 1;
-  const zone = Math.max(1, Math.min(13, raw));
+  const zone = Number.isFinite(raw) ? Math.max(1, Math.min(13, raw)) : 1;
   const whole = Math.floor(zone);
   const half = zone - whole >= 0.5 ? 'b' : 'a';
   return { zone, label: `Zone ${whole}${half}` };

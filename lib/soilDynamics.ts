@@ -104,7 +104,7 @@ function slopePerHour(pts: { t: number; v: number }[]): number | null {
 export function lastWateringAt(plant: Pick<Plant, 'lastWateredAt'>, history: Reading[]): Date | null {
   const logged = plant.lastWateredAt ? new Date(plant.lastWateredAt) : null;
   const pts = history
-    .filter((r) => r.soil_pct != null)
+    .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct))
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }));
   let detected: Date | null = null;
   for (let i = 1; i < pts.length; i++) {
@@ -129,7 +129,7 @@ export function soilDynamics(
   const species = plant.species;
   const drainH = expectedDrainHours(plant);
   const pts = history
-    .filter((r) => r.soil_pct != null)
+    .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct))
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }))
     .sort((a, b) => a.t - b.t);
 
@@ -314,7 +314,7 @@ export function reviewWatering(
   const wateredAt = lastWateringAt(plant, history);
   if (!wateredAt) return null;
   const after = history
-    .filter((r) => r.soil_pct != null && new Date(r.created_at).getTime() >= wateredAt.getTime())
+    .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct) && new Date(r.created_at).getTime() >= wateredAt.getTime())
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }));
   if (after.length < 2) return null;
 

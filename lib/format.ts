@@ -70,3 +70,17 @@ export function pct2(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—';
   return `${v.toFixed(2)}%`;
 }
+
+/**
+ * A species name safe to drop into a sentence.
+ *
+ * `Plant.species` is typed as a string, but it is persisted, editable, and
+ * restored from stores written by older builds — so it reaches prose as `null`,
+ * `undefined` or `''` often enough that randomised testing found it twice on the
+ * first run ("Soil is 0%, below null's 30% floor"). Nearly thirty template
+ * strings across five modules interpolate it directly, so the fix belongs here
+ * rather than at each of them.
+ */
+export function plantLabel(species: unknown): string {
+  return typeof species === 'string' && species.trim() ? species.trim() : 'this plant';
+}

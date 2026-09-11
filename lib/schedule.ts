@@ -100,7 +100,7 @@ export function computeSchedule(
   const impact = opts.outdoor ? weatherWateringImpact(opts.weather ?? null, true) : null;
 
   const soils = history
-    .filter((r) => r.soil_pct != null)
+    .filter((r) => r.soil_pct != null && Number.isFinite(r.soil_pct))
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }))
     .sort((a, b) => a.t - b.t);
 
@@ -165,6 +165,24 @@ export function computeSchedule(
     };
   }
 
+  /*
+   * A rate derived from unusable timestamps is not a slow rate, it is no rate.
+   *
+   * Every reading in a batch carrying the same (or an unparseable) `created_at`
+   * gives a zero or NaN time span, so the slope comes out non-finite — and it
+   * reached the screen as "Drying about NaN%/day", together with a projected
+   * watering date of "in NaN days". Bail to the honest "no trend yet" answer
+   * that already exists a few lines above rather than projecting from it.
+   */
+  if (!Number.isFinite(slope)) {
+    return {
+      ...none,
+      status: 'unknown',
+      basis: 'These readings are not timestamped consistently enough to project a drying trend from.',
+      whenLabel: 'Learning the drying cycle',
+    };
+  }
+
   // Sensor drying rate is ground truth; hot/dry weather speeds it up (§10).
   const baseRate = -slope; // %/day drying
   const accelerated = impact?.effect === 'accelerate';
@@ -172,6 +190,14 @@ export function computeSchedule(
   const readingsUsed = recent.length >= 3 ? recent.length : soils.length;
 
   const daysToLow = (latest.v - lo) / rate;
+  if (!Number.isFinite(daysToLow) || !Number.isFinite(latest.t)) {
+    return {
+      ...none,
+      status: 'unknown',
+      basis: 'These readings are not timestamped consistently enough to project a drying trend from.',
+      whenLabel: 'Learning the drying cycle',
+    };
+  }
   const nextWaterAt = new Date(latest.t + daysToLow * DAY);
   const msUntil = nextWaterAt.getTime() - now;
   const checkAt = pinToMorning(nextWaterAt);

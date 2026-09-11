@@ -243,6 +243,10 @@ export interface PotGeometry {
  * the pot base as the soil dried: 0 = just drained, larger = drier.
  */
 export function moistureAtHeight(z: number, geo: PotGeometry, waterTableDepthCm = 0): number {
+  // Nothing upstream should hand this a non-finite height any more, but it is
+  // the innermost function in the whole soil model: one NaN here becomes NaN in
+  // every threshold, every dose and every headline built on them.
+  if (!Number.isFinite(z)) return 0;
   const mix = mixOf(geo.soilMix);
   // Height above the water surface IS the suction, in cm of water.
   return waterContentAt(Math.max(0, z) + Math.max(0, waterTableDepthCm), mix, geo.soilRetention);
@@ -277,16 +281,28 @@ export function probeReads(geo: PotGeometry, waterTableDepthCm = 0): number {
   // each other: a shallow pot is proportionally WETTER (the saturated layer is
   // a bigger share of it) but its reading is DILUTED by the exposed blade. Both
   // are modelled, so a 4 cm pan doesn't masquerade as a bone-dry deep pot.
-  const depth = Math.max(0, Math.min(geo.probeDepthCm ?? PROBE.insertCm, potH));
+  /*
+   * `probeDepthCm` is optional, user-entered, and persisted, so it arrives as
+   * NaN often enough to matter — and NaN defeats this guard rather than tripping
+   * it: `Math.min(NaN, potH)` is NaN, `NaN <= 0` is FALSE, so the early return
+   * below does not fire and every threshold downstream comes out NaN. That is
+   * how a watering schedule ended up reading "About NaN ml — still learning how
+   * often". An unstated depth is not a depth of zero; it is the standard
+   * insertion, which is what `?? PROBE.insertCm` already meant to say.
+   */
+  const stated = typeof geo.probeDepthCm === 'number' && Number.isFinite(geo.probeDepthCm)
+    ? geo.probeDepthCm
+    : PROBE.insertCm;
+  const depth = Math.max(0, Math.min(stated, potH));
   const buried = Math.min(depth, PROBE.sensingCm);
   const inAir = Math.max(0, PROBE.sensingCm - buried);
-  if (buried <= 0) return 0;
+  if (!(buried > 0)) return 0;
 
   const STEPS = 60;
   let sum = 0;
   for (let i = 0; i < STEPS; i++) {
     const depthFromTop = ((i + 0.5) / STEPS) * buried;
-    sum += moistureAtHeight(geo.potHeightCm - depthFromTop, geo, waterTableDepthCm);
+    sum += moistureAtHeight(potH - depthFromTop, geo, waterTableDepthCm);
   }
   return (sum / STEPS) * (buried / (buried + inAir));
 }

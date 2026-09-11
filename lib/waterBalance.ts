@@ -3,7 +3,7 @@ import { MAX_SINGLE_POUR_FRACTION, PROBE, containerThresholds, probeReads, water
 import { retentionEstimate, withMeasuredRetention } from './soilRetention';
 import type { Plant, PotShape } from './types';
 import { getSpecies } from './plants';
-import { potVolume, wettingFor } from './watering';
+import { ABSOLUTE_MAX_POUR_ML, potVolume, wettingFor } from './watering';
 
 /**
  * HOW MUCH WATER MOVES THE READING — measured, not assumed.
@@ -218,6 +218,10 @@ export function responsiveVolume(
 /** A peak within this many points of the highest ever seen counts as "saturated". */
 const CEILING_TOLERANCE_PTS = 4;
 /** Below this the reading is noise rather than a response. */
+/**
+ * The largest a watering's rise has to be to count — see `observedPours`, which
+ * scales DOWN from this for pots whose whole operating range is narrow.
+ */
 const MIN_MEASURABLE_RISE = 4;
 
 /** Two pours must differ by at least this factor before agreeing proves a ceiling. */
@@ -358,6 +362,33 @@ export function observedPours(
     .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.soil_pct as number }))
     .filter((p) => Number.isFinite(p.t))
     .sort((a, b) => a.t - b.t);
+
+  /*
+   * HOW BIG A RISE COUNTS AS A WATERING, and why it cannot be a fixed number.
+   *
+   * This was four display points for every pot, and four points means something
+   * completely different depending on the pot. A peat mix operates across thirty
+   * points, so four is a modest thirteen per cent of its range. A gritty cactus
+   * mix in the same pot operates across ten, so the same four points demand that
+   * ONE watering move the reading forty per cent of everything it can do.
+   *
+   * The consequence was that free-draining pots produced no measurable pours at
+   * all — in simulation a gritty pot with four perfectly good logged waterings
+   * returned zero, so it could never calibrate, and the app fell back to the
+   * published figures for the mix it was labelled with. Which is exactly the
+   * failure Prof. Mattson describes: the substrates hardest to model from a name
+   * are the ones the measurement was quietly excluding.
+   *
+   * So the bar scales with what this pot actually does, with a floor of two
+   * points so sensor noise can never clear it on its own.
+   */
+  const observed = pts.map((p) => p.v).sort((a, b) => a - b);
+  const observedRange = observed.length >= 12
+    ? observed[Math.floor(observed.length * 0.95)] - observed[Math.floor(observed.length * 0.05)]
+    : null;
+  const minRise = observedRange != null && observedRange > 0
+    ? Math.max(2, Math.min(MIN_MEASURABLE_RISE, observedRange * 0.15))
+    : MIN_MEASURABLE_RISE;
   if (pts.length < 2) return [];
 
   const seen = new Set<string>();
@@ -424,7 +455,7 @@ export function observedPours(
     const settledPct = settleWindow.length ? settleWindow[0].v : null;
     const effectivePct = settledPct ?? peakPct;
     const risePts = effectivePct - fromPct;
-    if (risePts < MIN_MEASURABLE_RISE) continue;
+    if (risePts < minRise) continue;
 
     out.push({
       at: t,
@@ -934,6 +965,10 @@ export function wateringSchedule(
   const ml = Math.round(Math.min(
     Math.max(25, Math.round(rawMl / 25) * 25),
     MAX_SINGLE_POUR_FRACTION * potVolume(plant).liters * 1000,
+    // The same absolute ceiling every other path respects. Without it a very
+    // large planter routinely asked for 22 litres, because a quarter of its
+    // volume is a quarter of a very large number.
+    ABSOLUTE_MAX_POUR_ML,
   ));
 
   const everyDays = ptsPerDay ? Math.max(0.5, (capacityAt - refillAt) / ptsPerDay) : null;

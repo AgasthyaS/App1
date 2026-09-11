@@ -91,6 +91,10 @@ const MIN_RUN_DROP_PTS = 5;
 const FLOOR_MARGIN_PTS = 2;
 /** R² of the log-linear fit below which a run is not trusted at all. */
 const MIN_RUN_FIT = 0.75;
+/** A tail declining slower than this has stopped falling rather than been cut short. */
+const FLAT_PTS_PER_DAY = 0.35;
+/** …sustained for at least this long, so a quiet night cannot pass as an asymptote. */
+const FLAT_MIN_HOURS = 36;
 /** Total observed drying time before any answer is offered. */
 const MIN_TOTAL_HOURS = 36;
 /** Share of a full watered→dry cycle a single run must cover to count as spanning it. */
@@ -294,6 +298,46 @@ function meanVpd(history: Reading[], fromMs: number, toMs: number): number | nul
   return n ? sum / n : null;
 }
 
+/**
+ * The level a dry-down actually levels off at, if it levels off at all.
+ *
+ * Takes the tail of each drying stretch and asks whether it had stopped moving:
+ * a decline of less than `FLAT_PTS_PER_DAY` sustained over `FLAT_MIN_HOURS` is a
+ * curve that has found its asymptote rather than one that was cut short. The
+ * median across such stretches is returned, so one odd cycle cannot set it.
+ */
+function flatteningFloor(pts: Pt[]): number | null {
+  const levels: number[] = [];
+  for (const run of splitRuns(pts)) {
+    if (run.length < MIN_RUN_POINTS * 2) continue;
+    const tail = run.slice(Math.floor(run.length * 0.6));
+    if (tail.length < 4) continue;
+    const hours = (tail[tail.length - 1].t - tail[0].t) / 3600000;
+    if (hours < FLAT_MIN_HOURS) continue;
+    const drop = tail[0].v - tail[tail.length - 1].v;
+    const perDay = (drop / hours) * 24;
+    if (perDay <= FLAT_PTS_PER_DAY) levels.push(tail[tail.length - 1].v);
+  }
+  if (!levels.length) return null;
+  const sorted = levels.sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * How far below the observed floor to sit when raising it.
+ *
+ * A fixed two points is a reasonable hedge on a peat pot ranging over thirty,
+ * and a severe one on a gritty pot ranging over eleven — where it left the fit
+ * chasing an asymptote two points below the real one and still reported the
+ * soil three times slower than it was. The margin scales with the range it is
+ * a margin on.
+ */
+function floorMargin(pts: Pt[]): number {
+  const vals = pts.map((p) => p.v).sort((a, b) => a - b);
+  const range = vals[Math.floor(vals.length * 0.95)] - vals[Math.floor(vals.length * 0.05)];
+  return Math.max(0.4, Math.min(FLOOR_MARGIN_PTS, range * 0.08));
+}
+
 /** Split the soil trace into stretches that were purely drying. */
 function splitRuns(pts: Pt[]): Pt[][] {
   const out: Pt[][] = [];
@@ -356,7 +400,39 @@ export function dryDownRuns(plant: RetentionPlant, history: Reading[]): Retentio
    */
   const book = waterContentAt(1e5, mix);
   const lowestSeen = Math.min(...pts.map((p) => p.v));
-  const residual = lowestSeen < book ? Math.max(0, lowestSeen - FLOOR_MARGIN_PTS) : book;
+
+  /*
+   * …AND IT CAN BE TOO LOW AS WELL AS TOO HIGH, which this only ever corrected
+   * in one direction.
+   *
+   * θr is where a medium ends up when it is dried to exhaustion. A pot on a
+   * windowsill is not: while there is still free water lower in the column,
+   * capillary rise keeps the probe zone supplied, so the reading levels off at
+   * the pot's hydrostatic equilibrium — around 18% for a 20 cm standard mix —
+   * and stays there. It is nowhere near θr and it is not going there this week.
+   *
+   * Fitting ln(reading − 8) to a curve that is actually flattening at 22 stretches
+   * the tail out enormously, because the fit is chasing an asymptote the data
+   * never approaches. In simulation a pot that genuinely dried from 52% to its
+   * refill point in eighteen days was reported as taking fifty-nine. That is a
+   * three-fold error in the number the watering interval is built on, and it
+   * biases every well-watered pot in the same direction — always slower, always
+   * "water less often".
+   *
+   * So the floor is raised when the trace SHOWS one. The distinction that makes
+   * this safe is between a reading that stopped falling and a reading that was
+   * interrupted: a genuine asymptote flattens out — the decline decelerates to
+   * nearly nothing and stays there for a stretch — whereas a pot watered while
+   * still falling steeply has no floor in evidence, only an intervention. Only
+   * the first raises the floor, and it is taken a margin BELOW the level seen,
+   * so a mistake shortens the tail rather than deleting it.
+   */
+  const flattenedAt = flatteningFloor(pts);
+  const residual =
+    lowestSeen < book ? Math.max(0, lowestSeen - FLOOR_MARGIN_PTS)
+      : flattenedAt != null && flattenedAt > book + FLOOR_MARGIN_PTS * 2
+        ? flattenedAt - floorMargin(pts)
+        : book;
 
   // Can the model tell "still draining" from "drying" in this pot at all? In a
   // deep pot of coarse mix the probe zone sits barely above the residual even

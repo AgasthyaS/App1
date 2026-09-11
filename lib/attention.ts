@@ -3,7 +3,9 @@ import type { Reading } from './devices';
 import { confidentVerdicts } from './environment';
 import type { DayLight } from './insights';
 import { idealsFor } from './plantStatus';
+import { probeInsertion } from './probeInsertion';
 import { probeResolution, timeBasedSchedule } from './probeResolution';
+import { salinityAssessment } from './salinity';
 import { setupCompleteness } from './setupGaps';
 import { mixVerdict } from './soilRecipe';
 import { sensorSilence, soilDynamics } from './soilDynamics';
@@ -103,12 +105,51 @@ export function attentionFor(opts: {
   const silence = sensorSilence(history, now);
 
   /*
+   * IS THE PROBE EVEN IN THE SOIL? Asked before every other question, including
+   * whether the pot needs water, because this is the one fault that makes the
+   * reading itself meaningless rather than merely imprecise.
+   *
+   * A blade half out of the pot averages air at a permittivity of 1 against soil
+   * at 80, so it reports close to bone-dry however wet the pot is. Judged on that
+   * reading, the app tells someone to water a plant that is already drowning —
+   * and keeps telling them, because the water never moves the number. Ranked
+   * above waterlogging for that reason: everything below this line is derived
+   * from a number this test can show to be fictional.
+   */
+  const insertion = history.length ? probeInsertion(plant, history, now) : null;
+  if (insertion?.verdict === 'likely-shallow') {
+    return {
+      level: 'urgent', priority: 97, label: 'Check the probe',
+      reason: `${insertion.headline} — every reading below is suspect until it is pushed in.`,
+      daysUntilWater: null,
+    };
+  }
+
+  /*
    * CAN THIS PROBE READ THIS POT AT ALL? Asked before anything is judged on the
    * reading, because in a gritty mix or a very deep pot the entire moisture range
    * is smaller than the sensor's own jitter — and every branch below would then
    * be reading noise with total confidence.
    */
   const probe = probeResolution(plant, history, ideal.band);
+  /*
+   * …but a plant actively being harmed outranks any limitation of the
+   * instrument. The timing fallback used to short-circuit everything below it,
+   * including the waterlogging check — so a pot whose water was demonstrably not
+   * draining got "Fine, about 4 days to go" because the probe had been judged
+   * unable to resolve its range. The reading being coarse does not make the
+   * standing water go away, and `soilDynamics` reaches its verdict from the
+   * SHAPE of the trace rather than from fine gradations in it, so it is still
+   * trustworthy exactly where this branch is not.
+   */
+  const earlyDyn = history.length ? soilDynamics(plant, history, ideal.band, now) : null;
+  if (probe?.mode === 'time-based' && earlyDyn?.drainageProblem) {
+    return {
+      level: 'urgent', priority: 100, label: 'Waterlogged',
+      reason: earlyDyn.headline,
+      daysUntilWater: null,
+    };
+  }
   if (probe?.mode === 'time-based') {
     const t = timeBasedSchedule(plant, history, probe, now);
     const due = t.dueInDays != null && t.dueInDays <= 0;
@@ -122,7 +163,7 @@ export function attentionFor(opts: {
   }
 
   const act = waterAction({ plant, reading, history, now });
-  const dyn = history.length ? soilDynamics(plant, history, ideal.band, now) : null;
+  const dyn = earlyDyn;
   const schedule = history.length ? wateringSchedule(plant, history, ideal.band, now) : null;
   const daysUntilWater = schedule?.daysUntilDue ?? null;
 
@@ -206,6 +247,23 @@ export function attentionFor(opts: {
   }
 
   /*
+   * 3b — salt building up. Weeks-to-months scale, so it never outranks a plant
+   * that needs water today, but it is ahead of the housekeeping items below
+   * because it gets worse on its own and it is quietly corrupting the readings
+   * the rest of this file depends on.
+   */
+  const salt = history.length ? salinityAssessment(plant, history, now) : null;
+  if (salt?.risk === 'likely') {
+    return dated({
+      level: 'watch', priority: 44, label: 'Salt build-up',
+      reason: salt.leachingBlocked
+        ? 'Readings are drifting the way a salting pot drifts, and this pot has no drainage to flush it through.'
+        : `Readings are drifting the way a salting pot drifts — a flush of about ${salt.leachMl} ml would clear it.`,
+      daysUntilWater,
+    });
+  }
+
+  /*
    * 4 — a watering the sensor saw that nobody recorded. Ranked here on purpose:
    * it is not a problem with the PLANT, so it must never outrank one, but it is
    * the cheapest thing on the list and the only item that makes every future
@@ -234,6 +292,16 @@ export function attentionFor(opts: {
     });
   }
 
+  // 5b — the probe MIGHT not be seated. Not certain enough to lead with, but
+  // cheap to check and it would explain a lot if true.
+  if (insertion?.verdict === 'suspect') {
+    return dated({
+      level: 'watch', priority: 37, label: 'Probe reading oddly',
+      reason: insertion.headline,
+      daysUntilWater,
+    });
+  }
+
   // 6 — wrong soil. Only actionable at a repot, so it never outranks anything live.
   const mix = mixVerdict(plant.species, plant.soilMix ?? null);
   if (mix.severity === 'major') {
@@ -246,7 +314,9 @@ export function attentionFor(opts: {
     const soon = daysUntilWater <= 1.5;
     return dated({
       level: soon ? 'soon' : 'fine',
-      priority: soon ? 60 : Math.max(5, 30 - daysUntilWater * 2),
+      // Rounded: the priority is a sort key AND a number a caller may show, and
+      // a raw 19.24335113017426 is neither more accurate nor presentable.
+      priority: soon ? 60 : Math.round(Math.max(5, 30 - daysUntilWater * 2)),
       label: soon ? 'Due soon' : 'Fine',
       reason: soon
         ? `Water in about ${daysUntilWater < 1 ? 'a day' : `${Math.round(daysUntilWater)} days`} · ~${schedule?.ml} ml`

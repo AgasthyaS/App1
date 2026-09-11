@@ -11,6 +11,7 @@ import React, {
 import { useAuth } from './auth';
 import { type CalMetricKey, type SensorCalibration, emptyCalibration, withCalibration } from './calibration';
 import { pullGarden, pushGarden } from './cloud';
+import { mergeDayRecords, sameDayRecords, type DayRecord } from './climateLog';
 import type { DayLight } from './insights';
 import { SEED_ACCURACY, SEED_PLANTS, SEED_SENSORS, SEED_SPOTS, SEED_TASKS } from './seed';
 import {
@@ -46,6 +47,18 @@ interface GreenrState {
   /** per-plant daily daytime-light snapshots — the multi-day light average
    *  accumulates here so the light verdict improves with each day of data. */
   lightDaily: Record<string, DayLight[]>;
+  /**
+   * Per-plant daily averages for soil, temperature, humidity and light, kept for
+   * about two years.
+   *
+   * Separate from `lightDaily` and from the reading snapshot because it answers
+   * a different question. The snapshot holds thirty days, which is what the
+   * watering model needs and which cannot contain two summers — so seasonal
+   * comparison was not merely absent, it was impossible. One row per plant per
+   * day is about 365 rows a year instead of the ~2 900 readings that produced
+   * them, and gives the same answer.
+   */
+  climateDaily: Record<string, DayRecord[]>;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -78,6 +91,7 @@ function emptyState(): GreenrState {
     briefingOpened: false,
     calibrations: {},
     lightDaily: {},
+    climateDaily: {},
   };
 }
 
@@ -109,6 +123,9 @@ function persistedSlice(s: GreenrState): Partial<GreenrState> {
     // Measured light history persists too — it's real per-day data that the
     // multi-day light average is built from (would otherwise reset each launch).
     lightDaily: s.lightDaily,
+    // The day-by-day record persists for the same reason: it is measured history
+    // that cannot be recomputed once the readings behind it age out.
+    climateDaily: s.climateDaily,
   };
   if (!s.demo) {
     base.plants = s.plants;
@@ -207,6 +224,8 @@ interface GreenrApi extends GreenrState {
   setLightInverted: (sensorKey: string, inverted: boolean) => void;
   /** Snapshot a plant's daytime-light for one day (multi-day light average). */
   recordLightDay: (plantId: string, day: DayLight) => void;
+  /** Fold the reading window down to daily rows and merge them into the record. */
+  recordClimateDays: (plantId: string, rows: DayRecord[]) => void;
   installFirmware: (sensorId: string) => void;
   forgetSensor: (sensorId: string) => void;
   /** testing: load the seeded demo garden */
@@ -797,6 +816,22 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  /*
+   * Merge, never replace. Days that have scrolled out of the reading window are
+   * not in `rows`, and dropping them would defeat the entire point of keeping a
+   * record. A no-op when nothing changed, so the plant screen can call it on
+   * every render without churning persisted state.
+   */
+  const recordClimateDays = useCallback((plantId: string, rows: DayRecord[]) => {
+    if (!rows.length) return;
+    setState((s) => {
+      const prev = s.climateDaily?.[plantId] ?? [];
+      const next = mergeDayRecords(prev, rows);
+      if (sameDayRecords(prev, next)) return s;
+      return { ...s, climateDaily: { ...(s.climateDaily ?? {}), [plantId]: next } };
+    });
+  }, []);
+
   const installFirmware = useCallback((sensorId: string) => {
     setState((s) => ({
       ...s,
@@ -894,12 +929,13 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       calibrateMetric,
       setLightInverted,
       recordLightDay,
+      recordClimateDays,
       installFirmware,
       forgetSensor,
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPotDimensions, repotPlant, dismissSoilJump, rememberMeasurements, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, installFirmware, forgetSensor, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPotDimensions, repotPlant, dismissSoilJump, rememberMeasurements, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, recordClimateDays, installFirmware, forgetSensor, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
