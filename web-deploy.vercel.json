@@ -11,6 +11,7 @@
     { "source": "/repot/:id", "destination": "/repot/[id]" },
     { "source": "/spot/:id", "destination": "/spot/[id]" },
     { "source": "/sensor/:id", "destination": "/sensor/[id]" },
-    { "source": "/calibrate/:id", "destination": "/calibrate/[id]" }
+    { "source": "/calibrate/:id", "destination": "/calibrate/[id]" },
+    { "source": "/climate/:id", "destination": "/climate/[id]" }
   ]
 }

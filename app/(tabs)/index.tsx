@@ -207,7 +207,6 @@ export default function ForecastTab() {
       );
     });
     return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plants, liveReadings, histories, spots, weather.weather, calibrations]);
 
   // Sensorless plants get the honest last-watered cycle instead of a model bar.

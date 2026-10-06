@@ -14,7 +14,7 @@ const DAY = 86400000;
 
 export default function GardenReport() {
   const router = useRouter();
-  const { plants: allPlants, profile } = useGreenr();
+  const { plants: allPlants } = useGreenr();
   const plants = useMemo(() => activePlants(allPlants), [allPlants]);
   const now = Date.now();
   const monthName = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });

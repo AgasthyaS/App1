@@ -3,7 +3,7 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
-import { Card, GButton, Hairline, Screen, SectionHeader } from '@/components/greenr/UI';
+import { Card, GButton, Screen } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
 import { type EnrichedDevice } from '@/lib/useDevices';
 import { useMyDevices } from '@/lib/useDevices';

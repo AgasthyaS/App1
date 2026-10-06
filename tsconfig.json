@@ -16,6 +16,10 @@
   ],
   "exclude": [
     "node_modules",
-    "Eastbay-Venture"
+    "Eastbay-Venture",
+    "EastbayVentures2",
+    "Chicken-Jocey",
+    "bob-workspace",
+    "dist"
   ]
 }

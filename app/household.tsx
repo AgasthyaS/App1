@@ -8,7 +8,6 @@ import { accent, dark, type } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 interface Member { member_email: string; role: string; member_id: string | null }
 

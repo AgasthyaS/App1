@@ -8,7 +8,6 @@ import { accent, dark, type } from '@/constants/theme';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import {
   buildDayRecords,
-  dayRecord,
   mergeDayRecords,
   sameSeasonLastYear,
   seasonComparison,

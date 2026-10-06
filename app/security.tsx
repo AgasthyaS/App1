@@ -10,7 +10,6 @@ import { confirmAction, notify, shareContent } from '@/lib/platform';
 import { useGreenr } from '@/lib/store';
 import { supabase } from '@/lib/supabase';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 type MfaState = 'unknown' | 'off' | 'on' | 'enrolling';
 

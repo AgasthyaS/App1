@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, Text } from 'react-native';
 
 /** Native QR scanner (iOS/Android) via expo-camera. */
 export function QRScanner({ onScan }: { onScan: (data: string) => void }) {

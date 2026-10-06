@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
 
 import { Card, Chip, GButton, Hairline, Screen, SectionHeader } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
