@@ -23,7 +23,7 @@ const QUESTIONS: { key: keyof Pick<Profile, 'experience' | 'plantCount' | 'where
     key: 'experience',
     title: 'How long have you been gardening?',
     sub: 'No wrong answers — this tunes how much Greenr explains.',
-    options: ['Just starting', 'Under a year', '1–5 years', '5+ years'],
+    options: ['Just starting out', 'Under a year', '1–5 years', '5+ years'],
   },
   {
     key: 'plantCount',

@@ -151,7 +151,7 @@ export function computeCareScore(plant: Plant, spot: Spot | undefined, nowMs = D
   if (gaps.length >= 1) {
     const medGap = median(gaps);
     const ratio = medGap / Math.max(plan.intervalDays, 0.5);
-    // Gaussian on ln(ratio): perfect at ratio 1; ~0.6 fit at 1.6× or 0.6×.
+    // Gaussian on ln(ratio): perfect at ratio 1; 0.69 at 1.6×, 0.65 at 0.6×.
     const fit = clamp01(Math.exp(-0.5 * (Math.log(ratio) / 0.55) ** 2));
     parts.push({ f: fit, w: 0.34 });
     const off = ratio > 1.25 ? 'under-watering' : ratio < 0.8 ? 'over-watering' : null;
@@ -237,7 +237,9 @@ export function computeCareScore(plant: Plant, spot: Spot | undefined, nowMs = D
 
   // Confidence: climbs with logged waterings and days owned; capped — a
   // behaviour model can never be as sure as a soil probe.
-  const confidence = clamp01(0.25 + 0.09 * Math.min(times.length, 6) + 0.012 * Math.min(daysOwned, 30) * 0.5);
+  // Capped at 0.75: logged behaviour can never be as certain as a soil probe,
+  // and without the cap this reached 0.97 after six waterings and a month.
+  const confidence = Math.min(0.75, clamp01(0.25 + 0.09 * Math.min(times.length, 6) + 0.006 * Math.min(daysOwned, 30)));
 
   // Per-watering history: grade each gap against the plant's ideal interval.
   const history: WateringGrade[] = [];

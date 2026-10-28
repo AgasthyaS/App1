@@ -6,7 +6,7 @@ import { Animated, Easing, Pressable, Text, View } from 'react-native';
 import { accent, dark, type } from '@/constants/theme';
 
 export interface FabAction {
-  icon: string; // emoji
+  icon: string; // Ionicons glyph name
   label: string;
   run: () => void;
 }
@@ -115,13 +115,17 @@ export function LogFab({ actions }: { actions: FabAction[] }) {
                       paddingLeft: 16,
                       paddingRight: 14,
                       borderRadius: 23,
-                      backgroundColor: pressed ? dark.hairline : dark.surface2,
+                      backgroundColor: pressed ? dark.surface2 : dark.surface1,
                       borderWidth: 1,
                       borderColor: dark.hairline,
+                      shadowColor: '#000',
+                      shadowOpacity: 0.12,
+                      shadowRadius: 8,
+                      shadowOffset: { width: 0, height: 3 },
                     })}
                   >
                     <Text style={[type.body, { color: dark.ink }]}>{a.label}</Text>
-                    <Text style={{ fontSize: 18 }}>{a.icon}</Text>
+                    <Ionicons name={a.icon as any} size={19} color={accent.verdant} />
                   </Pressable>
                 </Animated.View>
               );
@@ -155,7 +159,7 @@ export function LogFab({ actions }: { actions: FabAction[] }) {
             }}
           >
             <Animated.View style={{ transform: [{ rotate }] }}>
-              <Ionicons name="add" size={30} color="#08110B" />
+              <Ionicons name="add" size={30} color="#FFFFFF" />
             </Animated.View>
           </Pressable>
         </Animated.View>

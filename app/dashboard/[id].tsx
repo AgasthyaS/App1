@@ -183,7 +183,7 @@ export default function Dashboard() {
                     backgroundColor: selectedDay == null ? accent.verdant : dark.surface1,
                   }}
                 >
-                  <Text style={[type.caption, { color: selectedDay == null ? '#08110B' : dark.inkMuted }]}>
+                  <Text style={[type.caption, { color: selectedDay == null ? '#FFFFFF' : dark.inkMuted }]}>
                     ★ Average
                   </Text>
                 </Pressable>
@@ -203,7 +203,7 @@ export default function Dashboard() {
                         backgroundColor: active ? accent.verdant : dark.surface1,
                       }}
                     >
-                      <Text style={[type.caption, { color: active ? '#08110B' : dark.inkMuted }]}>{label}</Text>
+                      <Text style={[type.caption, { color: active ? '#FFFFFF' : dark.inkMuted }]}>{label}</Text>
                     </Pressable>
                   );
                 })}

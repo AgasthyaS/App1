@@ -104,7 +104,8 @@ export default function VitalityRing({
         <View style={{ alignItems: 'center' }}>
           <Text
             style={{
-              fontFamily: 'Inter_700Bold',
+              fontFamily: 'System',
+              fontWeight: '700',
               fontVariant: ['tabular-nums'],
               fontSize: size * 0.26,
               color: dark.ink,
@@ -120,8 +121,9 @@ export default function VitalityRing({
           {size >= 72 && (
             <Text
               style={{
-                fontFamily: 'Inter_500Medium',
-                fontSize: 11,
+                fontFamily: 'System',
+                fontWeight: '500',
+                fontSize: 12,
                 color: dark.inkMuted,
                 marginTop: 1,
               }}

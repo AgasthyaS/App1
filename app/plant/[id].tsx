@@ -10,6 +10,7 @@ import Breathing from '@/components/greenr/Breathing';
 import CameraCapture from '@/components/greenr/CameraCapture';
 import { LogFab } from '@/components/greenr/LogFab';
 import PlantAvatar from '@/components/greenr/PlantAvatar';
+import { ActionButton, Disclosure, IconTile, LearningBar, NavButton, Segmented, VitalTile } from '@/components/greenr/Native';
 import { Card, Chip, GButton, Hairline, SectionHeader } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, bandFor, dark, layout, type } from '@/constants/theme';
@@ -25,13 +26,13 @@ import { computeHealth, vitalityFor, BASELINE_DAYS, type HealthComponent } from 
 import { computeCareScore, type CareComponent } from '@/lib/careScore';
 import { growthHeadline, growthSummary } from '@/lib/growth';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
-import { estimateWaterSchedule, qualitativeNeeds } from '@/lib/estimate';
+import { estimateBreakdown, estimateWaterSchedule, overwateringCheck, qualitativeNeeds } from '@/lib/estimate';
 import { getSpecies, waterProfileFor, waterStyleNote, type Toxicity } from '@/lib/plants';
 import { computeSchedule, wateringIcs } from '@/lib/schedule';
 import { useWeather } from '@/lib/useWeather';
 import { weatherWateringImpact } from '@/lib/weather';
 import { shareContent } from '@/lib/platform';
-import { currentSeason, seasonalNotes, SEASON_EMOJI, SEASON_LABEL } from '@/lib/season';
+import { currentSeason, seasonalNotes, SEASON_LABEL } from '@/lib/season';
 import { groomingTip, tipsFor } from '@/lib/tips';
 import { potVolume, pourStep, recommendedPourMl, waterPlan, wateringAdvice, wettingFor } from '@/lib/watering';
 import { pourOutcome, reviewWatering, settlingState, soilDynamics, wateredSinceLastReading, wateringDidNotRegister } from '@/lib/soilDynamics';
@@ -74,12 +75,21 @@ function Fact({ label, value }: { label: string; value: string }) {
 }
 
 /** One measurable care line: icon · label · sentence. */
+/** Care-guide headings drew emoji; the page now uses one icon set throughout. */
+const CARE_ICON: Record<string, string> = {
+  '💧': 'water-outline', '☀️': 'sunny-outline', '🔆': 'sunny-outline', '🌑': 'moon-outline',
+  '🌡️': 'thermometer-outline', '💨': 'cloud-outline', '🪴': 'cube-outline', '🧪': 'flask-outline',
+  '🍂': 'leaf-outline', '🌱': 'leaf-outline', '😴': 'moon-outline', '🏜️': 'sunny-outline',
+  '🐛': 'bug-outline', '🦠': 'medkit-outline',
+};
+
 function CareLine({ emoji, label, text }: { emoji: string; label: string; text: string }) {
   return (
-    <View style={{ marginTop: 12 }}>
-      <Text style={[type.micro, { color: dark.inkMuted }]}>
-        {emoji} {label.toUpperCase()}
-      </Text>
+    <View style={{ marginTop: 14 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Ionicons name={(CARE_ICON[emoji] ?? 'ellipse-outline') as any} size={14} color={accent.verdant} />
+        <Text style={[type.sectionHeader, { color: dark.inkMuted, fontSize: 12 }]}>{label}</Text>
+      </View>
       <Text style={[type.body, { color: dark.ink, marginTop: 3, lineHeight: 21 }]}>{text}</Text>
     </View>
   );
@@ -213,7 +223,7 @@ export default function PlantDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, spots, sensors, settings, profile, calibrations, lightDaily, climateDaily, recordLightDay, recordClimateDays, logWaterAmount, dismissSoilJump, logCare, archivePlant, setPlantPhoto, renamePlant, setPotDimensions, setLightInverted } =
+  const { plants, spots, sensors, settings, setSettings, setPlantNotes, profile, calibrations, lightDaily, climateDaily, recordLightDay, recordClimateDays, logWaterAmount, dismissSoilJump, logCare, archivePlant, setPlantPhoto, renamePlant, setPotDimensions, setLightInverted } =
     useGreenr();
   const plant = plants.find((p) => p.id === id);
   const [depthInput, setDepthInput] = useState('');
@@ -239,7 +249,10 @@ export default function PlantDetail() {
   // the four readings. Charts, care guide, trends and analysis sit behind one
   // toggle for anyone who wants them, instead of burying the answer in a wall.
   const [breakdownOpen, setBreakdownOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  // Which folded sections are open (Trends, Care guide, Pot & soil, …) and
+  // whether the watering card is showing its working.
+  const [groups, setGroups] = useState<Record<string, boolean>>({});
+  const tog = (k: string) => setGroups((g) => ({ ...g, [k]: !g[k] }));
 
   const spot = useMemo(() => spots.find((s) => s.id === plant?.spotId), [spots, plant]);
   const sensor = useMemo(() => sensors.find((s) => s.id === plant?.sensorId), [sensors, plant]);
@@ -530,14 +543,19 @@ export default function PlantDetail() {
   // Outdoor plants fold the forecast into the watering call (rain → hold off;
   // heat → sooner). The sensor's drying trend stays the ground truth.
   const outdoor = !!spot?.outdoor;
+  // The pot's own fitted dry-down, so dates follow its curve rather than a line.
+  const decay = retentionEst ? { tauDays: retentionEst.tauObservedDays, residual: retentionEst.residual } : null;
   const schedule = liveDeviceId
-    ? computeSchedule(calHistory, ideal.band, plant.species, { weather: weather.weather, outdoor })
+    ? computeSchedule(calHistory, ideal.band, plant.species, { weather: weather.weather, outdoor, decay })
     : null;
   const wImpact = weatherWateringImpact(weather.weather, outdoor);
   const insights = liveDeviceId ? insightsFor(calHistory, plant.species, ideal.band) : [];
   // Sensorless: the honest watering cycle (last watered + species cadence + logs)
   // and qualitative needs in words — no invented measurements.
   const estSchedule = !sensored ? estimateWaterSchedule(plant) : null;
+  // WHY THIS DATE, and whether the log says it is being watered far too often.
+  const estWhy = !sensored ? estimateBreakdown(plant) : null;
+  const overWatering = !sensored ? overwateringCheck(plant) : null;
   const qualNeeds = !sensored ? qualitativeNeeds(plant.species) : [];
   // Sensored: judge whether this spot's light suits it — from the MULTI-DAY
   // average once we have one (more days = more accurate), falling back to the
@@ -567,7 +585,7 @@ export default function PlantDetail() {
   // The efficient pour for this plant's ideal interval, learned from its own
   // moisture curve — the volume that lasts the target gap without overwatering.
   const efficientPour = hydration
-    ? hydration.mlForDays(plan.intervalDays, calReading?.soil_pct ?? ideal.band[0], ideal.band)
+    ? hydration.mlForDays(plan.intervalDays, calReading?.soil_pct ?? ideal.band[0], ideal.band, decay)
     : null;
   /**
    * THE amount to pour — one number, used everywhere.
@@ -675,7 +693,7 @@ export default function PlantDetail() {
       `${potVol.liters.toFixed(1)} L of mix (${potVol.basis})`,
       ...wet.notes,
     ];
-    if (corr?.note) out.push(corr.note);
+    if (corr?.probeBlind && corr.note) out.push(corr.note);
     return out;
   })();
   /**
@@ -898,7 +916,7 @@ export default function PlantDetail() {
           alignItems: 'center',
         }}
       >
-        <Text style={[type.caption, { color: '#04140b', fontWeight: '700' }]}>
+        <Text style={[type.caption, { color: '#FFFFFF', fontWeight: '700' }]}>
           {potSizeEditing && !potVol.heightAssumed ? 'Save new pot size' : 'Save pot size'}
         </Text>
       </Pressable>
@@ -1025,7 +1043,7 @@ export default function PlantDetail() {
     logWaterAmount(plant.id, ml, { predictedRisePts: predicted, suggestedMl: pourMl, source });
     setWaterOpen(false);
     setCustomMl('');
-    setWaterLoggedMsg(`Logged ${ml} ml 💧`);
+    setWaterLoggedMsg(`Logged ${ml} ml`);
     setTimeout(() => setWaterLoggedMsg((m) => (m ? null : m)), 1800);
   };
 
@@ -1067,38 +1085,22 @@ export default function PlantDetail() {
   return (
     <View style={{ flex: 1, backgroundColor: dark.bg }}>
       <ScrollView contentContainerStyle={{ paddingBottom: 116 }} showsVerticalScrollIndicator={false}>
-        {/* ── Hero ── */}
-        <View style={{ borderBottomLeftRadius: 32, borderBottomRightRadius: 32, overflow: 'hidden' }}>
-          <LinearGradient colors={[dark.heroTop, dark.heroBottom]} style={{ paddingTop: insets.top + 8, paddingHorizontal: layout.margin, paddingBottom: 26 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Pressable onPress={() => router.back()} style={{ minWidth: 44, minHeight: 44, justifyContent: 'center' }}>
-                <Ionicons name="chevron-back" size={24} color={dark.ink} />
-              </Pressable>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                {sensored && (
-                  <Pressable
-                    onPress={() => router.push(`/dashboard/${plant.id}` as any)}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 6,
-                      minHeight: 36,
-                      paddingHorizontal: 12,
-                      borderRadius: 18,
-                      backgroundColor: `${accent.verdant}22`,
-                      borderWidth: 1,
-                      borderColor: `${accent.verdant}55`,
-                    }}
-                  >
-                    <Ionicons name="stats-chart" size={14} color={accent.verdant} />
-                    <Text style={[type.caption, { color: accent.verdant }]}>Graphs</Text>
-                  </Pressable>
-                )}
-                <Pressable onPress={() => setMenuOpen(!menuOpen)} style={{ minWidth: 44, minHeight: 44, alignItems: 'flex-end', justifyContent: 'center' }}>
-                  <Ionicons name="ellipsis-horizontal" size={22} color={dark.ink} />
-                </Pressable>
-              </View>
-            </View>
+        {/* ── Hero: who it is, how it is, and the four things you do with it ── */}
+        <LinearGradient
+          colors={[dark.heroTop, dark.heroBottom]}
+          style={{ paddingTop: insets.top + 4, paddingHorizontal: layout.margin, paddingBottom: 6 }}
+        >
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Pressable
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
+              hitSlop={8}
+              style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}
+            >
+              <Ionicons name="chevron-back" size={24} color={accent.verdant} />
+              <Text style={[type.body, { color: accent.verdant }]}>Back</Text>
+            </Pressable>
+            <NavButton icon="ellipsis-horizontal" label="More" onPress={() => setMenuOpen(!menuOpen)} />
+          </View>
 
             {menuOpen && (
               <Card elevated style={{ position: 'absolute', right: 16, top: insets.top + 52, zIndex: 10, width: 200, gap: 4 }}>
@@ -1150,92 +1152,210 @@ export default function PlantDetail() {
               </Card>
             )}
 
-            <View style={{ alignItems: 'center', marginTop: 6 }}>
-              <Breathing enabled={!awaiting && !pending && effectiveScore >= 85}>
-                {plant.photoUri ? (
-                  <VitalityRing
-                    score={awaiting || pending ? 0 : displayScore}
-                    size={132}
-                    estimate={showEstimate}
-                    estimateBand={showEstimate ? plant.estimateBand : 0}
-                    showLabel={false}
-                    trackColor={dark.hairline}
-                  >
-                    <PlantAvatar photoUri={plant.photoUri} emoji={plant.emoji} size={96} />
-                  </VitalityRing>
-                ) : (
-                  <VitalityRing
-                    score={awaiting || pending ? 0 : displayScore}
-                    size={132}
-                    estimate={showEstimate}
-                    estimateBand={showEstimate ? plant.estimateBand : 0}
-                    subLabel={
-                      awaiting
-                        ? 'Awaiting reading'
-                        : pending
-                          ? 'Building baseline'
-                          : showEstimate
-                            ? `${band.word} · estimate`
-                            : band.word
-                    }
-                    showLabel={!awaiting && !pending}
-                    trackColor={dark.hairline}
-                  />
-                )}
-              </Breathing>
-              {awaiting ? (
-                <Text style={[type.caption, { color: dark.inkMuted, marginTop: 10 }]}>Awaiting first reading</Text>
-              ) : pending ? (
-                <Text style={[type.caption, { color: dark.inkMuted, marginTop: 10 }]}>
-                  N/A · Building baseline
-                </Text>
-              ) : plant.photoUri ? (
-                <Text style={[type.num as any, { fontSize: 15, color: band.color, marginTop: 10 }]}>
-                  {displayScore}
-                  {showEstimate ? ` ±${plant.estimateBand}` : ''} · {band.word}
-                </Text>
-              ) : null}
-              {pending && (
-                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, textAlign: 'center' }]}>
-                  Log a couple of waterings to start a care rating now, or reach day {BASELINE_DAYS} (day{' '}
-                  {vit?.baselineDay ?? 1} now). A sensor scores it instantly.
-                </Text>
-              )}
-              <Text
-                style={[type.screenTitle, { color: dark.ink, marginTop: 14, paddingHorizontal: 16, textAlign: 'center' }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.6}
+          <View style={{ alignItems: 'center', marginTop: 2 }}>
+            <Breathing enabled={!awaiting && !pending && effectiveScore >= 85}>
+              <VitalityRing
+                score={awaiting || pending ? 0 : displayScore}
+                size={136}
+                estimate={showEstimate}
+                estimateBand={showEstimate ? plant.estimateBand : 0}
+                showLabel={false}
+                trackColor={dark.hairline}
               >
-                {plant.name}
+                <PlantAvatar photoUri={plant.photoUri} emoji={plant.emoji} size={108} framed />
+              </VitalityRing>
+            </Breathing>
+            <Text
+              style={[type.screenTitle, { color: dark.ink, marginTop: 14, paddingHorizontal: 16, textAlign: 'center' }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+            >
+              {plant.name}
+            </Text>
+            <Text style={[type.body, { color: dark.inkMuted, marginTop: 2, paddingHorizontal: 16 }]} numberOfLines={1}>
+              {plant.latin}
+              {spot ? ` · ${spot.name}` : ''}
+            </Text>
+
+            {/* how it is, in one pill */}
+            {(() => {
+              const tint = awaiting || pending ? dark.inkMuted : band.color;
+              const text = awaiting
+                ? 'Waiting for the first reading'
+                : pending
+                  ? `Learning · score by day ${BASELINE_DAYS}`
+                  : `${displayScore} · ${band.word}${showEstimate ? ' · estimate' : ''}`;
+              return (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 7,
+                    marginTop: 12,
+                    paddingHorizontal: 12,
+                    paddingVertical: 6,
+                    borderRadius: 999,
+                    backgroundColor: `${tint}22`,
+                  }}
+                >
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: tint }} />
+                  <Text style={[type.caption, { color: dark.ink, fontWeight: '600' }]}>{text}</Text>
+                </View>
+              );
+            })()}
+            {pending && (
+              <LearningBar
+                day={vit?.baselineDay ?? 1}
+                of={BASELINE_DAYS}
+                label="first score on day 10, or after 2 logged waterings"
+                style={{ marginTop: 12, width: 280 }}
+              />
+            )}
+
+            {/* where the numbers come from */}
+            <Pressable
+              onPress={() =>
+                sensored
+                  ? router.push('/devices' as any)
+                  : sensor
+                    ? router.push(`/sensor/${sensor.id}`)
+                    : router.push('/pair-device' as any)
+              }
+              hitSlop={6}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, minHeight: 28 }}
+            >
+              <Ionicons name={sensored || sensor ? 'hardware-chip-outline' : 'sparkles-outline'} size={14} color={dark.inkMuted} />
+              <Text style={[type.caption, { color: dark.inkMuted }]}>
+                {sensored
+                  ? measured
+                    ? `Measured by sensor${liveReading ? ` · ${new Date(liveReading.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}`
+                    : 'Sensor connected · waiting for a reading'
+                  : sensor
+                    ? `${sensor.name} · soil ${sensor.latest.soilPct}%`
+                    : 'Estimated · tap to add a sensor'}
               </Text>
-              <Text style={[type.caption, { color: dark.inkMuted, marginTop: 3, paddingHorizontal: 16 }]} numberOfLines={1}>
-                {plant.latin} · {spot?.name ?? '—'}
-              </Text>
-              {sensored ? (
-                <Pressable onPress={() => router.push('/devices' as any)} style={{ marginTop: 10, flexDirection: 'row', gap: 6 }}>
-                  <Chip label={measured ? 'Sensor connected · real data' : 'Sensor connected · awaiting reading'} color={accent.sage} />
-                  {batteryPct != null && batteryPct >= 0 && (
-                    <Chip
-                      label={`🔋 ${Math.round(batteryPct)}%`}
-                      color={batteryPct <= 20 ? accent.clay : batteryPct <= 40 ? accent.sunbeamText : accent.sage}
-                    />
-                  )}
-                </Pressable>
-              ) : sensor ? (
-                <Pressable onPress={() => router.push(`/sensor/${sensor.id}`)} style={{ marginTop: 10 }}>
-                  <Chip label={`${sensor.name} · soil ${sensor.latest.soilPct}%`} color={accent.verdant} />
-                </Pressable>
-              ) : (
-                <Pressable onPress={() => router.push('/pair-device' as any)} style={{ marginTop: 10 }}>
-                  <Chip label="Estimated — a sensor makes it exact" color={accent.sunbeamText} />
-                </Pressable>
+              {sensored && batteryPct != null && batteryPct >= 0 && (
+                <>
+                  <Ionicons
+                    name={batteryPct <= 20 ? 'battery-dead-outline' : batteryPct <= 60 ? 'battery-half-outline' : 'battery-full-outline'}
+                    size={15}
+                    color={batteryPct <= 20 ? accent.clay : dark.inkMuted}
+                  />
+                  <Text style={[type.caption, { color: batteryPct <= 20 ? accent.clay : dark.inkMuted }]}>
+                    {Math.round(batteryPct)}%
+                  </Text>
+                </>
               )}
-            </View>
-          </LinearGradient>
-        </View>
+            </Pressable>
+          </View>
+
+          {/* the four things you actually do with a plant */}
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+            <ActionButton icon="water" label="Water" prominent onPress={() => setWaterOpen(true)} />
+            <ActionButton icon="camera" label="Photo" onPress={() => setShowCamera(true)} />
+            <ActionButton icon="medkit" label="Check-up" onPress={openDiagnose} />
+            {sensored ? (
+              <ActionButton icon="stats-chart" label="Graphs" onPress={() => router.push(`/dashboard/${plant.id}` as any)} />
+            ) : (
+              <ActionButton
+                icon="swap-horizontal"
+                label="Move"
+                onPress={() => router.push({ pathname: '/move/[id]', params: { id: plant.id } })}
+              />
+            )}
+          </View>
+        </LinearGradient>
+
 
         <View style={{ paddingHorizontal: layout.margin }}>
+          {/* ══════════ OVER-WATERING — the log says it is being watered far too often ══════════ */}
+          {overWatering && (
+            <Card style={{ marginTop: 18, borderWidth: 1.5, borderColor: accent.sunbeam }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="rainy" size={18} color={accent.sunbeam} />
+                <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]}>Watering too often</Text>
+              </View>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 6 }]}>{overWatering.text}</Text>
+            </Card>
+          )}
+
+          {/* ══════════ QUICK CARE SUMMARY ══════════ */}
+          {(
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 18 }}>
+              {[
+                {
+                  icon: 'sunny',
+                  label: 'Light',
+                  value: careProfile?.light.label ?? (ideal.dli[1] >= 10 ? 'Direct sun' : ideal.dli[1] <= 4 ? 'Low to medium' : 'Bright indirect'),
+                },
+                {
+                  icon: 'water',
+                  label: 'Water',
+                  value: estWhy
+                    ? `About every ${Math.round(estWhy.intervalDays)} days`
+                    : `About every ${Math.round(plan.intervalDays)} days`,
+                },
+                careProfile
+                  ? {
+                      icon: 'bug',
+                      label: 'Watch for',
+                      value: (careProfile.pests || careProfile.diseases || 'Nothing common')
+                        .split(/[,;.]/)
+                        .map((x) => x.trim())
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .join(', '),
+                    }
+                  : null,
+              ].filter((t): t is { icon: string; label: string; value: string } => t != null).map((t) => (
+                <View
+                  key={t.label}
+                  style={{
+                    flexBasis: '30%',
+                    flexGrow: 1,
+                    backgroundColor: dark.surface1,
+                    borderRadius: 14,
+                    borderWidth: 1,
+                    borderColor: dark.cardBorder,
+                    padding: 12,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                    <Ionicons name={t.icon as any} size={13} color={dark.inkMuted} />
+                    <Text style={[type.sectionHeader, { color: dark.inkMuted, fontSize: 11 }]}>{t.label}</Text>
+                  </View>
+                  <Text style={[type.caption, { color: dark.ink, marginTop: 6, fontWeight: '600' }]} numberOfLines={3}>
+                    {t.value}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* ══════════ WHILE GREENR LEARNS — optional, in-app only ══════════ */}
+          {pending && !settings.learningTipsHidden && (
+            <Card style={{ marginTop: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="school" size={17} color={accent.verdant} />
+                <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]}>While Greenr learns</Text>
+                <Pressable onPress={() => setSettings({ learningTipsHidden: true })} hitSlop={8}>
+                  <Text style={[type.caption, { color: accent.verdant }]}>Hide tips</Text>
+                </Pressable>
+              </View>
+              {[
+                { icon: 'hand-left-outline', text: 'Push a finger into the soil up to the second knuckle before watering. Dry there means it is ready.' },
+                { icon: 'leaf-outline', text: 'Note the leaf colour now. Yellowing lower leaves usually mean too much water; crisp brown edges, too little.' },
+                { icon: 'camera-outline', text: 'Take a photo today. Comparing it in a few weeks shows growth you would not notice day to day.' },
+              ].map((t) => (
+                <View key={t.text} style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                  <Ionicons name={t.icon as any} size={17} color={dark.inkMuted} style={{ marginTop: 2 }} />
+                  <Text style={[type.body, { color: dark.ink, flex: 1 }]}>{t.text}</Text>
+                </View>
+              ))}
+            </Card>
+          )}
+
           {/* ══════════ WHAT'S MISSING ══════════
               Shown high because it is the cheapest accuracy on the page and the
               only thing here the app cannot work out for itself. Only when a
@@ -1317,7 +1437,7 @@ export default function PlantDetail() {
                           predictedRisePts: unlogged.risePts,
                         });
                         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-                        setWaterLoggedMsg(`Logged ${ml} ml 💧`);
+                        setWaterLoggedMsg(`Logged ${ml} ml`);
                         setTimeout(() => setWaterLoggedMsg((m) => (m ? null : m)), 1800);
                       }}
                       style={{
@@ -1368,7 +1488,7 @@ export default function PlantDetail() {
                     });
                     setJumpMl('');
                     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-                    setWaterLoggedMsg(`Logged ${Math.min(ml, 5000)} ml 💧`);
+                    setWaterLoggedMsg(`Logged ${Math.min(ml, 5000)} ml`);
                     setTimeout(() => setWaterLoggedMsg((m) => (m ? null : m)), 1800);
                   }}
                   style={{
@@ -1377,7 +1497,7 @@ export default function PlantDetail() {
                     backgroundColor: jumpMl ? accent.verdant : dark.surface2,
                   }}
                 >
-                  <Text style={[type.cardTitle, { color: jumpMl ? '#08110B' : dark.inkMuted, fontSize: 14 }]}>Log</Text>
+                  <Text style={[type.cardTitle, { color: jumpMl ? '#FFFFFF' : dark.inkMuted, fontSize: 14 }]}>Log</Text>
                 </Pressable>
               </View>
 
@@ -1446,48 +1566,41 @@ export default function PlantDetail() {
           )}
 
           {/* ── Sensor readings & health — every number with its meaning + action ── */}
+          {/* ── Right now: the four readings as tiles. Tapping one opens the graphs. ── */}
           {liveDeviceId && (
             <>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 20, marginBottom: 8 }}>
-                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: accent.sage }} />
-                <Text style={[type.micro, { color: accent.sage, letterSpacing: 0.5 }]}>
-                  SENSOR READINGS{liveReading ? ` · ${new Date(liveReading.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}
-                </Text>
-              </View>
-              <Card>
+              <SectionHeader>Right now</SectionHeader>
+              {health?.measured && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                  {health.components.map((c) => (
+                    <VitalTile
+                      key={c.key}
+                      icon={
+                        c.key === 'moisture'
+                          ? 'water'
+                          : c.key === 'light'
+                            ? 'sunny'
+                            : c.key === 'temperature'
+                              ? 'thermometer'
+                              : 'cloud'
+                      }
+                      label={c.key === 'moisture' ? 'Soil' : c.label}
+                      value={c.value}
+                      status={c.tone === 'good' ? 'Just right' : c.tone === 'warn' ? 'A little off' : c.tone === 'bad' ? 'Needs attention' : 'Not sure yet'}
+                      tone={healthTone(c.tone)}
+                      onPress={() => router.push(`/dashboard/${plant.id}` as any)}
+                    />
+                  ))}
+                </View>
+              )}
+              <Card style={{ marginTop: 10 }}>
                 {health?.measured ? (
                   <>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-                      <VitalityRing score={health.total} size={58} showLabel={false} trackColor={dark.hairline} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={[type.ritualTitle, { color: bandFor(health.total).color, fontSize: 26 }]}>
-                          {health.total}%
-                        </Text>
-                        <Text style={[type.caption, { color: dark.inkMuted, marginTop: 1, lineHeight: 17 }]}>
-                          {health.word} · {health.summary}
-                        </Text>
-                      </View>
-                    </View>
-                    {/* At a glance: the four numbers, no scoring maths. The full
-                        breakdown is one tap away for anyone who wants it. */}
-                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
-                      {health.components.map((c) => (
-                        <View
-                          key={c.key}
-                          style={{ flex: 1, alignItems: 'center', backgroundColor: dark.surface2, borderRadius: 10, paddingVertical: 9 }}
-                        >
-                          <Text style={{ fontSize: 15 }}>
-                            {c.key === 'moisture' ? '💧' : c.key === 'light' ? '☀️' : c.key === 'temperature' ? '🌡️' : '💨'}
-                          </Text>
-                          <Text
-                            style={[type.numBold as any, { color: healthTone(c.tone), fontSize: 14, marginTop: 3 }]}
-                            numberOfLines={1}
-                          >
-                            {c.value.split(' ')[0]}
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
+                    <Text style={[type.body, { color: dark.ink, lineHeight: 22 }]}>
+                      <Text style={[type.numBold as any, { color: bandFor(health.total).color }]}>{health.total}%</Text>{' '}
+                      <Text style={{ fontWeight: '600' }}>{health.word}.</Text>{' '}
+                      <Text style={{ color: dark.inkMuted }}>{health.summary}</Text>
+                    </Text>
 
                     <Pressable
                       onPress={() => setBreakdownOpen(!breakdownOpen)}
@@ -1542,41 +1655,6 @@ export default function PlantDetail() {
                   <Text style={[type.caption, { color: accent.verdant }]}>View full analytics</Text>
                 </Pressable>
               </Card>
-
-              {/* ── Multi-day norms: what this spot is USUALLY like ──
-                  A single reading is a snapshot; the day average is the honest
-                  measure, and it sharpens with every day the sensor runs. */}
-              {detailsOpen && (norms.soil?.reliable || norms.temp?.reliable || norms.humidity?.reliable) && (
-                <Card style={{ marginTop: 10 }}>
-                  <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4 }]}>
-                    TYPICAL FOR THIS SPOT
-                  </Text>
-                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-                    {([
-                      ['Soil', norms.soil, (v: number) => `${Math.round(v)}%`],
-                      ['Temp', norms.temp, (v: number) => (settings.unitsF ? `${Math.round((v * 9) / 5 + 32)}°F` : `${Math.round(v)}°C`)],
-                      ['Humidity', norms.humidity, (v: number) => `${Math.round(v)}%`],
-                    ] as [string, ReturnType<typeof metricSummary>, (v: number) => string][])
-                      .filter(([, m]) => m != null)
-                      .map(([label, m, fmt]) => (
-                        <View key={label} style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                          <Text style={[type.micro, { color: dark.inkMuted }]}>{label.toUpperCase()}</Text>
-                          <Text style={[type.numBold as any, { color: dark.ink, fontSize: 18, marginTop: 2 }]}>
-                            {fmt(m!.avg)}
-                          </Text>
-                          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1 }]}>
-                            {fmt(m!.low)}–{fmt(m!.high)}
-                          </Text>
-                        </View>
-                      ))}
-                  </View>
-                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
-                    Averaged across {Math.max(norms.soil?.days ?? 0, norms.temp?.days ?? 0, norms.humidity?.days ?? 0)}{' '}
-                    day(s) of readings, weighted by how much of each day was covered — the range shows
-                    the quietest and busiest days. Accuracy improves the longer the sensor runs.
-                  </Text>
-                </Card>
-              )}
             </>
           )}
 
@@ -1707,47 +1785,18 @@ export default function PlantDetail() {
             </>
           )}
 
-          {/* Pot size gates the accuracy of every ml figure below, so it is asked
-              before them and independently of whether readings exist yet. */}
-          <SectionHeader>Pot size</SectionHeader>
-          {potSizePrompt ?? (
-            // Known and confirmed: state what it IS, and keep a way back in — a
-            // mistyped digit or a repot would otherwise be baked in permanently.
-            <Card>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Ionicons name="resize-outline" size={18} color={accent.verdant} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
-                    {plant.potCm} × {plant.potHeightCm} cm · {potVol.liters.toFixed(1)} L of soil
-                  </Text>
-                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
-                    {plant.potMaterial.toLowerCase()}
-                    {plant.soilMix ? `, ${plant.soilMix.toLowerCase()}` : ''}
-                    {plant.hasDrainage === false ? ', no drainage holes' : ''} — all of it feeds the
-                    watering amount.
-                  </Text>
-                </View>
-                <Pressable
-                  onPress={() => {
-                    // Pre-fill with what is stored so a correction is a tweak,
-                    // not a re-entry from scratch.
-                    setWidthInput(String(plant.potCm ?? ''));
-                    setDepthInput(String(plant.potHeightCm ?? ''));
-                    setPotSizeEditing(true);
-                  }}
-                  style={{
-                    paddingVertical: 8,
-                    paddingHorizontal: 12,
-                    borderRadius: 8,
-                    backgroundColor: dark.surface2,
-                  }}
-                >
-                  <Text style={[type.micro, { color: dark.ink, fontWeight: '700' }]}>Change</Text>
-                </Pressable>
-              </View>
-            </Card>
+          {/* Pot size gates the accuracy of every ml figure below, so while it is
+              missing it is asked for here, before them. Once known it folds away
+              into "Pot & soil" further down. */}
+          {potSizePrompt && (
+            <>
+              <SectionHeader>Pot size</SectionHeader>
+              {potSizePrompt}
+            </>
           )}
 
+          {soilFit.severity === 'major' && (
+            <>
           {/* ── Soil: what it should be potted in, and whether it already is ──
               Placed with pot size because they are the same decision made at the
               same moment, and both are read through the same retention model. A
@@ -1774,6 +1823,8 @@ export default function PlantDetail() {
               <Ionicons name="chevron-forward" size={18} color={dark.inkMuted} />
             </Pressable>
           </Card>
+            </>
+          )}
 
           {/* ── Watering: direct call from the sensor (replaces generic advice) ── */}
           {watering && (
@@ -1913,6 +1964,21 @@ export default function PlantDetail() {
                     </View>
                   </View>
                 )}
+                {/* The working — trial dose, last pour, calibration, factors — is one
+                    tap away so the answer above is never buried under its proof. */}
+                <Pressable
+                  onPress={() => tog('working')}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, minHeight: 36 }}
+                >
+                  <Ionicons name="calculator-outline" size={15} color={accent.verdant} />
+                  <Text style={[type.caption, { color: accent.verdant, flex: 1 }]}>
+                    {groups.working ? 'Hide the working' : 'How was this worked out?'}
+                  </Text>
+                  <Ionicons name={groups.working ? 'chevron-up' : 'chevron-down'} size={15} color={accent.verdant} />
+                </Pressable>
+                {groups.working && (
+                  <>
+
                 {/* The experiment: a modest dose with a stated prediction, so the
                     next reading either confirms it or corrects this pot's model. */}
                 {actionMl > 0 && step.isTrial && (
@@ -2018,6 +2084,8 @@ export default function PlantDetail() {
                     {waterStyleNote(plant.species)}
                   </Text>
                 </View>
+                  </>
+                )}
                 {watering.confidence === 'low' && (
                   <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
                     Still gathering history — accuracy climbs with every reading.
@@ -2033,14 +2101,18 @@ export default function PlantDetail() {
                 <Text style={[type.cardTitle, { color: dark.ink, marginTop: 4, fontSize: 15 }]}>
                   ≈{routineMl} ml about every {plan.intervalDays} day{plan.intervalDays === 1 ? '' : 's'}
                 </Text>
-                {plan.factors.map((f) => (
-                  <View key={f.label} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                {groups.working && (
+                  <>
+                {plan.factors.map((f, fi) => (
+                  <View key={`${f.label}-${fi}`} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
                     <Text style={[type.micro, { color: accent.verdant }]}>·</Text>
                     <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 15 }]}>
                       <Text style={{ color: dark.ink }}>{f.label}</Text> — {f.effect}
                     </Text>
                   </View>
                 ))}
+                  </>
+                )}
 
                 <Pressable
                   onPress={() => setWaterOpen(true)}
@@ -2111,106 +2183,6 @@ export default function PlantDetail() {
               </Card>
             </>
           )}
-
-          {/* ── ONE door to everything else ──
-                 The page above answers "how is it, and what do I do?". Charts,
-                 trends, the care guide and the analysis live behind this, so the
-                 answer is never buried under the evidence. */}
-          <Pressable
-            onPress={() => setDetailsOpen(!detailsOpen)}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 10,
-              marginTop: 16,
-              paddingVertical: 15,
-              paddingHorizontal: 16,
-              borderRadius: 14,
-              borderWidth: 1,
-              borderColor: dark.hairline,
-              backgroundColor: dark.surface1,
-            }}
-          >
-            <Ionicons name={detailsOpen ? 'chevron-up-circle' : 'options-outline'} size={20} color={accent.verdant} />
-            <View style={{ flex: 1 }}>
-              <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
-                {detailsOpen ? 'Hide the details' : 'See all the details'}
-              </Text>
-              {!detailsOpen && (
-                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
-                  Charts, trends, seasonal care, the full care guide and how this spot suits it
-                </Text>
-              )}
-            </View>
-            <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark.inkMuted} />
-          </Pressable>
-
-          {/* ── What this probe can and cannot see in this pot ── */}
-          {detailsOpen && sensored && probe && probe.mode !== 'direct' && (
-            <Card style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: accent.sunbeam }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="eye-off-outline" size={18} color={accent.sunbeam} />
-                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
-                  WHAT THE PROBE CAN SEE HERE
-                </Text>
-              </View>
-              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{probe.headline}</Text>
-              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
-                {probe.detail}
-              </Text>
-              {/*
-                THE RESCALED READING ITSELF — the thing rescaling is FOR, and the
-                one thing this card never showed. `probeResolution` could return
-                mode 'rescaled' and `relativeWetness` existed to act on it, but
-                nothing anywhere called it, so a pot living between 5% and 12%
-                was still only ever described to its owner as "9%".
-
-                Note this is a DISPLAY transform and nothing more. The mapping is
-                affine and monotone, so judging a rescaled reading against a
-                rescaled threshold gives exactly the same verdict as judging the
-                raw numbers — it changes what a person can read, never what the
-                app decides. The threshold is shown alongside for the same
-                reason: 68 means nothing until you know the floor is at 34.
-              */}
-              {probe.mode === 'rescaled' && calReading?.soil_pct != null && (
-                <View style={{ marginTop: 12, backgroundColor: dark.surface2, borderRadius: 10, padding: 12 }}>
-                  <Text style={[type.micro, { color: dark.inkMuted }]}>IN THIS POT&apos;S OWN RANGE</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 2 }}>
-                    <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 24 }]}>
-                      {Math.round(relativeWetness(calReading.soil_pct, probe))}
-                    </Text>
-                    <Text style={[type.body, { color: dark.inkMuted, marginBottom: 3 }]}>
-                      of 100 &middot; floor sits at {Math.round(relativeThreshold(ideal.band[0], probe))}
-                    </Text>
-                  </View>
-                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 16 }]}>
-                    The raw {calReading.soil_pct.toFixed(1)}% is real but unreadable — this pot only ever
-                    moves between {probe.observedLow.toFixed(1)}% and {probe.observedHigh.toFixed(1)}%. Stretched
-                    across its own range, the same reading becomes something you can actually judge.
-                  </Text>
-                </View>
-              )}
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                  <Text style={[type.micro, { color: dark.inkMuted }]}>THIS POT&apos;S RANGE</Text>
-                  <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>
-                    {probe.observedLow.toFixed(0)}–{probe.observedHigh.toFixed(0)}%
-                  </Text>
-                </View>
-                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                  <Text style={[type.micro, { color: dark.inkMuted }]}>SENSOR NOISE</Text>
-                  <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>±{probe.noisePts}</Text>
-                </View>
-                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                  <Text style={[type.micro, { color: dark.inkMuted }]}>USABLE STEPS</Text>
-                  <Text style={[type.numBold as any, { color: probe.mode === 'time-based' ? accent.clay : accent.verdant, fontSize: 16 }]}>
-                    {probe.signalToNoise}
-                  </Text>
-                </View>
-              </View>
-            </Card>
-          )}
-
           {/* ── Is the probe actually in the soil? Prof. Scott Jones's question ── */}
           {sensored && insertion && insertion.verdict !== 'seated' && insertion.verdict !== 'unknown' && (
             <Card
@@ -2232,330 +2204,6 @@ export default function PlantDetail() {
                 </Text>
               )}
             </Card>
-          )}
-
-          {/* ── What this pot is actually made of — Prof. Neil Mattson's calibration ── */}
-          {detailsOpen && sensored && substrate && (
-            <Card style={{ marginTop: 14 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="flask-outline" size={18} color={accent.verdant} />
-                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
-                  THIS POT&apos;S SUBSTRATE, MEASURED
-                </Text>
-                {substrate.basis !== 'insufficient' && (
-                  <Text style={[type.micro, { color: dark.inkMuted }]}>
-                    {Math.round(substrate.confidence * 100)}% confident
-                  </Text>
-                )}
-              </View>
-              <Text style={[type.cardTitle, { color: substrate.contradictsStated ? accent.sunbeam : dark.ink, marginTop: 8 }]}>
-                {substrate.headline}
-              </Text>
-              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
-                {substrate.detail}
-              </Text>
-
-              {substrate.mlPerPoint != null && (
-                <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                    <Text style={[type.micro, { color: dark.inkMuted }]}>ML PER POINT</Text>
-                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>{substrate.mlPerPoint}</Text>
-                  </View>
-                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                    <Text style={[type.micro, { color: dark.inkMuted }]}>DENSITY</Text>
-                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16, textTransform: 'capitalize' }]}>
-                      {substrate.densityClass ?? '—'}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                    <Text style={[type.micro, { color: dark.inkMuted }]}>DRAINS OFF</Text>
-                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>
-                      {substrate.airFilledPorosity != null ? `${Math.round(substrate.airFilledPorosity * 100)}%` : '—'}
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              {/* The guided procedure: one instruction, and the reason for it. */}
-              {calPlan && calPlan.stage !== 'complete' && (
-                <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: `${accent.verdant}14` }}>
-                  <Text style={[type.micro, { color: accent.verdant, letterSpacing: 0.4 }]}>
-                    NEXT STEP TO MEASURE IT
-                  </Text>
-                  <Text style={[type.body, { color: dark.ink, marginTop: 4, lineHeight: 21 }]}>
-                    {calPlan.instruction}
-                  </Text>
-                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 16 }]}>
-                    {calPlan.why}
-                  </Text>
-                </View>
-              )}
-            </Card>
-          )}
-
-          {/* ── Salt build-up — Prof. Dana Porter's question ── */}
-          {detailsOpen && sensored && salt && salt.risk !== 'unknown' && salt.risk !== 'low' && (
-            <Card style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: salt.severity >= 45 ? accent.clay : accent.sunbeam }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="water-outline" size={18} color={salt.severity >= 45 ? accent.clay : accent.sunbeam} />
-                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
-                  SALT BUILD-UP
-                </Text>
-                <Text style={[type.micro, { color: dark.inkMuted }]}>
-                  {salt.cycles} cycles · {salt.observedDays} d
-                </Text>
-              </View>
-              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{salt.headline}</Text>
-              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>{salt.detail}</Text>
-              {salt.action && (
-                <Text style={[type.body, { color: accent.verdant, marginTop: 8, lineHeight: 21 }]}>{salt.action}</Text>
-              )}
-              {salt.risk === 'likely' && (
-                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 16 }]}>
-                  {PROBE_CASING_ADVICE}
-                </Text>
-              )}
-            </Card>
-          )}
-
-          {/* ── Was the amount we recommended right? Graded against real pours ── */}
-          {detailsOpen && sensored && doseCheck && (
-            <Card style={{ marginTop: 14 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons
-                  name={doseCheck.direction === 'good' ? 'checkmark-circle-outline' : 'construct-outline'}
-                  size={18}
-                  color={doseCheck.direction === 'good' ? accent.verdant : accent.sunbeam}
-                />
-                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
-                  HOW ACCURATE GREENR&apos;S AMOUNTS HAVE BEEN
-                </Text>
-              </View>
-              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{doseCheck.headline}</Text>
-              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
-                {doseCheck.detail}
-              </Text>
-              <View style={{ marginTop: 12, gap: 10 }}>
-                {doseCheck.checks.slice(-3).reverse().map((c) => (
-                  <View key={c.at}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <Text style={[type.micro, { color: dark.inkMuted, flex: 1 }]}>
-                        {relTime((Date.now() - c.at) / 60000)}
-                      </Text>
-                      <Text style={[type.micro, { color: dark.inkMuted }]}>suggested</Text>
-                      <Text style={[type.numBold as any, { color: dark.inkMuted }]}>{c.suggestedMl} ml</Text>
-                      <Ionicons name="arrow-forward" size={12} color={dark.inkMuted} />
-                      <Text style={[type.micro, { color: dark.inkMuted }]}>poured</Text>
-                      <Text style={[type.numBold as any, { color: accent.verdant }]}>{c.pouredMl} ml</Text>
-                    </View>
-                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
-                      {c.verdict}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-              {doseCheck.skippedAssumed > 0 && (
-                <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
-                  {doseCheck.skippedAssumed} watering{doseCheck.skippedAssumed === 1 ? ' was' : 's were'} logged
-                  without you stating an amount. Those record that you watered, but Greenr never treats its own
-                  suggestion as proof its suggestion was right — so they cannot sharpen anything.
-                </Text>
-              )}
-            </Card>
-          )}
-
-          {/* ── How well THIS compost holds water, measured from the dry-down ── */}
-          {detailsOpen && sensored && retentionEst && (
-            <Card style={{ marginTop: 14 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons
-                  name={retentionEst.confident ? 'water-outline' : 'hourglass-outline'}
-                  size={18}
-                  color={retentionEst.confident ? accent.verdant : accent.sunbeam}
-                />
-                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
-                  HOW LONG THIS SOIL STAYS DAMP · MEASURED
-                </Text>
-              </View>
-              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{retentionEst.headline}</Text>
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                  <Text style={[type.micro, { color: dark.inkMuted }]}>DROPS BY</Text>
-                  <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 18 }]}>
-                    {retentionEst.ptsPerDay.toFixed(1)}%/day
-                  </Text>
-                </View>
-                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                  <Text style={[type.micro, { color: dark.inkMuted }]}>WATERED → DRY</Text>
-                  <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 18 }]}>
-                    {retentionEst.dryDays < 1 ? retentionEst.dryDays.toFixed(1) : Math.round(retentionEst.dryDays)} days
-                  </Text>
-                </View>
-                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
-                  <Text style={[type.micro, { color: dark.inkMuted }]}>VERDICT</Text>
-                  <Text style={[type.caption, { color: dark.ink, marginTop: 2 }]}>
-                    {RETENTION_LABEL[retentionEst.value]}
-                  </Text>
-                </View>
-              </View>
-              <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, lineHeight: 21 }]}>
-                {retentionEst.detail}
-              </Text>
-              <View style={{ marginTop: 10, gap: 4 }}>
-                {retentionEst.runs.slice(-3).map((r) => (
-                  <View key={r.startMs} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Text style={[type.micro, { color: dark.inkMuted, flex: 1 }]}>
-                      {relTime((Date.now() - r.startMs) / 60000)} · {r.fromPct.toFixed(0)}% →{' '}
-                      {r.toPct.toFixed(0)}% over {Math.round(r.hours)} h
-                    </Text>
-                    <Text style={[type.micro, { color: r.spanned ? accent.verdant : dark.inkMuted }]}>
-                      {r.spanned ? 'full cycle' : 'partial'} · fit {(r.fit * 100).toFixed(0)}%
-                    </Text>
-                  </View>
-                ))}
-              </View>
-              <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
-                This is how long the pot stays damp with THIS plant in THIS spot — a big, thirsty plant
-                empties its pot faster than a cutting in the same compost. Greenr corrects for how dry
-                the air was, not for how much the plant drinks.
-              </Text>
-            </Card>
-          )}
-
-          {detailsOpen && sensored && soilProfileNote && (
-            <Card style={{ marginTop: 14 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="layers-outline" size={18} color={accent.verdant} />
-                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
-                  WHAT THE PROBE IS MEASURING
-                </Text>
-              </View>
-              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
-                {soilProfileNote.text}
-              </Text>
-              <View style={{ marginTop: 10, gap: 4 }}>
-                {profileBands(
-                  soilProfileNote.geo,
-                  calReading?.soil_pct != null ? inferWaterTableDepth(calReading.soil_pct, soilProfileNote.geo) : 0,
-                ).map((b) => (
-                  <View key={b.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Text style={[type.micro, { color: dark.inkMuted, width: 150 }]}>{b.label}</Text>
-                    <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: dark.hairline, overflow: 'hidden' }}>
-                      <View style={{ width: `${Math.round(b.pct)}%`, height: 6, backgroundColor: accent.verdant }} />
-                    </View>
-                    <Text style={[type.micro, { color: dark.ink, width: 52, textAlign: 'right' }]}>
-                      {b.pct.toFixed(2)}%
-                    </Text>
-                  </View>
-                ))}
-              </View>
-              {(() => {
-                const fit = probeFit(soilProfileNote.geo);
-                return fit.potTooShallow ? (
-                  <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
-                    {fit.note}
-                  </Text>
-                ) : null;
-              })()}
-              {!plant.potHeightCm && (
-                <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
-                  Assuming a 16 cm soil depth — set the real depth when you add or edit this plant and
-                  these figures become exact for your pot.
-                </Text>
-              )}
-            </Card>
-          )}
-
-          {/* ── Watering efficiency: volume learned from the moisture curve ── */}
-          {detailsOpen && hydration && (
-            <>
-              <SectionHeader>Watering efficiency</SectionHeader>
-              <Card>
-                <Text style={[type.body, { color: dark.ink, lineHeight: 21 }]}>
-                  Every time you water, the soil jumps up then dries at{' '}
-                  {hydration.dryingPerDay != null ? (
-                    <Text style={[type.numBold as any, { color: accent.verdant }]}>~{hydration.dryingPerDay}%/day</Text>
-                  ) : (
-                    'a rate Greenr is still learning'
-                  )}
-                  . Greenr reads the size of each jump to estimate how much you poured — so a bigger drink
-                  simply lasts longer.
-                </Text>
-                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 15 }]}>
-                  Built from readings about every {hydration.reportIntervalH} h — the more often the sensor
-                  reports, the sharper this gets. Stretches where it was offline aren&apos;t counted.
-                </Text>
-
-                {/* the efficient recommendation */}
-                {efficientPour && (
-                  <View style={{ marginTop: 12, padding: 12, borderRadius: 12, backgroundColor: `${accent.verdant}18` }}>
-                    <Text style={[type.micro, { color: accent.verdant, letterSpacing: 0.3 }]}>
-                      MOST EFFICIENT POUR
-                    </Text>
-                    <Text style={[type.ritualTitle, { color: dark.ink, fontSize: 22, marginTop: 2 }]}>
-                      {efficientPour.ml} ml
-                      <Text style={[type.caption, { color: dark.inkMuted }]}> · lasts ~{Math.round(efficientPour.lastsDays)} days</Text>
-                    </Text>
-                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 3, lineHeight: 15 }]}>
-                      Fills the soil to ~{efficientPour.peak}% — enough to reach {plant.species}&apos;s next-water point
-                      in about {Math.round(efficientPour.lastsDays)} days.{' '}
-                      {efficientPour.capped
-                        ? `That's the most one pour can hold; past ~${hydration.saturationPct}% the water just drains away.`
-                        : `Pouring much past that just drains out — wasted water.`}
-                    </Text>
-                  </View>
-                )}
-
-                {/* recent pours: estimated volume + how long each lasted */}
-                {hydration.events.length > 0 && (
-                  <>
-                    <Hairline style={{ marginVertical: 12 }} />
-                    <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3, marginBottom: 6 }]}>
-                      YOUR RECENT WATERINGS
-                    </Text>
-                    {hydration.events
-                      .slice(-4)
-                      .reverse()
-                      .map((e, i) => (
-                        <View key={e.at} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: i === 0 ? 0 : 8 }}>
-                          <Ionicons name="water" size={14} color={accent.verdant} />
-                          <Text style={[type.caption, { color: dark.ink, flex: 1 }]}>
-                            {new Date(e.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                            {e.loggedMl != null ? ` · you logged ${e.loggedMl} ml` : e.estMl != null ? ` · ~${e.estMl} ml poured` : ''}
-                          </Text>
-                          <Text style={[type.micro, { color: dark.inkMuted }]}>
-                            {e.wateredEarly ? 'watered early' : e.lastedDays != null ? `lasted ${e.lastedDays}d` : 'drying…'}
-                          </Text>
-                        </View>
-                      ))}
-                  </>
-                )}
-
-                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 12, lineHeight: 15 }]}>
-                  {hydration.calibrated
-                    ? `Calibrated to your pot from ${hydration.calibrationPairs} logged pour${hydration.calibrationPairs === 1 ? '' : 's'} — the volume estimate is tuned to this exact plant.`
-                    : 'Volume is estimated from pot size. Log the amount when you water and Greenr locks the estimate to your real pot.'}
-                </Text>
-              </Card>
-            </>
-          )}
-
-          {/* ── What Greenr has learned (from history) ── */}
-          {detailsOpen && insights.length > 0 && (
-            <>
-              <SectionHeader>What Greenr has learned</SectionHeader>
-              <Card>
-                {insights.map((ins, i) => (
-                  <View key={i}>
-                    {i > 0 && <Hairline style={{ marginVertical: 12 }} />}
-                    <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
-                      <Ionicons name={ins.icon as any} size={18} color={accent.verdant} style={{ marginTop: 1 }} />
-                      <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{ins.text}</Text>
-                    </View>
-                  </View>
-                ))}
-              </Card>
-            </>
           )}
 
           {/* ── Sensorless: the honest watering cycle + needs in plain words ── */}
@@ -2628,9 +2276,8 @@ export default function PlantDetail() {
                     <View style={{ width: `${Math.round(careScore.confidence * 100)}%`, height: 5, backgroundColor: accent.verdant }} />
                   </View>
                   <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 15 }]}>
-                    This score rates how well your logged care matches what {plant.species} needs — rhythm,
-                    consistency, spot, and amounts. It sharpens every time you log, but a sensor is the only
-                    way to measure the soil itself. Pair one to turn this into a live health score.
+                    How well your logged care matches what {plant.species} needs — rhythm, consistency,
+                    spot and amounts. It sharpens every time you log.
                   </Text>
                 </View>
               </Card>
@@ -2658,6 +2305,49 @@ export default function PlantDetail() {
                     : 'Log each watering and Greenr learns this plant’s real rhythm.'}
                 </Text>
 
+                {/* WHY THIS DATE — the inputs, stated rather than adjustable */}
+                {estWhy && (
+                  <>
+                    <Hairline style={{ marginVertical: 12 }} />
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={[type.sectionHeader, { color: dark.inkMuted, fontSize: 12, flex: 1 }]}>Why this date</Text>
+                      <View
+                        style={{
+                          paddingHorizontal: 8,
+                          paddingVertical: 2,
+                          borderRadius: 999,
+                          backgroundColor: `${estWhy.confidence === 'High' ? accent.sage : estWhy.confidence === 'Medium' ? accent.sunbeam : accent.clay}26`,
+                        }}
+                      >
+                        <Text style={[type.micro, { color: estWhy.confidence === 'High' ? accent.sage : estWhy.confidence === 'Medium' ? accent.sunbeam : accent.clay }]}>
+                          {estWhy.confidence} confidence
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+                      <Text style={[type.caption, { color: accent.verdant }]}>·</Text>
+                      <Text style={[type.caption, { color: dark.inkMuted, flex: 1 }]}>
+                        <Text style={{ color: dark.ink }}>Last watered</Text> —{' '}
+                        {estWhy.lastWateredAt
+                          ? estWhy.lastWateredAt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                          : 'not logged yet'}
+                      </Text>
+                    </View>
+                    {estWhy.factors.map((f) => (
+                      <View key={f.label} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                        <Text style={[type.caption, { color: accent.verdant }]}>·</Text>
+                        <Text style={[type.caption, { color: dark.inkMuted, flex: 1 }]}>
+                          <Text style={{ color: dark.ink }}>{f.label}</Text> — {f.effect}
+                        </Text>
+                      </View>
+                    ))}
+                    <Text style={[type.caption, { color: dark.ink, marginTop: 8, fontWeight: '600' }]}>
+                      = about every {Math.round(estWhy.intervalDays)} days
+                    </Text>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4 }]}>{estWhy.confidenceWhy}</Text>
+                  </>
+                )}
+
                 {/* the calculated plan: pot volume × species draw × season */}
                 <Hairline style={{ marginVertical: 12 }} />
                 <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3 }]}>
@@ -2667,16 +2357,26 @@ export default function PlantDetail() {
                 <Text style={[type.cardTitle, { color: dark.ink, marginTop: 4, fontSize: 15 }]}>
                   ≈{routineMl} ml about every {plan.intervalDays} day{plan.intervalDays === 1 ? '' : 's'}
                 </Text>
-                {plan.factors.map((f) => (
-                  <View key={f.label} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
-                    <Text style={[type.micro, { color: accent.verdant }]}>·</Text>
-                    <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 15 }]}>
-                      <Text style={{ color: dark.ink }}>{f.label}</Text> — {f.effect}
-                    </Text>
-                  </View>
-                ))}
+                <Pressable
+                  onPress={() => tog('working')}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, minHeight: 32 }}
+                >
+                  <Text style={[type.caption, { color: accent.verdant, flex: 1 }]}>
+                    {groups.working ? 'Hide the working' : 'How was this worked out?'}
+                  </Text>
+                  <Ionicons name={groups.working ? 'chevron-up' : 'chevron-down'} size={15} color={accent.verdant} />
+                </Pressable>
+                {groups.working &&
+                  plan.factors.map((f, fi) => (
+                    <View key={`${f.label}-${fi}`} style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                      <Text style={[type.micro, { color: accent.verdant }]}>·</Text>
+                      <Text style={[type.micro, { color: dark.inkMuted, flex: 1, lineHeight: 15 }]}>
+                        <Text style={{ color: dark.ink }}>{f.label}</Text> — {f.effect}
+                      </Text>
+                    </View>
+                  ))}
                 <GButton
-                  title="＋ Log a watering"
+                  title="Log a watering"
                   onPress={() => setWaterOpen(true)}
                   style={{ marginTop: 12, minHeight: 44 }}
                 />
@@ -2684,11 +2384,11 @@ export default function PlantDetail() {
                 <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
                   {(
                     [
-                      ['🧪', 'Fertilized'],
-                      ['💨', 'Misted'],
-                      ['🪴', 'Repotted'],
+                      ['flask-outline', 'Fertilized'],
+                      ['cloud-outline', 'Misted'],
+                      ['cube-outline', 'Repotted'],
                     ] as [string, string][]
-                  ).map(([emoji, label]) => (
+                  ).map(([icon, label]) => (
                     <Pressable
                       key={label}
                       onPress={() => {
@@ -2701,20 +2401,28 @@ export default function PlantDetail() {
                         flex: 1,
                         minHeight: 40,
                         borderRadius: 10,
+                        flexDirection: 'row',
+                        gap: 5,
                         alignItems: 'center',
                         justifyContent: 'center',
                         borderWidth: 1,
                         borderColor: loggedCare === label ? accent.sage : dark.hairline,
                       }}
                     >
+                      <Ionicons
+                        name={(loggedCare === label ? 'checkmark' : icon) as any}
+                        size={15}
+                        color={loggedCare === label ? accent.sage : accent.verdant}
+                      />
                       <Text style={[type.micro, { color: loggedCare === label ? accent.sage : dark.ink }]}>
-                        {loggedCare === label ? '✓ Logged' : `${emoji} ${label}`}
+                        {loggedCare === label ? 'Logged' : label}
                       </Text>
                     </Pressable>
                   ))}
                 </View>
               </Card>
 
+              {qualNeeds.length > 0 && (<>
               <SectionHeader>What it needs</SectionHeader>
               <Card>
                 {qualNeeds.map((n, i) => (
@@ -2726,46 +2434,62 @@ export default function PlantDetail() {
                     </View>
                   </View>
                 ))}
-                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 12, lineHeight: 15 }]}>
-                  Described in words because nothing here is measured yet — a sensor turns these into
-                  live readings.
-                </Text>
               </Card>
+              </>)}
             </>
           )}
 
-          {/* ── This season: automatic winter/summer care shifts ── */}
-          {detailsOpen && (<>
-          <SectionHeader>{`${SEASON_EMOJI[season]} ${SEASON_LABEL[season]} care`}</SectionHeader>
-          <Card>
-            <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 15 }]}>
-              Applied automatically — the watering plan above already reflects the season.
-            </Text>
-            {seasonNotes.map((n, i) => (
-              <View key={i} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginTop: 10 }}>
-                <Ionicons name={n.icon as any} size={17} color={accent.verdant} style={{ marginTop: 1 }} />
-                <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{n.text}</Text>
-              </View>
-            ))}
-          </Card>
+          {/* ── Everything else, folded ──
+                 The page above answers "how is it, and what do I do?". The rest
+                 is grouped by what it is about, each with a one-line summary, so
+                 the answer is never buried under the evidence. */}
+          <SectionHeader>Notes</SectionHeader>
+          <PlantNotes key={plant.id} initial={plant.notes ?? ''} onSave={(t) => setPlantNotes(plant.id, t)} />
 
-          {/* ── Tips tuned to the user's survey (beginner ≠ expert) ── */}
-          {detailsOpen && (userTips.length > 0 || groom) && (
-            <>
-              <SectionHeader>Tips for you</SectionHeader>
-              <Card>
-                <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 15 }]}>
-                  Matched to your experience{profile?.struggle && profile.struggle !== 'Honestly, not sure' ? ` and what you said goes wrong most (${profile.struggle.toLowerCase()})` : ''}.
-                </Text>
-                {[...(groom ? [groom] : []), ...userTips].map((t, i) => (
-                  <View key={i} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginTop: 10 }}>
-                    <Ionicons name={t.icon as any} size={17} color={accent.sage} style={{ marginTop: 1 }} />
-                    <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{t.text}</Text>
+          <SectionHeader>More about {plant.name}</SectionHeader>
+
+          <Disclosure
+            icon="stats-chart"
+            iconColor={accent.verdant}
+            title="Trends"
+            subtitle="Soil and light over time, daily records and growth"
+            open={!!groups.trends}
+            onToggle={() => tog('trends')}
+          >
+              {/* ── Multi-day norms: what this spot is USUALLY like ──
+                  A single reading is a snapshot; the day average is the honest
+                  measure, and it sharpens with every day the sensor runs. */}
+              {liveDeviceId && (norms.soil?.reliable || norms.temp?.reliable || norms.humidity?.reliable) && (
+                <Card style={{ marginTop: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4 }]}>
+                    TYPICAL FOR THIS SPOT
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                    {([
+                      ['Soil', norms.soil, (v: number) => `${Math.round(v)}%`],
+                      ['Temp', norms.temp, (v: number) => (settings.unitsF ? `${Math.round((v * 9) / 5 + 32)}°F` : `${Math.round(v)}°C`)],
+                      ['Humidity', norms.humidity, (v: number) => `${Math.round(v)}%`],
+                    ] as [string, ReturnType<typeof metricSummary>, (v: number) => string][])
+                      .filter(([, m]) => m != null)
+                      .map(([label, m, fmt]) => (
+                        <View key={label} style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                          <Text style={[type.micro, { color: dark.inkMuted }]}>{label.toUpperCase()}</Text>
+                          <Text style={[type.numBold as any, { color: dark.ink, fontSize: 18, marginTop: 2 }]}>
+                            {fmt(m!.avg)}
+                          </Text>
+                          <Text style={[type.micro, { color: dark.inkMuted, marginTop: 1 }]}>
+                            {fmt(m!.low)}–{fmt(m!.high)}
+                          </Text>
+                        </View>
+                      ))}
                   </View>
-                ))}
-              </Card>
-            </>
-          )}
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                    Averaged across {Math.max(norms.soil?.days ?? 0, norms.temp?.days ?? 0, norms.humidity?.days ?? 0)}{' '}
+                    day(s) of readings, weighted by how much of each day was covered — the range shows
+                    the quietest and busiest days. Accuracy improves the longer the sensor runs.
+                  </Text>
+                </Card>
+              )}
 
           {/* ── Soil moisture (real sensor history) ── */}
           <SectionHeader>Soil moisture</SectionHeader>
@@ -2827,10 +2551,8 @@ export default function PlantDetail() {
             )}
           </Card>
 
-          </>)}
-
           {/* ── Light (real sensor history) ── */}
-          {detailsOpen && liveDeviceId && (
+          {liveDeviceId && (
             <>
               <SectionHeader>Light</SectionHeader>
               <Card>
@@ -2958,9 +2680,88 @@ export default function PlantDetail() {
             </>
           )}
 
+          {/* ── The record: day-by-day and season-by-season averages ── */}
+          {sensored && (
+          <Card style={{ marginTop: 10 }} onPress={() => router.push(`/climate/${plant.id}` as any)}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <IconTile icon="calendar" color="#5B8DB8" />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Day &amp; season record</Text>
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                  {(climateDaily?.[plant.id]?.length ?? 0) > 0
+                    ? `${climateDaily[plant.id].length} days recorded — soil, temperature, humidity and light, averaged by day and by season.`
+                    : 'Soil, temperature, humidity and light, averaged by day and by season. Fills in from the first full day of readings.'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
+            </View>
+          </Card>
+          )}
+
+          {/* ── Growth journal: the outcome dimension no sensor can read ── */}
+          {(
+          <Card style={{ marginTop: 10 }} onPress={() => router.push(`/growth/${plant.id}` as any)}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <IconTile icon="trending-up" color={accent.sage} />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Growth journal</Text>
+                <Text style={[type.micro, { color: growthLine ? accent.sage : dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                  {growthLine ??
+                    (growth.entries.length > 0
+                      ? `${growth.entries.length} ${growth.entries.length === 1 ? 'entry' : 'entries'} logged`
+                      : 'Track height, leaves & progress photos over time.')}
+                </Text>
+              </View>
+              {growth.photos.length > 0 && (
+                <Text style={[type.micro, { color: dark.inkMuted }]}>{growth.photos.length} 📷</Text>
+              )}
+              <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
+            </View>
+          </Card>
+          )}
+          </Disclosure>
+          <Disclosure
+            icon="book"
+            iconColor={'#5B8DB8'}
+            title="Care guide"
+            subtitle={`${SEASON_LABEL[season]} care, tips for you, and the full guide`}
+            open={!!groups.care}
+            onToggle={() => tog('care')}
+          >
+          <SectionHeader>{`${SEASON_LABEL[season]} care`}</SectionHeader>
+          <Card>
+            <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 15 }]}>
+              Applied automatically — the watering plan above already reflects the season.
+            </Text>
+            {seasonNotes.map((n, i) => (
+              <View key={i} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginTop: 10 }}>
+                <Ionicons name={n.icon as any} size={17} color={accent.verdant} style={{ marginTop: 1 }} />
+                <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{n.text}</Text>
+              </View>
+            ))}
+          </Card>
+
+          {/* ── Tips tuned to the user's survey (beginner ≠ expert) ── */}
+          {(userTips.length > 0 || groom) && (
+            <>
+              <SectionHeader>Tips for you</SectionHeader>
+              <Card>
+                <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 15 }]}>
+                  Matched to your experience{profile?.struggle && profile.struggle !== 'Honestly, not sure' ? ` and what you said goes wrong most (${profile.struggle.toLowerCase()})` : ''}.
+                </Text>
+                {[...(groom ? [groom] : []), ...userTips].map((t, i) => (
+                  <View key={i} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginTop: 10 }}>
+                    <Ionicons name={t.icon as any} size={17} color={accent.sage} style={{ marginTop: 1 }} />
+                    <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{t.text}</Text>
+                  </View>
+                ))}
+              </Card>
+            </>
+          )}
+
           {/* ── Care guide: full for sensorless plants; a collapsed reference when
                  a sensor already provides live data (the sensor IS the guide) ── */}
-          {detailsOpen && careProfile && (
+          {careProfile && (
             <>
               {!sensored && <SectionHeader>Care guide</SectionHeader>}
               <Card style={sensored ? { marginTop: 10 } : undefined}>
@@ -3080,50 +2881,10 @@ export default function PlantDetail() {
             </>
           )}
 
-          {/* ── The record: day-by-day and season-by-season averages ── */}
-          {detailsOpen && sensored && (
-          <Card style={{ marginTop: 10 }} onPress={() => router.push(`/climate/${plant.id}` as any)}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <Text style={{ fontSize: 22 }}>📅</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Day &amp; season record</Text>
-                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
-                  {(climateDaily?.[plant.id]?.length ?? 0) > 0
-                    ? `${climateDaily[plant.id].length} days recorded — soil, temperature, humidity and light, averaged by day and by season.`
-                    : 'Soil, temperature, humidity and light, averaged by day and by season. Fills in from the first full day of readings.'}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
-            </View>
-          </Card>
-          )}
-
-          {/* ── Growth journal: the outcome dimension no sensor can read ── */}
-          {detailsOpen && (
-          <Card style={{ marginTop: 10 }} onPress={() => router.push(`/growth/${plant.id}` as any)}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <Text style={{ fontSize: 22 }}>📈</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Growth journal</Text>
-                <Text style={[type.micro, { color: growthLine ? accent.sage : dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
-                  {growthLine ??
-                    (growth.entries.length > 0
-                      ? `${growth.entries.length} ${growth.entries.length === 1 ? 'entry' : 'entries'} logged`
-                      : 'Track height, leaves & progress photos over time.')}
-                </Text>
-              </View>
-              {growth.photos.length > 0 && (
-                <Text style={[type.micro, { color: dark.inkMuted }]}>{growth.photos.length} 📷</Text>
-              )}
-              <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
-            </View>
-          </Card>
-          )}
-
           {/* ── Photo-check: for problems no sensor can see (pests, spots, yellowing) ── */}
           <Card style={{ marginTop: 10 }} onPress={openDiagnose}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <Text style={{ fontSize: 22 }}>🔍</Text>
+              <IconTile icon="medkit" color={accent.clay} />
               <View style={{ flex: 1 }}>
                 <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
                   Something look off?
@@ -3136,9 +2897,83 @@ export default function PlantDetail() {
               <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
             </View>
           </Card>
-
+          </Disclosure>
+          <Disclosure
+            icon="cube"
+            iconColor={'#A0784F'}
+            title="Pot & soil"
+            subtitle={potSizePrompt ? soilFit.headline : `${plant.potCm} × ${plant.potHeightCm} cm · ${soilFit.headline}`}
+            open={!!groups.pot}
+            onToggle={() => tog('pot')}
+          >
+          {!potSizePrompt && (
+            <Card>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="resize-outline" size={18} color={accent.verdant} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
+                    {plant.potCm} × {plant.potHeightCm} cm · {potVol.liters.toFixed(1)} L of soil
+                  </Text>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                    {plant.potMaterial.toLowerCase()}
+                    {plant.soilMix ? `, ${plant.soilMix.toLowerCase()}` : ''}
+                    {plant.hasDrainage === false ? ', no drainage holes' : ''} — all of it feeds the
+                    watering amount.
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    // Pre-fill with what is stored so a correction is a tweak,
+                    // not a re-entry from scratch.
+                    setWidthInput(String(plant.potCm ?? ''));
+                    setDepthInput(String(plant.potHeightCm ?? ''));
+                    setPotSizeEditing(true);
+                  }}
+                  style={{
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                    borderRadius: 8,
+                    backgroundColor: dark.surface2,
+                  }}
+                >
+                  <Text style={[type.micro, { color: dark.ink, fontWeight: '700' }]}>Change</Text>
+                </Pressable>
+              </View>
+            </Card>
+          )}
+          {(soilFit.severity as string) !== 'major' && (
+          <Card style={{ marginTop: 10, borderLeftWidth: soilFit.severity === 'major' ? 3 : 0, borderLeftColor: accent.clay }}>
+            <Pressable
+              onPress={() => router.push(`/repot/${plant.id}` as any)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
+            >
+              <Ionicons
+                name={soilFit.matches ? 'checkmark-circle-outline' : soilFit.severity === 'major' ? 'alert-circle' : 'flask-outline'}
+                size={18}
+                color={soilFit.matches ? accent.verdant : soilFit.severity === 'major' ? accent.clay : accent.sunbeam}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>{soilFit.headline}</Text>
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                  {soilRecipe.headline} — {recipeLine(soilRecipe)}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={dark.inkMuted} />
+            </Pressable>
+          </Card>
+          )}
+          </Disclosure>
+          {((selfMatch && selfMatch.factors.length > 0) || spotMatches.length > 0) && (
+          <Disclosure
+            icon="sunny"
+            iconColor={accent.sunbeam}
+            title="This spot"
+            subtitle={`How well ${spot?.name ?? 'its spot'} suits it, and what else would thrive there`}
+            open={!!groups.spot}
+            onToggle={() => tog('spot')}
+          >
           {/* ── Spot fit for THIS plant (Habitat Suitability model) ── */}
-          {detailsOpen && selfMatch && selfMatch.factors.length > 0 && (
+          {selfMatch && selfMatch.factors.length > 0 && (
             <>
               <SectionHeader>How well this spot suits {plant.name}</SectionHeader>
               <Card accentBorder={selfMatch.score < 42 ? accent.clay : undefined}>
@@ -3172,7 +3007,7 @@ export default function PlantDetail() {
           )}
 
           {/* ── What thrives in this spot (compatibility from the sensor) ── */}
-          {detailsOpen && spotMatches.length > 0 && (
+          {spotMatches.length > 0 && (
             <>
               <SectionHeader>Thrives in this spot</SectionHeader>
               <Card>
@@ -3207,39 +3042,432 @@ export default function PlantDetail() {
               </Card>
             </>
           )}
+          </Disclosure>
+          )}
+          {(sensored || hydration || insights.length > 0) && (
+          <Disclosure
+            icon="hardware-chip"
+            iconColor={'#4F8A8B'}
+            title="Sensor & accuracy"
+            subtitle="What the probe sees, salt, and how well past advice worked"
+            open={!!groups.sensor}
+            onToggle={() => tog('sensor')}
+          >
+          {/* ── What this probe can and cannot see in this pot ── */}
+          {sensored && probe && probe.mode !== 'direct' && (
+            <Card style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: accent.sunbeam }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="eye-off-outline" size={18} color={accent.sunbeam} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  WHAT THE PROBE CAN SEE HERE
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{probe.headline}</Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {probe.detail}
+              </Text>
+              {/*
+                THE RESCALED READING ITSELF — the thing rescaling is FOR, and the
+                one thing this card never showed. `probeResolution` could return
+                mode 'rescaled' and `relativeWetness` existed to act on it, but
+                nothing anywhere called it, so a pot living between 5% and 12%
+                was still only ever described to its owner as "9%".
+
+                Note this is a DISPLAY transform and nothing more. The mapping is
+                affine and monotone, so judging a rescaled reading against a
+                rescaled threshold gives exactly the same verdict as judging the
+                raw numbers — it changes what a person can read, never what the
+                app decides. The threshold is shown alongside for the same
+                reason: 68 means nothing until you know the floor is at 34.
+              */}
+              {probe.mode === 'rescaled' && calReading?.soil_pct != null && (
+                <View style={{ marginTop: 12, backgroundColor: dark.surface2, borderRadius: 10, padding: 12 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>IN THIS POT&apos;S OWN RANGE</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 2 }}>
+                    <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 24 }]}>
+                      {Math.round(relativeWetness(calReading.soil_pct, probe))}
+                    </Text>
+                    <Text style={[type.body, { color: dark.inkMuted, marginBottom: 3 }]}>
+                      of 100 &middot; floor sits at {Math.round(relativeThreshold(ideal.band[0], probe))}
+                    </Text>
+                  </View>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 16 }]}>
+                    The raw {calReading.soil_pct.toFixed(1)}% is real but unreadable — this pot only ever
+                    moves between {probe.observedLow.toFixed(1)}% and {probe.observedHigh.toFixed(1)}%. Stretched
+                    across its own range, the same reading becomes something you can actually judge.
+                  </Text>
+                </View>
+              )}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>THIS POT&apos;S RANGE</Text>
+                  <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>
+                    {probe.observedLow.toFixed(0)}–{probe.observedHigh.toFixed(0)}%
+                  </Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>SENSOR NOISE</Text>
+                  <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>±{probe.noisePts}</Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>USABLE STEPS</Text>
+                  <Text style={[type.numBold as any, { color: probe.mode === 'time-based' ? accent.clay : accent.verdant, fontSize: 16 }]}>
+                    {probe.signalToNoise}
+                  </Text>
+                </View>
+              </View>
+            </Card>
+          )}
+
+          {/* ── What this pot is actually made of — Prof. Neil Mattson's calibration ── */}
+          {sensored && substrate && (
+            <Card style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="flask-outline" size={18} color={accent.verdant} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  THIS POT&apos;S SUBSTRATE, MEASURED
+                </Text>
+                {substrate.basis !== 'insufficient' && (
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>
+                    {Math.round(substrate.confidence * 100)}% confident
+                  </Text>
+                )}
+              </View>
+              <Text style={[type.cardTitle, { color: substrate.contradictsStated ? accent.sunbeam : dark.ink, marginTop: 8 }]}>
+                {substrate.headline}
+              </Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {substrate.detail}
+              </Text>
+
+              {substrate.mlPerPoint != null && (
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted }]}>ML PER POINT</Text>
+                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>{substrate.mlPerPoint}</Text>
+                  </View>
+                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted }]}>DENSITY</Text>
+                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16, textTransform: 'capitalize' }]}>
+                      {substrate.densityClass ?? '—'}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted }]}>DRAINS OFF</Text>
+                    <Text style={[type.numBold as any, { color: dark.ink, fontSize: 16 }]}>
+                      {substrate.airFilledPorosity != null ? `${Math.round(substrate.airFilledPorosity * 100)}%` : '—'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* The guided procedure: one instruction, and the reason for it. */}
+              {calPlan && calPlan.stage !== 'complete' && (
+                <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: `${accent.verdant}14` }}>
+                  <Text style={[type.micro, { color: accent.verdant, letterSpacing: 0.4 }]}>
+                    NEXT STEP TO MEASURE IT
+                  </Text>
+                  <Text style={[type.body, { color: dark.ink, marginTop: 4, lineHeight: 21 }]}>
+                    {calPlan.instruction}
+                  </Text>
+                  <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 16 }]}>
+                    {calPlan.why}
+                  </Text>
+                </View>
+              )}
+            </Card>
+          )}
+
+          {/* ── Salt build-up — Prof. Dana Porter's question ── */}
+          {sensored && salt && salt.risk !== 'unknown' && salt.risk !== 'low' && (
+            <Card style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: salt.severity >= 45 ? accent.clay : accent.sunbeam }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="water-outline" size={18} color={salt.severity >= 45 ? accent.clay : accent.sunbeam} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  SALT BUILD-UP
+                </Text>
+                <Text style={[type.micro, { color: dark.inkMuted }]}>
+                  {salt.cycles} cycles · {salt.observedDays} d
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{salt.headline}</Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>{salt.detail}</Text>
+              {salt.action && (
+                <Text style={[type.body, { color: accent.verdant, marginTop: 8, lineHeight: 21 }]}>{salt.action}</Text>
+              )}
+              {salt.risk === 'likely' && (
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 16 }]}>
+                  {PROBE_CASING_ADVICE}
+                </Text>
+              )}
+            </Card>
+          )}
+
+          {/* ── Was the amount we recommended right? Graded against real pours ── */}
+          {sensored && doseCheck && (
+            <Card style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons
+                  name={doseCheck.direction === 'good' ? 'checkmark-circle-outline' : 'construct-outline'}
+                  size={18}
+                  color={doseCheck.direction === 'good' ? accent.verdant : accent.sunbeam}
+                />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  HOW ACCURATE GREENR&apos;S AMOUNTS HAVE BEEN
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{doseCheck.headline}</Text>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {doseCheck.detail}
+              </Text>
+              <View style={{ marginTop: 12, gap: 10 }}>
+                {doseCheck.checks.slice(-3).reverse().map((c) => (
+                  <View key={c.at}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={[type.micro, { color: dark.inkMuted, flex: 1 }]}>
+                        {relTime((Date.now() - c.at) / 60000)}
+                      </Text>
+                      <Text style={[type.micro, { color: dark.inkMuted }]}>suggested</Text>
+                      <Text style={[type.numBold as any, { color: dark.inkMuted }]}>{c.suggestedMl} ml</Text>
+                      <Ionicons name="arrow-forward" size={12} color={dark.inkMuted} />
+                      <Text style={[type.micro, { color: dark.inkMuted }]}>poured</Text>
+                      <Text style={[type.numBold as any, { color: accent.verdant }]}>{c.pouredMl} ml</Text>
+                    </View>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                      {c.verdict}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              {doseCheck.skippedAssumed > 0 && (
+                <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
+                  {doseCheck.skippedAssumed} watering{doseCheck.skippedAssumed === 1 ? ' was' : 's were'} logged
+                  without you stating an amount. Those record that you watered, but Greenr never treats its own
+                  suggestion as proof its suggestion was right — so they cannot sharpen anything.
+                </Text>
+              )}
+            </Card>
+          )}
+
+          {/* ── How well THIS compost holds water, measured from the dry-down ── */}
+          {sensored && retentionEst && (
+            <Card style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons
+                  name={retentionEst.confident ? 'water-outline' : 'hourglass-outline'}
+                  size={18}
+                  color={retentionEst.confident ? accent.verdant : accent.sunbeam}
+                />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  HOW LONG THIS SOIL STAYS DAMP · MEASURED
+                </Text>
+              </View>
+              <Text style={[type.cardTitle, { color: dark.ink, marginTop: 8 }]}>{retentionEst.headline}</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>DROPS BY</Text>
+                  <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 18 }]}>
+                    {retentionEst.ptsPerDay.toFixed(1)}%/day
+                  </Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>WATERED → DRY</Text>
+                  <Text style={[type.numBold as any, { color: accent.verdant, fontSize: 18 }]}>
+                    {retentionEst.dryDays < 1 ? retentionEst.dryDays.toFixed(1) : Math.round(retentionEst.dryDays)} days
+                  </Text>
+                </View>
+                <View style={{ flex: 1, backgroundColor: dark.surface2, borderRadius: 10, padding: 10 }}>
+                  <Text style={[type.micro, { color: dark.inkMuted }]}>VERDICT</Text>
+                  <Text style={[type.caption, { color: dark.ink, marginTop: 2 }]}>
+                    {RETENTION_LABEL[retentionEst.value]}
+                  </Text>
+                </View>
+              </View>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, lineHeight: 21 }]}>
+                {retentionEst.detail}
+              </Text>
+              <View style={{ marginTop: 10, gap: 4 }}>
+                {retentionEst.runs.slice(-3).map((r) => (
+                  <View key={r.startMs} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted, flex: 1 }]}>
+                      {relTime((Date.now() - r.startMs) / 60000)} · {r.fromPct.toFixed(0)}% →{' '}
+                      {r.toPct.toFixed(0)}% over {Math.round(r.hours)} h
+                    </Text>
+                    <Text style={[type.micro, { color: r.spanned ? accent.verdant : dark.inkMuted }]}>
+                      {r.spanned ? 'full cycle' : 'partial'} · fit {(r.fit * 100).toFixed(0)}%
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={[type.micro, { color: dark.inkMuted, marginTop: 10, lineHeight: 15 }]}>
+                This is how long the pot stays damp with THIS plant in THIS spot — a big, thirsty plant
+                empties its pot faster than a cutting in the same compost. Greenr corrects for how dry
+                the air was, not for how much the plant drinks.
+              </Text>
+            </Card>
+          )}
+
+          {sensored && soilProfileNote && (
+            <Card style={{ marginTop: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="layers-outline" size={18} color={accent.verdant} />
+                <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, flex: 1 }]}>
+                  WHAT THE PROBE IS MEASURING
+                </Text>
+              </View>
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 8, lineHeight: 21 }]}>
+                {soilProfileNote.text}
+              </Text>
+              <View style={{ marginTop: 10, gap: 4 }}>
+                {profileBands(
+                  soilProfileNote.geo,
+                  calReading?.soil_pct != null ? inferWaterTableDepth(calReading.soil_pct, soilProfileNote.geo) : 0,
+                ).map((b) => (
+                  <View key={b.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={[type.micro, { color: dark.inkMuted, width: 150 }]}>{b.label}</Text>
+                    <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: dark.hairline, overflow: 'hidden' }}>
+                      <View style={{ width: `${Math.round(b.pct)}%`, height: 6, backgroundColor: accent.verdant }} />
+                    </View>
+                    <Text style={[type.micro, { color: dark.ink, width: 52, textAlign: 'right' }]}>
+                      {b.pct.toFixed(2)}%
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              {(() => {
+                const fit = probeFit(soilProfileNote.geo);
+                return fit.potTooShallow ? (
+                  <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
+                    {fit.note}
+                  </Text>
+                ) : null;
+              })()}
+              {!plant.potHeightCm && (
+                <Text style={[type.micro, { color: accent.sunbeam, marginTop: 10, lineHeight: 15 }]}>
+                  Assuming a 16 cm soil depth — set the real depth when you add or edit this plant and
+                  these figures become exact for your pot.
+                </Text>
+              )}
+            </Card>
+          )}
+
+          {/* ── Watering efficiency: volume learned from the moisture curve ── */}
+          {hydration && (
+            <>
+              <SectionHeader>Watering efficiency</SectionHeader>
+              <Card>
+                <Text style={[type.body, { color: dark.ink, lineHeight: 21 }]}>
+                  Every time you water, the soil jumps up then dries at{' '}
+                  {hydration.dryingPerDay != null ? (
+                    <Text style={[type.numBold as any, { color: accent.verdant }]}>~{hydration.dryingPerDay}%/day</Text>
+                  ) : (
+                    'a rate Greenr is still learning'
+                  )}
+                  . Greenr reads the size of each jump to estimate how much you poured — so a bigger drink
+                  simply lasts longer.
+                </Text>
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+                  Built from readings about every {hydration.reportIntervalH} h — the more often the sensor
+                  reports, the sharper this gets. Stretches where it was offline aren&apos;t counted.
+                </Text>
+
+                {/* the efficient recommendation */}
+                {efficientPour && (
+                  <View style={{ marginTop: 12, padding: 12, borderRadius: 12, backgroundColor: `${accent.verdant}18` }}>
+                    <Text style={[type.micro, { color: accent.verdant, letterSpacing: 0.3 }]}>
+                      MOST EFFICIENT POUR
+                    </Text>
+                    <Text style={[type.ritualTitle, { color: dark.ink, fontSize: 22, marginTop: 2 }]}>
+                      {efficientPour.ml} ml
+                      <Text style={[type.caption, { color: dark.inkMuted }]}> · lasts ~{Math.round(efficientPour.lastsDays)} days</Text>
+                    </Text>
+                    <Text style={[type.micro, { color: dark.inkMuted, marginTop: 3, lineHeight: 15 }]}>
+                      Fills the soil to ~{efficientPour.peak}% — enough to reach {plant.species}&apos;s next-water point
+                      in about {Math.round(efficientPour.lastsDays)} days.{' '}
+                      {efficientPour.capped
+                        ? `That's the most one pour can hold; past ~${hydration.saturationPct}% the water just drains away.`
+                        : `Pouring much past that just drains out — wasted water.`}
+                    </Text>
+                  </View>
+                )}
+
+                {/* recent pours: estimated volume + how long each lasted */}
+                {hydration.events.length > 0 && (
+                  <>
+                    <Hairline style={{ marginVertical: 12 }} />
+                    <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.3, marginBottom: 6 }]}>
+                      YOUR RECENT WATERINGS
+                    </Text>
+                    {hydration.events
+                      .slice(-4)
+                      .reverse()
+                      .map((e, i) => (
+                        <View key={e.at} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: i === 0 ? 0 : 8 }}>
+                          <Ionicons name="water" size={14} color={accent.verdant} />
+                          <Text style={[type.caption, { color: dark.ink, flex: 1 }]}>
+                            {new Date(e.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            {e.loggedMl != null ? ` · you logged ${e.loggedMl} ml` : e.estMl != null ? ` · ~${e.estMl} ml poured` : ''}
+                          </Text>
+                          <Text style={[type.micro, { color: dark.inkMuted }]}>
+                            {e.wateredEarly ? 'watered early' : e.lastedDays != null ? `lasted ${e.lastedDays}d` : 'drying…'}
+                          </Text>
+                        </View>
+                      ))}
+                  </>
+                )}
+
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 12, lineHeight: 15 }]}>
+                  {hydration.calibrated
+                    ? `Calibrated to your pot from ${hydration.calibrationPairs} logged pour${hydration.calibrationPairs === 1 ? '' : 's'} — the volume estimate is tuned to this exact plant.`
+                    : 'Volume is estimated from pot size. Log the amount when you water and Greenr locks the estimate to your real pot.'}
+                </Text>
+              </Card>
+            </>
+          )}
+
+          {/* ── What Greenr has learned (from history) ── */}
+          {insights.length > 0 && (
+            <>
+              <SectionHeader>What Greenr has learned</SectionHeader>
+              <Card>
+                {insights.map((ins, i) => (
+                  <View key={i}>
+                    {i > 0 && <Hairline style={{ marginVertical: 12 }} />}
+                    <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+                      <Ionicons name={ins.icon as any} size={18} color={accent.verdant} style={{ marginTop: 1 }} />
+                      <Text style={[type.body, { color: dark.ink, flex: 1, lineHeight: 21 }]}>{ins.text}</Text>
+                    </View>
+                  </View>
+                ))}
+              </Card>
+            </>
+          )}
+          </Disclosure>
+          )}
 
           {/* ── History (accordion) ── */}
-          <Card style={{ marginTop: 10 }}>
+          <Card style={{ marginTop: 10, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12 }}>
             <Pressable
               onPress={() => setTimelineOpen(!timelineOpen)}
-              style={{ flexDirection: 'row', alignItems: 'center', minHeight: 36 }}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 36 }}
             >
-              <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]}>History</Text>
-              <Text style={[type.micro, { color: dark.inkMuted, marginRight: 8 }]}>
-                {plant.timeline.length} events
-              </Text>
-              <Ionicons name={timelineOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark.inkMuted} />
+              <IconTile icon="time" color="#7D8790" />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.body, { color: dark.ink, fontWeight: '600' }]}>History</Text>
+                <Text style={[type.caption, { color: dark.inkMuted, marginTop: 1 }]}>
+                  {plant.timeline.length} event{plant.timeline.length === 1 ? '' : 's'} — care, photos and insights
+                </Text>
+              </View>
+              <Ionicons name={timelineOpen ? 'chevron-up' : 'chevron-down'} size={16} color={dark.inkMuted} />
             </Pressable>
             {timelineOpen && (
               <View style={{ marginTop: 10 }}>
-                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
-                  {(['All', 'Photos', 'Care', 'Insights'] as TimelineFilter[]).map((f) => (
-                    <Pressable
-                      key={f}
-                      onPress={() => setFilter(f)}
-                      style={{
-                        minHeight: 40,
-                        justifyContent: 'center',
-                        paddingHorizontal: 12,
-                        borderRadius: 10,
-                        borderWidth: 1,
-                        borderColor: filter === f ? accent.verdant : dark.hairline,
-                      }}
-                    >
-                      <Text style={[type.micro, { color: filter === f ? dark.ink : dark.inkMuted }]}>{f}</Text>
-                    </Pressable>
-                  ))}
-                </View>
+                <Segmented
+                  style={{ marginBottom: 12 }}
+                  value={filter}
+                  onChange={setFilter}
+                  options={(['All', 'Photos', 'Care', 'Insights'] as TimelineFilter[]).map((f) => ({ value: f, label: f }))}
+                />
                 {events.length === 0 && (
                   <Text style={[type.caption, { color: dark.inkMuted }]}>Nothing here yet.</Text>
                 )}
@@ -3399,7 +3627,7 @@ export default function PlantDetail() {
                   backgroundColor: customMl ? accent.verdant : dark.surface2,
                 }}
               >
-                <Text style={[type.cardTitle, { color: customMl ? '#08110B' : dark.inkMuted, fontSize: 14 }]}>Log</Text>
+                <Text style={[type.cardTitle, { color: customMl ? '#FFFFFF' : dark.inkMuted, fontSize: 14 }]}>Log</Text>
               </Pressable>
             </View>
 
@@ -3452,18 +3680,46 @@ export default function PlantDetail() {
         <View style={{ position: 'absolute', right: 0, bottom: 0 }}>
           <LogFab
             actions={[
-              { icon: '💧', label: 'Log watering', run: () => setWaterOpen(true) },
-              { icon: '🧪', label: 'Log fertilizing', run: () => logCare(plant.id, 'Fertilized (logged)') },
-              { icon: '💨', label: 'Log misting', run: () => logCare(plant.id, 'Misted (logged)') },
-              { icon: '✂️', label: 'Log pruning', run: () => logCare(plant.id, 'Pruned (logged)') },
-              { icon: '🪴', label: 'Log repotting', run: () => logCare(plant.id, 'Repotted (logged)') },
-              { icon: '📷', label: photoAdded ? 'Photo added ✓' : 'Add a photo', run: () => setShowCamera(true) },
-              { icon: '📈', label: 'Log growth', run: () => router.push(`/growth/${plant.id}` as any) },
-              { icon: '🔍', label: settings.plus ? 'Diagnose (photo-check)' : 'Diagnose · Greenr+', run: openDiagnose },
+              { icon: 'water', label: 'Log watering', run: () => setWaterOpen(true) },
+              { icon: 'flask', label: 'Log fertilizing', run: () => logCare(plant.id, 'Fertilized (logged)') },
+              { icon: 'cloud', label: 'Log misting', run: () => logCare(plant.id, 'Misted (logged)') },
+              { icon: 'cut', label: 'Log pruning', run: () => logCare(plant.id, 'Pruned (logged)') },
+              { icon: 'cube', label: 'Log repotting', run: () => logCare(plant.id, 'Repotted (logged)') },
+              { icon: 'camera', label: photoAdded ? 'Photo added ✓' : 'Add a photo', run: () => setShowCamera(true) },
+              { icon: 'trending-up', label: 'Log growth', run: () => router.push(`/growth/${plant.id}` as any) },
+              { icon: 'medkit', label: settings.plus ? 'Photo check-up' : 'Photo check-up · Greenr+', run: openDiagnose },
             ]}
           />
         </View>
       </View>
     </View>
+  );
+}
+
+/** Free-text notes that save when you leave the field. */
+function PlantNotes({ initial, onSave }: { initial: string; onSave: (t: string) => void }) {
+  const [text, setText] = useState(initial);
+  const [saved, setSaved] = useState(false);
+  return (
+    <Card>
+      <TextInput
+        value={text}
+        onChangeText={(t) => {
+          setText(t);
+          setSaved(false);
+        }}
+        onBlur={() => {
+          if (text.trim() !== initial.trim()) {
+            onSave(text.trim());
+            setSaved(true);
+          }
+        }}
+        placeholder="Anything worth remembering — where you bought it, when it flowered, what it didn’t like"
+        placeholderTextColor={dark.inkMuted}
+        multiline
+        style={[type.body, { color: dark.ink, minHeight: 64, textAlignVertical: 'top', outlineStyle: 'none' } as any]}
+      />
+      {saved && <Text style={[type.micro, { color: accent.sage, marginTop: 6 }]}>Saved</Text>}
+    </Card>
   );
 }

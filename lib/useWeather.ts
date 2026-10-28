@@ -3,6 +3,7 @@ import * as Location from 'expo-location';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { setDaylightWindow } from './insights';
+import { setHemisphere } from './season';
 import { fetchWeather, type WeatherData } from './weather';
 
 /**
@@ -45,7 +46,10 @@ export function useWeather(): UseWeather {
    * daytime and makes a perfectly good windowsill look hopeless.
    */
   const setWeather = useCallback((w: WeatherData | null) => {
-    if (w) setDaylightWindow(w.sunrise, w.sunset);
+    if (w) {
+      setDaylightWindow(w.sunrise, w.sunset);
+      setHemisphere(w.latitude);
+    }
     setWeatherRaw(w);
   }, []);
   const [place, setPlace] = useState<string | null>(null);

@@ -44,6 +44,18 @@ export interface WeatherData {
   longitude: number;
 }
 
+/** The weather emoji above as an Ionicons glyph name, for icon-led layouts. */
+export function weatherIconFor(emoji: string): string {
+  if (emoji.includes('☀')) return 'sunny';
+  if (emoji.includes('🌙')) return 'moon';
+  if (emoji.includes('🌤') || emoji.includes('⛅')) return 'partly-sunny';
+  if (emoji.includes('⛈')) return 'thunderstorm';
+  if (emoji.includes('🌨') || emoji.includes('❄')) return 'snow';
+  if (emoji.includes('🌧') || emoji.includes('🌦')) return 'rainy';
+  if (emoji.includes('☁') || emoji.includes('🌫')) return 'cloudy';
+  return 'thermometer';
+}
+
 /** WMO weather-interpretation codes → short text + emoji. */
 export function describeCode(code: number, isDay = true): { text: string; emoji: string } {
   const map: Record<number, [string, string]> = {

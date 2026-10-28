@@ -1,6 +1,6 @@
 import type { Reading } from './devices';
 import { getSpecies, waterProfileFor } from './plants';
-import { MAX_SINGLE_POUR_FRACTION, mlPerPointPerLiter, profileCorrection, waterFractionBetween } from './soilProfile';
+import { MAX_SINGLE_POUR_FRACTION, mlPerPointPerLiter, waterFractionBetween } from './soilProfile';
 import { currentSeason, seasonIntervalFactor, SEASON_LABEL, type Season } from './season';
 import { vpdIntervalFactor, vpdKpa } from './vpd';
 import type { PotMaterial, PotShape, PotSize, SoilMix, SoilRetention } from './types';
@@ -548,8 +548,13 @@ export function waterPlan(opts: {
     else if (l <= 20) { interval *= 1.12; factors.push({ label: `Dim spot (${Math.round(l)}/100 daytime avg)`, effect: '+12% interval' }); }
   }
 
-  // Season: dormancy vs growth.
-  const sf = seasonIntervalFactor(season);
+  // Season: dormancy vs growth. The season factor mixes two effects — the
+  // weather (hot dry summers, cool damp winters) and the plant's own growth
+  // cycle. When the air demand was MEASURED above, the weather half is already
+  // counted, so only the growth half (the square root of the factor) is applied
+  // rather than counting summer twice.
+  const sfFull = seasonIntervalFactor(season);
+  const sf = kpa != null ? Math.round(Math.sqrt(sfFull) * 1000) / 1000 : sfFull;
   if (sf !== 1) {
     interval *= sf;
     factors.push({
@@ -884,8 +889,7 @@ export function pourStep(
     waterFractionBetween(soil, soil + 1) *
       liters *
       1000 *
-      wettingFor({ potMaterial: plant.potMaterial, soilMix: plant.soilMix, soilRetention: plant.soilRetention, hasDrainage: plant.hasDrainage }).mult *
-      (plant.potHeightCm ? profileCorrection({ potHeightCm: plant.potHeightCm, soilMix: plant.soilMix, soilRetention: plant.soilRetention }).factor : 1),
+      wettingFor({ potMaterial: plant.potMaterial, soilMix: plant.soilMix, soilRetention: plant.soilRetention, hasDrainage: plant.hasDrainage }).mult,
   );
   const band = getSpecies(plant.species)?.band ?? [30, 55];
   const targetRise = trialTargetRisePts(band as [number, number]);
@@ -959,6 +963,7 @@ export function mlToReachTarget(opts: {
   hasDrainage?: boolean;
 }): number {
   const { currentPct, targetPct, potSize, potCm, potHeightCm, potMaterial } = opts;
+  void potHeightCm;
   // A missing or malformed reading must not become a NaN millilitre figure on
   // screen — NaN fails every comparison, so it slips past a plain >= guard.
   if (!Number.isFinite(currentPct) || !Number.isFinite(targetPct)) return 0;
@@ -972,19 +977,15 @@ export function mlToReachTarget(opts: {
   // Real water content gained, from the Topp curve — not the raw display gap.
   const rawDeficit = waterFractionBetween(currentPct, targetPct);
 
-  // PHYSICS: the probe reads a fixed top 6.5 cm while water fills the whole
-  // column, and the deep soil sits at low suction where the retention curve is
-  // steepest. So the same probe movement means more stored water in a deep pot
-  // than a shallow one. profileCorrection turns the van Genuchten profile into
-  // that multiplier (clamped — see its docs for why the raw ratio explodes).
-  const correction = potHeightCm
-    ? profileCorrection({
-        potHeightCm,
-        soilMix: opts.soilMix,
-        soilRetention: opts.soilRetention,
-      }).factor
-    : 1;
-  const deficitFraction = rawDeficit * correction;
+  /*
+   * NO DEPTH CORRECTION HERE. `profileCorrection` converts a deficit seen at the
+   * probe into one for the whole column, and this already charges the deficit
+   * against the WHOLE pot's volume — applying both counts the depth twice. That
+   * combination is the one `waterBalance` traced a 17× over-dose to, and it was
+   * removed from the measured path there; it is removed from the routine path
+   * here for the same reason.
+   */
+  const deficitFraction = rawDeficit;
 
   // How much MORE than that must be poured: leaching through the medium, wall
   // losses in porous pots, and nothing at all when the pot cannot drain.

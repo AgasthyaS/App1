@@ -1,6 +1,7 @@
 import { applyCalibration, type SensorCalibration } from './calibration';
 import type { Reading } from './devices';
 import { confidentVerdicts } from './environment';
+import { overwateringCheck } from './estimate';
 import type { DayLight } from './insights';
 import { idealsFor } from './plantStatus';
 import { probeInsertion } from './probeInsertion';
@@ -82,6 +83,16 @@ export function attentionFor(opts: {
   const ideal = idealsFor(plant.species, plant.comfortBand);
 
   if (!hasSensor) {
+    // No soil reading to raise the alarm, so the watering log has to: waterings
+    // far closer together than this plant needs is how most houseplants drown.
+    const over = overwateringCheck(plant);
+    if (over) {
+      return {
+        level: 'watch', priority: 46, label: 'Watering too often',
+        reason: `About every ${over.gapDays < 1.5 ? 'day' : `${Math.round(over.gapDays)} days`} — it needs about every ${Math.round(over.intervalDays)}.`,
+        daysUntilWater: null,
+      };
+    }
     return {
       level: 'unknown', priority: 20, label: 'No sensor',
       reason: 'Judged from your watering log rather than measured.',

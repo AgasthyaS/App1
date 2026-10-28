@@ -5,16 +5,17 @@ import { Pressable, Text, View } from 'react-native';
 
 import { Card, GButton, Hairline, Screen } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
-import { light, type } from '@/constants/theme';
+import { dark, type } from '@/constants/theme';
 import { calibrationFor } from '@/lib/calibration';
 import { careScoreValue } from '@/lib/careScore';
 import { eventDaysAgo } from '@/lib/format';
 import { deriveCareTasks } from '@/lib/careTasks';
 import { vitalityFor } from '@/lib/health';
 import { storedLightAvg } from '@/lib/insights';
-import { currentSeason, seasonalNotes, SEASON_EMOJI, SEASON_LABEL } from '@/lib/season';
+import { currentSeason, seasonalNotes, SEASON_LABEL } from '@/lib/season';
 import { useGreenr } from '@/lib/store';
 import { tipsFor } from '@/lib/tips';
+import { careThisWeekLine } from '@/lib/careLog';
 import { useAllLiveReadings } from '@/lib/useLiveReading';
 
 /** The Sunday briefing (§8.3) — a ritual, not an instrument. Light surface. */
@@ -45,6 +46,8 @@ export default function Briefing() {
   // This week's care — derived live from readings + watering cycles, like Care Mode.
   const careTasks = deriveCareTasks({ plants, spots, readings: liveReadings, calibrations, lightDaily });
   const careMinutes = careTasks.reduce((a, t) => a + t.minutes, 0);
+  // What was actually done this week, from the same watering log every screen counts.
+  const careLogged = careThisWeekLine(plants);
   const lowBattery = sensors.filter((s) => s.batteryPct < 20);
   const monstera = plants.find((p) => p.id === 'pl-monstera');
   // "What changed" is drawn from real logged events this week — never canned copy.
@@ -67,33 +70,33 @@ export default function Briefing() {
   const weekTips = tipsFor({ experience: profile?.experience, struggle: profile?.struggle, season, count: 2 });
 
   return (
-    <Screen mode="light">
+    <Screen>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <View>
-          <Text style={[type.micro, { color: light.inkMuted, letterSpacing: 1.2 }]}>
+          <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 1.2 }]}>
             {dateLine.toUpperCase()}
           </Text>
-          <Text style={[type.ritualTitle, { color: light.ink, marginTop: 4 }]}>Your briefing</Text>
+          <Text style={[type.ritualTitle, { color: dark.ink, marginTop: 4 }]}>Your briefing</Text>
         </View>
         <Pressable onPress={() => router.back()} style={{ minWidth: 44, minHeight: 44, alignItems: 'flex-end', justifyContent: 'center' }}>
-          <Ionicons name="close" size={24} color={light.inkMuted} />
+          <Ionicons name="close" size={24} color={dark.inkMuted} />
         </Pressable>
       </View>
 
       {plants.length === 0 ? (
-        <Card mode="light" style={{ marginTop: 16 }}>
-          <Text style={[type.body, { color: light.inkMuted }]}>
+        <Card style={{ marginTop: 16 }}>
+          <Text style={[type.body, { color: dark.inkMuted }]}>
             No plants yet — the briefing starts once your garden does.
           </Text>
         </Card>
       ) : (
         <>
           {/* garden headline */}
-          <Card mode="light" style={{ marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-            {avg != null && <VitalityRing score={avg} size={72} trackColor={light.hairline} />}
+          <Card style={{ marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+            {avg != null && <VitalityRing score={avg} size={72} trackColor={dark.hairline} />}
             <View style={{ flex: 1 }}>
-              <Text style={[type.micro, { color: light.inkMuted }]}>GARDEN AVERAGE</Text>
-              <Text style={[type.body, { color: light.ink, marginTop: 4, lineHeight: 21 }]}>
+              <Text style={[type.micro, { color: dark.inkMuted }]}>GARDEN AVERAGE</Text>
+              <Text style={[type.body, { color: dark.ink, marginTop: 4, lineHeight: 21 }]}>
                 {avg != null
                   ? `${thriving} of ${plants.length} thriving.`
                   : 'Still building baselines — scores arrive after ~10 days, or instantly with a sensor.'}
@@ -103,12 +106,12 @@ export default function Briefing() {
 
           {/* what changed — from this week's real logged events */}
           {changes.length > 0 && (
-            <Card mode="light" style={{ marginTop: 10 }}>
-              <Text style={[type.micro, { color: light.inkMuted }]}>WHAT CHANGED</Text>
+            <Card style={{ marginTop: 10 }}>
+              <Text style={[type.micro, { color: dark.inkMuted }]}>WHAT CHANGED</Text>
               {changes.map((c, i) => (
                 <Text
                   key={c.id}
-                  style={[type.body, { color: light.ink, marginTop: i === 0 ? 6 : 6, lineHeight: 22 }]}
+                  style={[type.body, { color: dark.ink, marginTop: i === 0 ? 6 : 6, lineHeight: 22 }]}
                 >
                   {c.text}
                 </Text>
@@ -117,49 +120,53 @@ export default function Briefing() {
           )}
 
           {/* seasonal outlook — what this time of year changes, automatically */}
-          <Card mode="light" style={{ marginTop: 10 }}>
-            <Text style={[type.micro, { color: light.inkMuted }]}>
-              {SEASON_EMOJI[season]} {SEASON_LABEL[season].toUpperCase()} — WHAT CHANGES NOW
+          <Card style={{ marginTop: 10 }}>
+            <Text style={[type.micro, { color: dark.inkMuted }]}>
+              {SEASON_LABEL[season].toUpperCase()} · WHAT CHANGES NOW
             </Text>
             {seasonCare.map((n, i) => (
-              <Text key={i} style={[type.body, { color: light.ink, marginTop: 6, lineHeight: 22 }]}>
+              <Text key={i} style={[type.body, { color: dark.ink, marginTop: 6, lineHeight: 22 }]}>
                 {n.text}
               </Text>
             ))}
-            <Text style={[type.caption, { color: light.inkMuted, marginTop: 8, lineHeight: 18 }]}>
+            <Text style={[type.caption, { color: dark.inkMuted, marginTop: 8, lineHeight: 18 }]}>
               Watering schedules already account for this — no math needed on your end.
             </Text>
           </Card>
 
           {/* this week's care — derived live, same list Care Mode runs */}
-          <Card mode="light" style={{ marginTop: 10 }}>
-            <Text style={[type.micro, { color: light.inkMuted }]}>CARE NEEDED NOW</Text>
+          <Card style={{ marginTop: 10 }}>
+            <Text style={[type.micro, { color: dark.inkMuted }]}>CARE NEEDED NOW</Text>
             {careTasks.map((t, i) => (
               <View key={t.id}>
-                {i > 0 && <Hairline mode="light" style={{ marginVertical: 8 }} />}
-                <Text style={[type.body, { color: light.ink, marginTop: i === 0 ? 6 : 0 }]}>{t.title}</Text>
-                <Text style={[type.caption, { color: light.inkMuted, marginTop: 3, lineHeight: 18 }]}>
+                {i > 0 && <Hairline style={{ marginVertical: 8 }} />}
+                <Text style={[type.body, { color: dark.ink, marginTop: i === 0 ? 6 : 0 }]}>{t.title}</Text>
+                <Text style={[type.caption, { color: dark.inkMuted, marginTop: 3, lineHeight: 18 }]}>
                   {t.why}
                 </Text>
               </View>
             ))}
             {careTasks.length === 0 && (
-              <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
-                Nothing needs you — every reading is in range and no waterings are due.
+              <Text style={[type.body, { color: dark.inkMuted, marginTop: 6 }]}>
+                {liveReadings.size > 0
+                  ? 'Nothing needs you — every sensor reading is in range and no waterings are due.'
+                  : 'No waterings due. Estimates based on your logs.'}
               </Text>
             )}
-            {careTasks.length > 0 && (
-              <Text style={[type.caption, { color: light.inkMuted, marginTop: 10 }]}>
-                ~{careMinutes} min of care
+            {(careTasks.length > 0 || careLogged) && (
+              <Text style={[type.caption, { color: dark.inkMuted, marginTop: 10 }]}>
+                {[careTasks.length > 0 ? `About ${careMinutes} min of care to do` : null, careLogged]
+                  .filter(Boolean)
+                  .join(' · ')}
               </Text>
             )}
           </Card>
 
           {/* records — only when earned */}
           {monstera && monstera.score >= 85 && (
-            <Card mode="light" style={{ marginTop: 10 }}>
-              <Text style={[type.micro, { color: light.inkMuted }]}>RECORDS</Text>
-              <Text style={[type.body, { color: light.ink, marginTop: 6 }]}>
+            <Card style={{ marginTop: 10 }}>
+              <Text style={[type.micro, { color: dark.inkMuted }]}>RECORDS</Text>
+              <Text style={[type.body, { color: dark.ink, marginTop: 6 }]}>
                 Monstera: 60 days thriving — its longest run.
               </Text>
             </Card>
@@ -167,10 +174,10 @@ export default function Briefing() {
 
           {/* tips for the week — tuned to the user's survey answers */}
           {weekTips.length > 0 && (
-            <Card mode="light" style={{ marginTop: 10 }}>
-              <Text style={[type.micro, { color: light.inkMuted }]}>FOR YOU THIS WEEK</Text>
+            <Card style={{ marginTop: 10 }}>
+              <Text style={[type.micro, { color: dark.inkMuted }]}>FOR YOU THIS WEEK</Text>
               {weekTips.map((t, i) => (
-                <Text key={i} style={[type.body, { color: light.ink, marginTop: 6, lineHeight: 22 }]}>
+                <Text key={i} style={[type.body, { color: dark.ink, marginTop: 6, lineHeight: 22 }]}>
                   {t.text}
                 </Text>
               ))}
@@ -179,10 +186,10 @@ export default function Briefing() {
 
           {/* hardware notes */}
           {lowBattery.length > 0 && (
-            <Card mode="light" style={{ marginTop: 10 }}>
-              <Text style={[type.micro, { color: light.inkMuted }]}>HARDWARE</Text>
+            <Card style={{ marginTop: 10 }}>
+              <Text style={[type.micro, { color: dark.inkMuted }]}>HARDWARE</Text>
               {lowBattery.map((s) => (
-                <Text key={s.id} style={[type.body, { color: light.ink, marginTop: 6 }]}>
+                <Text key={s.id} style={[type.body, { color: dark.ink, marginTop: 6 }]}>
                   {s.name}: {s.batteryEta} of battery left.
                 </Text>
               ))}

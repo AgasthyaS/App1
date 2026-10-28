@@ -3,10 +3,12 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { IconTile, NavButton } from '@/components/greenr/Native';
 import PlantAvatar from '@/components/greenr/PlantAvatar';
-import { Card, GButton, Screen } from '@/components/greenr/UI';
-import { accent, light, type } from '@/constants/theme';
+import { GButton } from '@/components/greenr/UI';
+import { accent, dark, layout, type } from '@/constants/theme';
 import { deriveCareTasks, type DerivedTask } from '@/lib/careTasks';
 import { useGreenr } from '@/lib/store';
 import { useAllLiveReadings, useAllReadingHistories } from '@/lib/useLiveReading';
@@ -19,6 +21,82 @@ import { useWeather } from '@/lib/useWeather';
  * shows up as "Move to a brighter spot". Completing a water task logs the
  * watering (which is what teaches the app your rhythm); nothing is staged.
  */
+
+/** What each kind of task looks like: an icon, a colour and a one-word label. */
+function kindStyle(kind: DerivedTask['kind']): { icon: string; color: string; label: string } {
+  switch (kind) {
+    case 'water':
+      return { icon: 'water', color: accent.verdant, label: 'Water' };
+    case 'water-check':
+      return { icon: 'water-outline', color: accent.verdant, label: 'Check & water' };
+    case 'hold':
+      return { icon: 'hand-left', color: accent.sunbeam, label: 'Hold off' };
+    case 'light':
+      return { icon: 'sunny', color: accent.sunbeam, label: 'Light' };
+    case 'humidity':
+      return { icon: 'cloud', color: '#5B8DB8', label: 'Humidity' };
+    case 'feed':
+      return { icon: 'flask', color: '#8A6FB0', label: 'Feed' };
+  }
+}
+
+/** Full-screen frame shared by every state of the session. */
+function Frame({
+  children,
+  onClose,
+  header,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  header?: React.ReactNode;
+}) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={{ flex: 1, backgroundColor: dark.bg }}>
+      <View
+        style={{
+          flex: 1,
+          width: '100%',
+          maxWidth: 560,
+          alignSelf: 'center',
+          paddingTop: insets.top + 8,
+          paddingBottom: insets.bottom + 16,
+          paddingHorizontal: layout.margin,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}>
+          <View style={{ width: 38 }} />
+          <View style={{ flex: 1, alignItems: 'center' }}>
+            <Text style={[type.cardTitle, { color: dark.ink }]}>Care Mode</Text>
+          </View>
+          <NavButton icon="close" label="Close Care Mode" tint={dark.inkMuted} onPress={onClose} />
+        </View>
+        {header}
+        {children}
+      </View>
+    </View>
+  );
+}
+
+function Stat({ value, label, color }: { value: number; label: string; color: string }) {
+  return (
+    <View
+      style={{
+        flexBasis: '22%',
+        flexGrow: 1,
+        alignItems: 'center',
+        paddingVertical: 14,
+        borderRadius: 14,
+        backgroundColor: dark.surface1,
+        borderWidth: 1,
+        borderColor: dark.cardBorder,
+      }}
+    >
+      <Text style={[type.numBold as any, { color, fontSize: 26 }]}>{value}</Text>
+      <Text style={[type.caption, { color: dark.inkMuted, marginTop: 2 }]}>{label}</Text>
+    </View>
+  );
+}
 
 export default function CareMode() {
   const router = useRouter();
@@ -55,6 +133,7 @@ export default function CareMode() {
   const task = session[index];
   const plant = plants.find((p) => p.id === task?.plantId);
   const finished = index >= session.length;
+  const close = () => (router.canGoBack() ? router.back() : router.replace('/'));
 
   const advance = () => setIndex((i) => i + 1);
 
@@ -65,6 +144,7 @@ export default function CareMode() {
   const confirmAmount = (ml: number) => {
     const t = askAmountFor;
     if (!t) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     logWaterAmount(t.plantId, ml, { suggestedMl: t.ml, source: 'preset' });
     setLoggedWater((n) => n + 1);
     setDoneCount((n) => n + 1);
@@ -99,66 +179,82 @@ export default function CareMode() {
   };
 
   const skip = () => {
+    Haptics.selectionAsync().catch(() => {});
     setSkipped((n) => n + 1);
     advance();
   };
 
   // Storage still hydrating — don't flash "nothing needs you" prematurely.
   if (!hydrated) {
-    return (
-      <Screen mode="light" scroll={false}>
-        <View />
-      </Screen>
-    );
+    return <View style={{ flex: 1, backgroundColor: dark.bg }} />;
   }
 
   // end card — session summary (counts only; no invented projections)
   if (finished || session.length === 0) {
+    const empty = session.length === 0;
     return (
-      <Screen mode="light" scroll={false} style={{ justifyContent: 'center' }}>
-        <Text style={[type.ritualTitle, { color: light.ink }]}>
-          {session.length === 0 ? 'Nothing needs you right now.' : 'Session complete.'}
-        </Text>
-        {session.length === 0 ? (
-          <Text style={[type.body, { color: light.inkMuted, marginTop: 12, lineHeight: 22 }]}>
-            Every reading is in range and no waterings are due. Tasks appear here the moment a
-            sensor reports a problem or a watering comes due.
+      <Frame onClose={close}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <View
+            style={{
+              width: 96,
+              height: 96,
+              borderRadius: 48,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: `${accent.verdant}22`,
+            }}
+          >
+            <Ionicons name={empty ? 'leaf' : 'checkmark-circle'} size={56} color={accent.verdant} />
+          </View>
+          <Text style={[type.ritualTitle, { color: dark.ink, marginTop: 20, textAlign: 'center' }]}>
+            {empty ? 'Nothing needs you right now' : 'Session complete'}
           </Text>
-        ) : (
-          <Card mode="light" style={{ marginTop: 20 }}>
-            <Text style={[type.body, { color: light.ink }]}>
-              {doneCount} of {session.length} tasks done
+          <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, textAlign: 'center', maxWidth: 400 }]}>
+            {empty
+              ? 'Every reading is in range and no waterings are due. Tasks appear here the moment a sensor reports a problem or a watering comes due.'
+              : `${doneCount} of ${session.length} task${session.length === 1 ? '' : 's'} done. Sensored plants confirm on their next reading (about 3 hours), and every log sharpens each plant’s schedule.`}
+          </Text>
+          {!empty && (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 24, alignSelf: 'stretch' }}>
+              <Stat value={doneCount} label="Done" color={accent.verdant} />
+              <Stat value={loggedWater} label="Watered" color={dark.ink} />
+              <Stat value={loggedFeed} label="Fed" color={dark.ink} />
+              <Stat value={skipped} label="Skipped" color={skipped > 0 ? accent.sunbeam : dark.inkMuted} />
+            </View>
+          )}
+          {!empty && skipped > 0 && (
+            <Text style={[type.caption, { color: dark.inkMuted, marginTop: 10, textAlign: 'center' }]}>
+              Skipped tasks come back next session.
             </Text>
-            {(loggedWater > 0 || loggedFeed > 0 || skipped > 0) && (
-              <Text style={[type.caption, { color: light.inkMuted, marginTop: 6 }]}>
-                {[
-                  loggedWater > 0 ? `${loggedWater} watering${loggedWater === 1 ? '' : 's'} logged` : null,
-                  loggedFeed > 0 ? `${loggedFeed} feeding${loggedFeed === 1 ? '' : 's'} logged` : null,
-                  skipped > 0 ? `${skipped} skipped (they'll come back next session)` : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </Text>
-            )}
-            <Text style={[type.caption, { color: light.inkMuted, marginTop: 8, lineHeight: 18 }]}>
-              Sensored plants confirm on their next reading (~3 h); logged waterings and feedings
-              sharpen every schedule and show up in each plant&apos;s history.
-            </Text>
-          </Card>
-        )}
-        <GButton title="Done" onPress={() => router.back()} style={{ marginTop: 20 }} />
-      </Screen>
+          )}
+        </View>
+        <GButton title="Done" onPress={close} />
+      </Frame>
     );
   }
 
-  const kindIcon: Record<DerivedTask['kind'], string> = {
-    water: '💧',
-    'water-check': '💧',
-    hold: '✋',
-    light: '☀️',
-    humidity: '💨',
-    feed: '🧪',
-  };
+  const progress = (
+    <View style={{ marginTop: 10 }}>
+      <View style={{ flexDirection: 'row', gap: 4 }}>
+        {session.map((_, i) => (
+          <View
+            key={i}
+            style={{
+              flex: 1,
+              height: 4,
+              borderRadius: 2,
+              backgroundColor: i < index ? accent.verdant : i === index ? `${accent.verdant}88` : dark.hairline,
+            }}
+          />
+        ))}
+      </View>
+      <Text style={[type.caption, { color: dark.inkMuted, textAlign: 'center', marginTop: 8 }]}>
+        Task {index + 1} of {session.length}
+        {task && task.minutes > 0 ? ` · about ${task.minutes} min` : ''}
+      </Text>
+    </View>
+  );
 
   /* The amount question. It blocks the session on purpose: this is the moment
      the information exists, and a "skip" that silently logs the suggestion is
@@ -172,81 +268,137 @@ export default function CareMode() {
       Math.round((suggested * 2) / 25) * 25,
     ].filter((v, i, a) => a.indexOf(v) === i);
     return (
-      <Screen mode="light" scroll={false} style={{ justifyContent: 'center' }}>
-        <Text style={[type.ritualTitle, { color: light.ink }]}>How much did you pour?</Text>
-        <Text style={[type.body, { color: light.inkMuted, marginTop: 10, lineHeight: 22 }]}>
-          Greenr suggested {suggested} ml for {askAmountFor.plantName}. Telling it the real amount —
-          even if it was nothing like that — is what makes every future amount for this pot right.
-        </Text>
-        <View style={{ gap: 10, marginTop: 22 }}>
-          {options.map((ml) => (
-            <GButton key={ml} title={`${ml} ml`} onPress={() => confirmAmount(ml)} />
-          ))}
-          <GButton
-            title="I didn't measure it"
-            kind="secondary"
-            onPress={() => {
-              const t = askAmountFor;
-              // Records THAT it was watered, with no amount — honest, and it
-              // still mutes the "needs water" prompt until the sensor confirms.
-              logWaterAmount(t.plantId, null, { suggestedMl: t.ml, source: 'assumed' });
-              setLoggedWater((n) => n + 1);
-              setDoneCount((n) => n + 1);
-              setAskAmountFor(null);
-              advance();
-            }}
-          />
+      <Frame onClose={close} header={progress}>
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          <View style={{ alignItems: 'center' }}>
+            <IconTile icon="water" color={accent.verdant} size={56} />
+          </View>
+          <Text style={[type.ritualTitle, { color: dark.ink, marginTop: 18, textAlign: 'center' }]}>
+            How much did you pour?
+          </Text>
+          <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, textAlign: 'center' }]}>
+            Greenr suggested {suggested} ml for {askAmountFor.plantName}. Telling it the real amount — even if it was
+            nothing like that — is what makes every future amount for this pot right.
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 24 }}>
+            {options.map((ml) => {
+              const isSuggested = ml === suggested;
+              return (
+                <Pressable
+                  key={ml}
+                  onPress={() => confirmAmount(ml)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${ml} millilitres`}
+                  style={({ pressed }) => ({
+                    flex: 1,
+                    alignItems: 'center',
+                    paddingVertical: 18,
+                    borderRadius: 16,
+                    borderWidth: isSuggested ? 2 : 1,
+                    borderColor: isSuggested ? accent.verdant : dark.cardBorder,
+                    backgroundColor: pressed ? dark.surface2 : dark.surface1,
+                    transform: [{ scale: pressed ? 0.97 : 1 }],
+                  })}
+                >
+                  <Text style={[type.numBold as any, { color: dark.ink, fontSize: 22 }]}>{ml}</Text>
+                  <Text style={[type.caption, { color: dark.inkMuted }]}>ml</Text>
+                  {isSuggested && (
+                    <Text style={[type.micro, { color: accent.verdant, marginTop: 4 }]}>Suggested</Text>
+                  )}
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
-      </Screen>
+        <GButton
+          title="I didn’t measure it"
+          kind="secondary"
+          onPress={() => {
+            const t = askAmountFor;
+            // Records THAT it was watered, with no amount — honest, and it
+            // still mutes the "needs water" prompt until the sensor confirms.
+            logWaterAmount(t.plantId, null, { suggestedMl: t.ml, source: 'assumed' });
+            setLoggedWater((n) => n + 1);
+            setDoneCount((n) => n + 1);
+            setAskAmountFor(null);
+            advance();
+          }}
+        />
+      </Frame>
     );
   }
 
+  const k = kindStyle(task.kind);
+
   return (
-    <Screen mode="light" scroll={false}>
-      {/* progress dots */}
-      <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 8 }}>
-        {session.map((_, i) => (
-          <View
-            key={i}
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: 4,
-              backgroundColor: i < index ? accent.verdant : i === index ? light.ink : light.hairline,
-            }}
-          />
-        ))}
-      </View>
-      <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 8 }]}>
-        Task {index + 1} of {session.length}
-        {task.minutes > 0 ? ` · ~${task.minutes} min` : ''}
-      </Text>
-      <Pressable
-        onPress={() => router.back()}
-        style={{ position: 'absolute', right: 16, top: 54, minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
-      >
-        <Ionicons name="close" size={24} color={light.inkMuted} />
-      </Pressable>
-
+    <Frame onClose={close} header={progress}>
       <View style={{ flex: 1, justifyContent: 'center' }}>
-        <View style={{ alignItems: 'center' }}>
-          {plant && <PlantAvatar photoUri={plant.photoUri} emoji={plant.emoji} size={84} />}
-          <Text style={{ fontSize: 30, marginTop: 8 }}>{kindIcon[task.kind]}</Text>
-        </View>
-        <Text style={[type.ritualTitle, { color: light.ink, textAlign: 'center', marginTop: 16, fontSize: 24, lineHeight: 32 }]}>
-          {task.title}
-        </Text>
-        <Text style={[type.body, { color: light.inkMuted, textAlign: 'center', marginTop: 12, lineHeight: 22 }]}>
-          {task.why}
-        </Text>
-        {task.sensorVerifies && (
-          <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 14 }]}>
-            The sensor confirms this on its next reading.
+        <View
+          style={{
+            alignItems: 'center',
+            paddingHorizontal: 20,
+            paddingTop: 28,
+            paddingBottom: 24,
+            borderRadius: 24,
+            backgroundColor: dark.surface1,
+            borderWidth: 1,
+            borderColor: dark.cardBorder,
+          }}
+        >
+          {/* the plant, with the task's icon pinned to it */}
+          <View>
+            {plant ? (
+              <PlantAvatar photoUri={plant.photoUri} emoji={plant.emoji} size={104} framed />
+            ) : (
+              <View style={{ width: 104, height: 104 }} />
+            )}
+            <View
+              style={{
+                position: 'absolute',
+                right: -4,
+                bottom: -4,
+                borderRadius: 12,
+                borderWidth: 3,
+                borderColor: dark.surface1,
+              }}
+            >
+              <IconTile icon={k.icon} color={k.color} size={36} />
+            </View>
+          </View>
+
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              marginTop: 18,
+              paddingHorizontal: 10,
+              paddingVertical: 4,
+              borderRadius: 999,
+              backgroundColor: `${k.color}22`,
+            }}
+          >
+            <Text style={[type.micro, { color: k.color, fontWeight: '600' }]}>
+              {k.label.toUpperCase()}
+              {plant ? ` · ${plant.name.toUpperCase()}` : ''}
+            </Text>
+          </View>
+
+          <Text style={[type.ritualTitle, { color: dark.ink, textAlign: 'center', marginTop: 12, fontSize: 26, lineHeight: 32 }]}>
+            {task.title}
           </Text>
-        )}
+          <Text style={[type.body, { color: dark.inkMuted, textAlign: 'center', marginTop: 10 }]}>{task.why}</Text>
+
+          {task.sensorVerifies && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16 }}>
+              <Ionicons name="hardware-chip-outline" size={14} color={accent.sage} />
+              <Text style={[type.caption, { color: dark.inkMuted }]}>The sensor confirms this on its next reading</Text>
+            </View>
+          )}
+        </View>
       </View>
 
-      <View style={{ gap: 10, paddingBottom: 16 }}>
+      <View style={{ gap: 6, marginTop: 16 }}>
         <GButton
           title={
             task.kind === 'water' || task.kind === 'water-check'
@@ -262,9 +414,9 @@ export default function CareMode() {
           onPress={complete}
         />
         <Pressable onPress={skip} style={{ minHeight: 44, alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={[type.body, { color: light.inkMuted }]}>Skip for now</Text>
+          <Text style={[type.body, { color: accent.verdant }]}>Skip for now</Text>
         </Pressable>
       </View>
-    </Screen>
+    </Frame>
   );
 }

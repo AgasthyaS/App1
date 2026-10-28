@@ -29,9 +29,18 @@ const LUX_MIN = 80;
 const LUX_MAX = 65000;
 /** Accepted broad-spectrum daylight conversion, µmol·m⁻²·s⁻¹ per lux. */
 const LUX_TO_PPFD = 0.0185;
-/** Effective indoor photoperiod (h). Daytime light is already a daytime average,
- *  so this integrates the useful part of the day, not a full 24 h. */
-const PHOTOPERIOD_H = 11;
+/**
+ * Hours of daylight the daytime average is integrated over. The average itself
+ * is taken between the real local sunrise and sunset, so the DLI must use the
+ * same length of day — a fixed 11 h was up to ~30% out in midsummer and
+ * midwinter. Set alongside the daylight window (lib/insights); 12 h, matching
+ * that window's 07:00–19:00 fallback, until it is known.
+ */
+let PHOTOPERIOD_H = 12;
+
+export function setPhotoperiodHours(hours: number): void {
+  if (Number.isFinite(hours) && hours >= 4 && hours <= 22) PHOTOPERIOD_H = hours;
+}
 
 /** Light index (0–100) → estimated illuminance in lux (log-interpolated). */
 export function indexToLux(index: number): number {
@@ -45,7 +54,7 @@ export function luxToPpfd(lux: number): number {
 }
 
 /** PPFD (µmol/m²/s) → Daily Light Integral (mol/m²/day) over the photoperiod. */
-export function ppfdToDli(ppfd: number, photoperiodH = PHOTOPERIOD_H): number {
+export function ppfdToDli(ppfd: number, photoperiodH: number = PHOTOPERIOD_H): number {
   return (ppfd * photoperiodH * 3600) / 1e6;
 }
 
@@ -63,15 +72,18 @@ export interface DliEstimate {
 
 /**
  * Full DLI estimate from a light index, with an uncertainty band. The band
- * comes from propagating a ±1 σ multiplicative error on the LDR (uncalibrated
- * photoresistors are typically good to within a factor of ~1.4) through the
+ * comes from propagating a ±1 σ multiplicative error on the LDR (a factor of
+ * about 2 for an uncalibrated part behind the case lid) through the
  * (monotonic) photometry chain.
  */
-export function estimateDli(index: number, photoperiodH = PHOTOPERIOD_H): DliEstimate {
+export function estimateDli(index: number, photoperiodH: number = PHOTOPERIOD_H): DliEstimate {
   const lux = indexToLux(index);
   const ppfd = luxToPpfd(lux);
   const dli = ppfdToDli(ppfd, photoperiodH);
-  const SIGMA = 1.4; // multiplicative 1σ uncertainty of an uncalibrated LDR
+  // Multiplicative 1σ uncertainty. Uncalibrated photoresistors vary by about a
+  // factor of two from part to part, and the case's lid window cuts the light
+  // again before it reaches the sensor — 1.4 was optimistic.
+  const SIGMA = 2.0;
   return {
     dli,
     low: dli / SIGMA,
@@ -82,7 +94,7 @@ export function estimateDli(index: number, photoperiodH = PHOTOPERIOD_H): DliEst
 }
 
 /** The inverse: what light index corresponds to a target DLI (for labelling axes/goals). */
-export function dliToIndex(dli: number, photoperiodH = PHOTOPERIOD_H): number {
+export function dliToIndex(dli: number, photoperiodH: number = PHOTOPERIOD_H): number {
   /*
    * A negative or non-finite DLI has to clamp, not propagate.
    *

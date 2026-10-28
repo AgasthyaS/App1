@@ -129,6 +129,8 @@ export interface GrowthEntry {
 export interface Plant {
   id: string;
   name: string;
+  /** the owner's own free-text notes about this plant */
+  notes?: string;
   species: string; // common name
   latin: string;
   emoji: string; // shown when there's no photo
@@ -249,6 +251,8 @@ export interface Spot {
   seasonalNote?: string;
   /** outdoor spots take temp/RH from local weather, not indoor estimates */
   outdoor?: boolean;
+  /** the owner's own note about this spot ("cold draught in winter") */
+  note?: string;
 }
 
 export type SensorStatus = 'online' | 'late' | 'offline';
@@ -321,4 +325,8 @@ export interface Settings {
   bleGatewayEnabled: boolean;
   /** plant ids the user has muted — no reminders/alerts for these */
   mutedPlantIds: string[];
+  /** milestone ids already celebrated, so each appears once */
+  milestonesSeen?: string[];
+  /** the owner turned off the "while Greenr learns" tips */
+  learningTipsHidden?: boolean;
 }

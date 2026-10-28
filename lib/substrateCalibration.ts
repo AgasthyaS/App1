@@ -1,6 +1,6 @@
 import type { Reading } from './devices';
 import { retentionEstimate } from './soilRetention';
-import { TENSION, waterContentAt, containerThresholds, mlPerPointPerLiter, MAX_SINGLE_POUR_FRACTION } from './soilProfile';
+import { TENSION, displayFromWaterContent, waterContentAt, containerThresholds, mlPerPointPerLiter, MAX_SINGLE_POUR_FRACTION } from './soilProfile';
 import type { Plant, SoilMix, SoilRetention } from './types';
 import { observedPours, poursAndCeiling, type ObservedPour } from './waterBalance';
 import { potVolume } from './watering';
@@ -547,10 +547,11 @@ export function substrateCalibration(
   const perLiter = mlPerPoint != null && vol.liters > 0 ? mlPerPoint / vol.liters : null;
 
   /* EASILY AVAILABLE WATER — the 10→50 cm slice, the part a plant takes freely. */
+  // In DISPLAY points, because it is multiplied by millilitres per display point.
   const eawPoints = Math.max(
     0,
-    waterContentAt(TENSION.containerCapacity, stated ?? 'Standard mix', plant.soilRetention ?? null)
-      - waterContentAt(TENSION.easilyAvailable, stated ?? 'Standard mix', plant.soilRetention ?? null),
+    displayFromWaterContent(waterContentAt(TENSION.containerCapacity, stated ?? 'Standard mix', plant.soilRetention ?? null))
+      - displayFromWaterContent(waterContentAt(TENSION.easilyAvailable, stated ?? 'Standard mix', plant.soilRetention ?? null)),
   );
   const easilyAvailableFraction =
     mlPerPoint != null && potMl > 0 ? (mlPerPoint * eawPoints) / potMl : null;

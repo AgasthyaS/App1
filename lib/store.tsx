@@ -204,6 +204,10 @@ interface GreenrApi extends GreenrState {
   /** Add a growth-journal entry (photo and/or height/leaf measurement + note). */
   logGrowth: (plantId: string, entry: { photoUri?: string; heightCm?: number | null; leaves?: number | null; note?: string }) => void;
   renamePlant: (plantId: string, name: string) => void;
+  /** the owner's free-text notes on a plant */
+  setPlantNotes: (plantId: string, notes: string) => void;
+  /** the owner's note on a spot */
+  setSpotNote: (spotId: string, note: string) => void;
   setPotDimensions: (plantId: string, dims: { potCm?: number | null; potHeightCm?: number | null; potShape?: PotShape }) => void;
   /**
    * Record a repot: the new mix, optionally new pot dimensions, and the date.
@@ -628,6 +632,20 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
+  const setPlantNotes = useCallback((plantId: string, notes: string) => {
+    setState((s) => ({
+      ...s,
+      plants: s.plants.map((p) => (p.id === plantId ? { ...p, notes } : p)),
+    }));
+  }, []);
+
+  const setSpotNote = useCallback((spotId: string, note: string) => {
+    setState((s) => ({
+      ...s,
+      spots: s.spots.map((sp) => (sp.id === spotId ? { ...sp, note } : sp)),
+    }));
+  }, []);
+
   /**
    * Record the pot's measured dimensions. Soil volume needs BOTH the width and
    * the depth — supplying only one leaves the estimate on its fallback, which is
@@ -920,6 +938,8 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       setPlantPhoto,
       logGrowth,
       renamePlant,
+      setPlantNotes,
+      setSpotNote,
       setPotDimensions,
       repotPlant,
       dismissSoilJump,
@@ -935,7 +955,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPotDimensions, repotPlant, dismissSoilJump, rememberMeasurements, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, recordClimateDays, installFirmware, forgetSensor, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPlantNotes, setSpotNote, setPotDimensions, repotPlant, dismissSoilJump, rememberMeasurements, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, recordClimateDays, installFirmware, forgetSensor, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

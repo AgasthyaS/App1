@@ -1,15 +1,27 @@
 /**
  * Seasonal awareness. Plants don't live on a flat calendar — light halves in
  * winter, growth surges in spring, pots dry twice as fast in a summer heat
- * wave. Everything here derives from the current month (northern hemisphere)
+ * wave. Everything here derives from the current month (flipped for the
+ * southern hemisphere once the location is known)
  * and feeds the watering math, the care tasks, and the tips so the app adapts
  * automatically instead of asking the user to remember.
  */
 
 export type Season = 'winter' | 'spring' | 'summer' | 'fall';
 
+/**
+ * Southern-hemisphere seasons run six months apart. Set from the weather
+ * service's latitude (see setHemisphere); northern until a location is known.
+ */
+let SOUTHERN = false;
+
+/** Called with the user's latitude once the weather has loaded. */
+export function setHemisphere(latitude?: number | null): void {
+  if (typeof latitude === 'number' && Number.isFinite(latitude)) SOUTHERN = latitude < 0;
+}
+
 export function currentSeason(d: Date = new Date()): Season {
-  const m = d.getMonth(); // 0-based
+  const m = (d.getMonth() + (SOUTHERN ? 6 : 0)) % 12; // 0-based, shifted south of the equator
   if (m === 11 || m <= 1) return 'winter';
   if (m <= 4) return 'spring';
   if (m <= 7) return 'summer';

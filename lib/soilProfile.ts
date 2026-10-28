@@ -74,28 +74,42 @@ export const PROBE = {
 } as const;
 
 /**
- * van Genuchten parameters per substrate, from the horticultural-substrate
- * literature (peat/coir/perlite/bark retention studies).
+ * van Genuchten parameters per substrate, FITTED to published container-media
+ * figures rather than chosen by hand.
  *
  *   alpha (1/cm) — larger = coarser = drains at lower suction = LOW perched table
  *   n            — larger = more uniform pores = sharper wet→dry transition
  *   thetaS/thetaR— saturated / residual volumetric water content
  *
- * Reference points these reproduce: peat holds ~89% of saturation at 0.1 bar and
- * ~45% at 3 bar, while perlite holds ~68% and ~40% — i.e. coarse media shed water
- * far sooner, which is exactly what alpha encodes.
+ * Each set was least-squares fitted to four points per mix — water held at 10,
+ * 50, 100 and 15 000 cm of suction — taken from the container-substrate
+ * literature: an 80/20 peat–perlite mix holds about 68% water by volume at
+ * container capacity with 15–20% air space (University of Arkansas greenhouse
+ * substrates unit); horticultural perlite about 38% water and 25% air; and De
+ * Boodt's optimum of 20–30% easily available water. The fits reproduce them:
+ *
+ *   mix        capacity  air space  easily available  buffer
+ *   gritty       35%       30%          11%            4%
+ *   chunky       48%       30%          15%            5%
+ *   standard     68%       19%          25%            8%
+ *   dense        72%       10%          30%           10%
+ *
+ * An earlier hand-chosen set put a cactus mix at 6% water when drained and peat
+ * compost at 49%, with n far too high (2.2 for peat against a fitted 1.42), which
+ * made every pot read dry and placed every threshold too low. `formulaCheck`
+ * now asserts these published figures so that cannot recur silently.
  */
 interface VanGenuchten { alpha: number; n: number; thetaS: number; thetaR: number }
 
 const VG: Record<SoilMix, VanGenuchten> = {
   // Grit/pumice/coarse perlite: drains almost immediately, tiny saturated layer.
-  'Gritty / cactus': { alpha: 0.50, n: 3.0, thetaS: 0.72, thetaR: 0.03 },
+  'Gritty / cactus': { alpha: 1.0, n: 1.30, thetaS: 0.65, thetaR: 0.05 },
   // Bark + perlite aroid mix: large pores, drains fast, holds air.
-  'Chunky / aroid':  { alpha: 0.30, n: 2.6, thetaS: 0.80, thetaR: 0.05 },
+  'Chunky / aroid':  { alpha: 0.64, n: 1.27, thetaS: 0.78, thetaR: 0.04 },
   // Peat-based general potting compost.
-  'Standard mix':    { alpha: 0.15, n: 2.2, thetaS: 0.88, thetaR: 0.08 },
+  'Standard mix':    { alpha: 0.143, n: 1.42, thetaS: 0.87, thetaR: 0.10 },
   // Fine/compacted/old compost: strong capillarity, tall saturated layer.
-  'Dense / heavy':   { alpha: 0.08, n: 1.9, thetaS: 0.92, thetaR: 0.12 },
+  'Dense / heavy':   { alpha: 0.064, n: 1.79, thetaS: 0.82, thetaR: 0.18 },
 };
 
 const mixOf = (m?: SoilMix | null): SoilMix =>
@@ -120,9 +134,13 @@ const potDepth = (h: unknown): number =>
   typeof h === 'number' && Number.isFinite(h) && h > 0 ? h : 0;
 
 /**
- * van Genuchten water content at suction `psi` (cm of water, positive number).
- * Returned as a 0–100 index to match the sensor's calibration, where 100 = free
- * water and 0 = dry air.
+ * van Genuchten water content at suction `psi` (cm of water, positive number),
+ * as VOLUMETRIC WATER CONTENT in percent.
+ *
+ * This is NOT the sensor's 0–100 display scale. The two were once treated as the
+ * same thing, which put every model threshold in the wrong place against live
+ * readings: display 33 is about 42% water. Anything compared with a reading goes
+ * through `displayFromWaterContent` first (see `probeReads`).
  */
 export function waterContentAt(psiCm: number, mix: SoilMix, retention?: SoilRetention | null): number {
   // Persisted plants can carry a mix string this build no longer knows, so this
@@ -185,7 +203,7 @@ export interface SubstrateWater {
   refillAt: number;
   /** the reading at which the buffer is gone as well */
   stressAt: number;
-  /** easily available water, in points of the 0–100 scale */
+  /** easily available water, % of volume */
   easilyAvailable: number;
   /** buffering water, in points */
   buffering: number;
@@ -203,11 +221,16 @@ export interface SubstrateWater {
  * content, because every threshold in the app is compared against a reading.
  */
 export function substrateWater(mix: SoilMix, retention?: SoilRetention | null): SubstrateWater {
-  const capacity = waterContentAt(TENSION.containerCapacity, mix, retention);
-  const refillAt = waterContentAt(TENSION.easilyAvailable, mix, retention);
-  const stressAt = waterContentAt(TENSION.wilting, mix, retention);
-  const easilyAvailable = Math.max(0, capacity - refillAt);
-  const buffering = Math.max(0, refillAt - stressAt);
+  // Partitions are volumes of water (De Boodt's 20–30% is % of volume)…
+  const cc = waterContentAt(TENSION.containerCapacity, mix, retention);
+  const ea = waterContentAt(TENSION.easilyAvailable, mix, retention);
+  const wp = waterContentAt(TENSION.wilting, mix, retention);
+  const easilyAvailable = Math.max(0, cc - ea);
+  const buffering = Math.max(0, ea - wp);
+  // …while the thresholds are what the SENSOR will show.
+  const capacity = displayFromWaterContent(cc);
+  const refillAt = displayFromWaterContent(ea);
+  const stressAt = displayFromWaterContent(wp);
   const verdict =
     easilyAvailable < 20 ? 'free-draining' : easilyAvailable > 30 ? 'retentive' : 'ideal';
   return {
@@ -216,7 +239,7 @@ export function substrateWater(mix: SoilMix, retention?: SoilRetention | null): 
     stressAt,
     easilyAvailable,
     buffering,
-    totalAvailable: Math.max(0, capacity - stressAt),
+    totalAvailable: Math.max(0, cc - wp),
     verdict,
     note:
       verdict === 'free-draining'
@@ -266,45 +289,55 @@ export function perchedWaterTableCm(mix: SoilMix, retention?: SoilRetention | nu
   return 40;
 }
 
-/**
- * What the probe reads: the mean water content over the soil it occupies, plus
- * any part of the blade sticking out into the air (which reads as 0 and is what
- * makes a shallow install look so dramatically dry).
- */
-export function probeReads(geo: PotGeometry, waterTableDepthCm = 0): number {
-  if (!Number.isFinite(waterTableDepthCm)) return 0;
+/** How much of the blade is buried in this pot, cm. */
+function buriedCm(geo: PotGeometry): number {
   const potH = potDepth(geo.potHeightCm);
-  // SHALLOW POTS (< 6.5 cm — bonsai trays, seed pans, shallow succulent bowls):
-  // the blade bottoms out before the line, so the remainder stands in air. Air
-  // has a far lower permittivity than wet soil, so it drags the capacitive
-  // reading down in proportion to the exposed length. Two effects then fight
-  // each other: a shallow pot is proportionally WETTER (the saturated layer is
-  // a bigger share of it) but its reading is DILUTED by the exposed blade. Both
-  // are modelled, so a 4 cm pan doesn't masquerade as a bone-dry deep pot.
   /*
    * `probeDepthCm` is optional, user-entered, and persisted, so it arrives as
-   * NaN often enough to matter — and NaN defeats this guard rather than tripping
-   * it: `Math.min(NaN, potH)` is NaN, `NaN <= 0` is FALSE, so the early return
-   * below does not fire and every threshold downstream comes out NaN. That is
-   * how a watering schedule ended up reading "About NaN ml — still learning how
-   * often". An unstated depth is not a depth of zero; it is the standard
-   * insertion, which is what `?? PROBE.insertCm` already meant to say.
+   * NaN often enough to matter — and NaN defeats a `<= 0` guard rather than
+   * tripping it. An unstated depth is not a depth of zero; it is the standard
+   * insertion.
    */
   const stated = typeof geo.probeDepthCm === 'number' && Number.isFinite(geo.probeDepthCm)
     ? geo.probeDepthCm
     : PROBE.insertCm;
-  const depth = Math.max(0, Math.min(stated, potH));
-  const buried = Math.min(depth, PROBE.sensingCm);
-  const inAir = Math.max(0, PROBE.sensingCm - buried);
-  if (!(buried > 0)) return 0;
+  return Math.min(Math.max(0, Math.min(stated, potH)), PROBE.sensingCm);
+}
 
+/**
+ * Mean VOLUMETRIC water content (%) of the soil the blade occupies. This is a
+ * quantity of water, used where the model reasons about water (the depth
+ * correction, the dry-end floor) rather than about what the screen will show.
+ */
+export function probeBandWater(geo: PotGeometry, waterTableDepthCm = 0): number {
+  if (!Number.isFinite(waterTableDepthCm)) return 0;
+  const potH = potDepth(geo.potHeightCm);
+  const buried = buriedCm(geo);
+  if (!(buried > 0)) return 0;
   const STEPS = 60;
   let sum = 0;
   for (let i = 0; i < STEPS; i++) {
     const depthFromTop = ((i + 0.5) / STEPS) * buried;
     sum += moistureAtHeight(potH - depthFromTop, geo, waterTableDepthCm);
   }
-  return (sum / STEPS) * (buried / (buried + inAir));
+  return sum / STEPS;
+}
+
+/**
+ * What the probe READS, on its own 0–100 display scale: the water content of the
+ * soil it occupies, converted to the display scale through the Topp curve, then
+ * diluted by any blade standing in the air above a shallow pot. The display is
+ * linear in permittivity, so the air dilution is applied on that scale.
+ *
+ * Returning display units is what makes this comparable with a live reading;
+ * returning water content here was the units mix-up that placed the modelled
+ * "full" pot at 33 when real full pots read 53–78.
+ */
+export function probeReads(geo: PotGeometry, waterTableDepthCm = 0): number {
+  if (!Number.isFinite(waterTableDepthCm)) return 0;
+  const buried = buriedCm(geo);
+  if (!(buried > 0)) return 0;
+  return displayFromWaterContent(probeBandWater(geo, waterTableDepthCm)) * (buried / PROBE.sensingCm);
 }
 
 /**
@@ -350,9 +383,9 @@ export function rootZoneMoisture(geo: PotGeometry, waterTableDepthCm = 0, rootFr
   return sum / STEPS;
 }
 
-/** How much wetter the root zone is than the probe suggests, in points. */
+/** How much wetter the root zone is than the probe suggests, in display points. */
 export function rootZoneOffset(geo: PotGeometry, waterTableDepthCm = 0): number {
-  return rootZoneMoisture(geo, waterTableDepthCm) - probeReads(geo, waterTableDepthCm);
+  return displayFromWaterContent(rootZoneMoisture(geo, waterTableDepthCm)) - probeReads(geo, waterTableDepthCm);
 }
 
 /**
@@ -366,7 +399,8 @@ export function rootZoneFromReading(readingPct: number, geo: PotGeometry): {
   offset: number;
 } {
   const d = inferWaterTableDepth(readingPct, geo);
-  const rz = rootZoneMoisture(geo, d);
+  // On the reading's own scale, so "the roots are at X" compares with the probe.
+  const rz = displayFromWaterContent(rootZoneMoisture(geo, d));
   return { rootZonePct: rz, waterTableDepthCm: d, offset: rz - readingPct };
 }
 
@@ -379,10 +413,10 @@ export function profileBands(
   const pwt = perchedWaterTableCm(mix);
   const probeDepth = geo.probeDepthCm ?? PROBE.insertCm;
   return [
-    { label: 'Surface', pct: moistureAtHeight(geo.potHeightCm, geo, waterTableDepthCm) },
+    { label: 'Surface', pct: displayFromWaterContent(moistureAtHeight(geo.potHeightCm, geo, waterTableDepthCm)) },
     { label: `Probe zone (top ${probeDepth} cm)`, pct: probeReads(geo, waterTableDepthCm) },
-    { label: 'Mid root zone', pct: moistureAtHeight(geo.potHeightCm * 0.45, geo, waterTableDepthCm) },
-    { label: `Saturated layer (${pwt.toFixed(1)} cm)`, pct: moistureAtHeight(pwt / 2, geo, waterTableDepthCm) },
+    { label: 'Mid root zone', pct: displayFromWaterContent(moistureAtHeight(geo.potHeightCm * 0.45, geo, waterTableDepthCm)) },
+    { label: `Saturated layer (${pwt.toFixed(1)} cm)`, pct: displayFromWaterContent(moistureAtHeight(pwt / 2, geo, waterTableDepthCm)) },
   ];
 }
 
@@ -535,6 +569,27 @@ export function waterContentFromDisplay(displayPct: number): number {
   return Math.max(0, Math.min(100, theta * 100));
 }
 
+/**
+ * The display reading that corresponds to a volumetric water content — the exact
+ * inverse of `waterContentFromDisplay`, by bisection (the Topp curve is monotone
+ * over the display range). This is the conversion every model value must pass
+ * through before it is compared with a live reading.
+ */
+export function displayFromWaterContent(thetaPct: number): number {
+  if (!Number.isFinite(thetaPct)) return 0;
+  const target = Math.max(0, Math.min(100, thetaPct));
+  if (target <= waterContentFromDisplay(0)) return 0;
+  if (target >= waterContentFromDisplay(100)) return 100;
+  let lo = 0;
+  let hi = 100;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (waterContentFromDisplay(mid) < target) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
 /* The Topp curve gives the right SHAPE but the wrong MAGNITUDE for potting mix.
  * Taken literally it says rehydrating a dry pot to container capacity needs 45%
  * of the pot's volume in water, where practical horticulture puts a thorough
@@ -632,7 +687,7 @@ function rawProfileFactor(geo: PotGeometry): number {
   let den = 0;
   for (let d = 0.5; d <= 12; d += 0.5) {
     const dCol = columnMean(geo, d - 0.25) - columnMean(geo, d + 0.25);
-    const dProbe = probeReads(geo, d - 0.25) - probeReads(geo, d + 0.25);
+    const dProbe = probeBandWater(geo, d - 0.25) - probeBandWater(geo, d + 0.25);
     if (dProbe > 0.01) {
       num += dCol;
       den += dProbe;
@@ -676,7 +731,7 @@ export function profileCorrection(geo: PotGeometry): ProfileCorrection {
 
   // Is the probe zone pinned at the dry end, where it cannot resolve change?
   const residual = waterContentAt(1e5, mix, geo.soilRetention);
-  const atProbe = probeReads(geo, 2);
+  const atProbe = probeBandWater(geo, 2);
   const probeBlind = atProbe - residual < 1.5;
 
   const factor = probeBlind ? 1 : Math.min(FACTOR_MAX, Math.max(FACTOR_MIN, raw));

@@ -1,5 +1,5 @@
 import type { Reading } from './devices';
-import { probeReads, waterContentAt, type PotGeometry } from './soilProfile';
+import { displayFromWaterContent, probeReads, waterContentAt, type PotGeometry } from './soilProfile';
 import type { Plant, SoilMix, SoilRetention } from './types';
 import { REFERENCE_VPD_KPA, vpdKpa } from './vpd';
 
@@ -116,13 +116,18 @@ const SPANNED_FRACTION = 0.55;
  * all. Retention is a property of the compost; the container is already modelled
  * separately, and double-counting it here corrupts both.
  *
- * The value is the range of the app's reference pot — a 16 cm standard mix, whose
- * probe reads 41.2% just drained against a residual of 8%, falling to the 11%
- * where that pot wants water: ln((41.2 − 8) / (11 − 8)) ≈ 2.4. So one class
- * boundary lands where horticulture puts it — 'typical' compost, watered
- * thoroughly, is ready again in three to five days.
+ * The value is the range of the app's reference pot — a 16 cm standard mix,
+ * whose probe reads 73.7 just drained against a residual of 6.9, falling to 33.6
+ * where that pot wants water (all on the display scale the readings use):
+ * ln((73.7 − 6.9) / (33.6 − 6.9)) ≈ 0.92.
+ *
+ * It was 2.4, computed from an earlier soil model whose curves were wrong and
+ * whose output was water content rather than display units. Measured τ comes
+ * from real readings, so the constant has to describe the range real readings
+ * actually travel — with 2.4 a pot drying full-to-refill in four days was being
+ * reported as ten.
  */
-const E_FOLDINGS_TO_DRY = 2.4;
+const E_FOLDINGS_TO_DRY = 0.92;
 
 /**
  * Bounds on the evaporative-demand correction.
@@ -201,6 +206,8 @@ export interface RetentionRun {
   spanned: boolean;
   /** plain observed decline, points per day — the number an owner would eyeball */
   ptsPerDay: number;
+  /** the floor the curve was fitted toward, display points */
+  residual: number;
 }
 
 export interface RetentionEstimate {
@@ -209,6 +216,10 @@ export interface RetentionEstimate {
   dryDays: number;
   /** demand-corrected e-folding time, days */
   tauDays: number;
+  /** e-folding time AS OBSERVED in this spot (not demand-corrected), days — for projecting dates here */
+  tauObservedDays: number;
+  /** the floor the readings decay toward, display points */
+  residual: number;
   /** observed decline in display points per day, averaged over the runs */
   ptsPerDay: number;
   runs: RetentionRun[];
@@ -398,7 +409,8 @@ export function dryDownRuns(plant: RetentionPlant, history: Reading[]): Retentio
    * soil as 1.5 days — turning `fast` into `typical`. Evidence overrules theory;
    * agreeing with theory is not evidence against it.
    */
-  const book = waterContentAt(1e5, mix);
+  // The mix's residual water, converted to the display scale the readings are on.
+  const book = displayFromWaterContent(waterContentAt(1e5, mix));
   const lowestSeen = Math.min(...pts.map((p) => p.v));
 
   /*
@@ -489,6 +501,7 @@ export function dryDownRuns(plant: RetentionPlant, history: Reading[]): Retentio
       fit: fitted.fit,
       spanned: covered >= SPANNED_FRACTION,
       ptsPerDay: drop / (hours / 24),
+      residual,
     });
   }
   return runs;
@@ -547,6 +560,8 @@ function computeEstimate(plant: RetentionPlant, history: Reading[]): RetentionEs
   const logTau = runs.reduce((a, r) => a + Math.log(r.tauRefDays) * weightOf(r), 0) / totalWeight;
   const tauDays = Math.exp(logTau);
   const dryDays = tauDays * E_FOLDINGS_TO_DRY;
+  const tauObservedDays = Math.exp(runs.reduce((a, r) => a + Math.log(r.tauDays) * weightOf(r), 0) / totalWeight);
+  const residual = runs[runs.length - 1].residual;
 
   const observedHours = runs.reduce((a, r) => a + r.hours, 0);
   const fit = runs.reduce((a, r) => a + r.fit * weightOf(r), 0) / totalWeight;
@@ -593,6 +608,8 @@ function computeEstimate(plant: RetentionPlant, history: Reading[]): RetentionEs
     value,
     dryDays,
     tauDays,
+    tauObservedDays,
+    residual,
     ptsPerDay,
     runs,
     observedHours,

@@ -1,6 +1,10 @@
 {
   "cleanUrls": true,
   "trailingSlash": false,
+  "redirects": [
+    { "source": "/garden", "destination": "/plants", "permanent": true },
+    { "source": "/home", "destination": "/rooms", "permanent": true }
+  ],
   "rewrites": [
     { "source": "/plant/:id", "destination": "/plant/[id]" },
     { "source": "/dashboard/:id", "destination": "/dashboard/[id]" },

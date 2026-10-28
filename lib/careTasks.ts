@@ -1,10 +1,10 @@
-import { waterAmount } from './advice';
 import { applyCalibration, calibrationFor, type SensorCalibration } from './calibration';
 import type { Reading } from './devices';
 import { estimateWaterSchedule } from './estimate';
 import { eventDaysAgo } from './format';
 import { dayLight, lightVerdict, recentLightAvg, type DayLight } from './insights';
 import { idealsFor } from './plantStatus';
+import { listPourMl } from './pourAmount';
 import { currentSeason, SEASON_LABEL } from './season';
 import { activePlants } from './store';
 import type { Plant, Spot } from './types';
@@ -181,15 +181,16 @@ export function deriveCareTasks(opts: {
       // Sensorless: the estimate cycle decides when a check is due.
       const est = estimateWaterSchedule(p);
       if (est.status === 'due') {
-        const rec = waterAmount(p);
+        // The same figure the plant screen's Water button quotes (lib/pourAmount).
+        const ml = listPourMl(p, null, [], lightDaily?.[p.id]);
         out.push({
           id: `ct-${p.id}-check`,
           plantId: p.id,
           plantName: p.name,
           kind: 'water-check',
           title: `Check ${p.name}'s soil — likely due`,
-          why: `${est.detail} If the top inch is dry, give it ${rec.label}.`,
-          ml: rec.ml,
+          why: `${est.detail} If the top inch is dry, give it about ${ml} ml.`,
+          ml,
           sensorVerifies: false,
           minutes: 2,
         });

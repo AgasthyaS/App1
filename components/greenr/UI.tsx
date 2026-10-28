@@ -73,7 +73,7 @@ export function Card({
       padding: layout.cardPadding,
       // a whisper of a border gives depth without shadows on dark (§1.3)
       borderWidth: 1,
-      borderColor: mode === 'dark' ? 'rgba(255,255,255,0.05)' : t.hairline,
+      borderColor: mode === 'dark' ? dark.cardBorder : t.hairline,
     },
     mode === 'light' && {
       shadowColor: '#3D2B1F',
@@ -111,7 +111,7 @@ export function SectionHeader({
     <Text
       style={[
         type.sectionHeader,
-        { color: mode === 'dark' ? dark.inkMuted : light.inkMuted, marginBottom: 8, marginTop: 20 },
+        { color: mode === 'dark' ? dark.inkMuted : light.inkMuted, marginBottom: 8, marginTop: 24, marginLeft: 4 },
         style,
       ]}
     >
@@ -180,7 +180,7 @@ export function GButton({
         {
           backgroundColor: kind === 'secondary' ? t.surface2 : 'transparent',
           borderWidth: kind === 'destructive' ? 1 : kind === 'secondary' ? 1 : 0,
-          borderColor: kind === 'destructive' ? accent.clay : mode === 'dark' ? 'rgba(255,255,255,0.07)' : t.hairline,
+          borderColor: kind === 'destructive' ? accent.clay : mode === 'dark' ? dark.cardBorder : t.hairline,
           opacity: disabled ? 0.4 : 1,
           transform: [{ scale: pressed ? 0.97 : 1 }],
         },

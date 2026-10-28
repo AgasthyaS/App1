@@ -1,5 +1,6 @@
 import { bridgeGapH, OFFLINE_GAP_H, type Reading } from './devices';
 import { plantLabel } from './format';
+import { setPhotoperiodHours } from './lightModel';
 import { idealsFor } from './plantStatus';
 
 /**
@@ -45,6 +46,7 @@ export function setDaylightWindow(sunriseIso?: string | null, sunsetIso?: string
   if (end - start < 4 || end - start > 22) return; // guard polar day/night + bad parses
   DAY_START_H = start;
   DAY_END_H = end;
+  setPhotoperiodHours(end - start);
 }
 
 /** The daylight window in use, in local hours — daylight LENGTH matters as much

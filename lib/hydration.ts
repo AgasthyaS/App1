@@ -92,7 +92,13 @@ export interface HydrationModel {
   /** 0–1, grows with events + calibration pairs; lower when sampling is coarse */
   confidence: number;
   /** ml to last `targetDays` starting from `fromMoisture`; null if drying unknown */
-  mlForDays: (targetDays: number, fromMoisture: number, band: [number, number]) => EfficientPour | null;
+  mlForDays: (
+    targetDays: number,
+    fromMoisture: number,
+    band: [number, number],
+    /** the pot's fitted dry-down; when given the peak is found along that curve */
+    decay?: { tauDays: number; residual: number } | null,
+  ) => EfficientPour | null;
 }
 
 interface Pot {
@@ -369,17 +375,28 @@ export function buildHydrationModel(
       (0.7 + 0.3 * cadenceFactor),
   );
 
-  const mlForDays = (targetDays: number, fromMoisture: number, b: [number, number]): EfficientPour | null => {
-    if (dryingPerDay == null || dryingPerDay <= 0) return null;
+  const mlForDays = (
+    targetDays: number,
+    fromMoisture: number,
+    b: [number, number],
+    decay?: { tauDays: number; residual: number } | null,
+  ): EfficientPour | null => {
     const low = b[0];
-    // Peak needed so that (peak − low) / dryingRate ≈ targetDays.
-    let neededPeak = low + dryingPerDay * targetDays;
+    const curve = decay && decay.tauDays > 0 && low > decay.residual + 0.5 ? decay : null;
+    if (!curve && (dryingPerDay == null || dryingPerDay <= 0)) return null;
+    // Peak needed to last targetDays: along the fitted exponential when known
+    // (peak = floor + (low − floor)·e^(days/τ)), otherwise a straight line.
+    let neededPeak = curve
+      ? curve.residual + (low - curve.residual) * Math.exp(targetDays / curve.tauDays)
+      : low + (dryingPerDay as number) * targetDays;
     const capped = neededPeak > saturationPct;
     if (capped) neededPeak = saturationPct;
     const start = Math.min(fromMoisture, neededPeak);
     const neededRise = Math.max(0, neededPeak - start);
     const ml = Math.max(25, Math.round((neededRise * mlPerPct) / 25) * 25);
-    const lastsDays = Math.round(((neededPeak - low) / dryingPerDay) * 10) / 10;
+    const lastsDays = curve
+      ? Math.round(curve.tauDays * Math.log((neededPeak - curve.residual) / (low - curve.residual)) * 10) / 10
+      : Math.round(((neededPeak - low) / (dryingPerDay as number)) * 10) / 10;
     return { ml, peak: Math.round(neededPeak), capped, lastsDays };
   };
 

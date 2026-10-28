@@ -131,8 +131,17 @@ export function blendBand(
   if (!measured) return { band: book, basis: 'book', weight: 0 };
   const w = sampleWeight(samplePlants);
   if (w <= 0) return { band: book, basis: 'book', weight: 0 };
-  const lo = book[0] * (1 - w) + measured[0] * w;
-  const hi = book[1] * (1 - w) + measured[1] * w;
+  /*
+   * The stored figures are the INTERQUARTILE range of where thriving plants
+   * lived — the middle half — which is narrower than what the species
+   * tolerates. Used as-is it would flag ever more healthy plants as out of range
+   * as data accumulated. Widening by half the IQR each side gives roughly the
+   * 10th–90th percentile for a bell-shaped spread.
+   */
+  const iqr = Math.max(0, measured[1] - measured[0]);
+  const wide: [number, number] = [measured[0] - iqr * 0.5, measured[1] + iqr * 0.5];
+  const lo = book[0] * (1 - w) + wide[0] * w;
+  const hi = book[1] * (1 - w) + wide[1] * w;
   return { band: [lo, hi], basis: w > 0.75 ? 'measured' : 'blended', weight: w };
 }
 

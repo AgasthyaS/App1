@@ -92,25 +92,25 @@ export default function RangeRibbon({
             {/* over-wet zone */}
             <Rect x={GUTTER} y={PAD_TOP} width={plotW} height={Math.max(0, y(band[1]) - PAD_TOP)} fill={accent.clay} opacity={0.12} />
             {overWetTall && (
-              <SvgText x={GUTTER + 8} y={PAD_TOP + 16} fill={accent.clay} opacity={0.85} fontSize={10} fontFamily="Inter_500Medium">
+              <SvgText x={GUTTER + 8} y={PAD_TOP + 16} fill={accent.clay} opacity={0.85} fontSize={10} fontFamily="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">
                 too wet — root-rot risk
               </SvgText>
             )}
             {/* comfort ribbon */}
             <Rect x={GUTTER} y={y(band[1])} width={plotW} height={y(band[0]) - y(band[1])} fill={accent.sage} opacity={0.16} />
-            <SvgText x={GUTTER + 8} y={y(band[1]) + 15} fill={accent.sage} fontSize={10} fontFamily="Inter_500Medium">
+            <SvgText x={GUTTER + 8} y={y(band[1]) + 15} fill={accent.sage} fontSize={10} fontFamily="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">
               comfort band
             </SvgText>
             <Line x1={GUTTER} x2={w} y1={y(band[1])} y2={y(band[1])} stroke={accent.sage} opacity={0.35} strokeWidth={1} />
             <Line x1={GUTTER} x2={w} y1={y(band[0])} y2={y(band[0])} stroke={accent.sage} opacity={0.35} strokeWidth={1} />
             {/* axis labels: band bounds + 0 */}
-            <SvgText x={GUTTER - 6} y={y(band[1]) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="Inter_500Medium">
+            <SvgText x={GUTTER - 6} y={y(band[1]) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">
               {band[1]}%
             </SvgText>
-            <SvgText x={GUTTER - 6} y={y(band[0]) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="Inter_500Medium">
+            <SvgText x={GUTTER - 6} y={y(band[0]) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">
               {band[0]}%
             </SvgText>
-            <SvgText x={GUTTER - 6} y={y(0) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="Inter_500Medium">
+            <SvgText x={GUTTER - 6} y={y(0) + 3.5} fill={dark.inkMuted} fontSize={10} textAnchor="end" fontFamily="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">
               dry
             </SvgText>
             {/* trace */}

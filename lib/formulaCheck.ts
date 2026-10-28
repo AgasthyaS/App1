@@ -3,6 +3,7 @@ import {
   TENSION,
   waterContentAt,
   waterContentFromDisplay,
+  displayFromWaterContent,
   waterFractionBetween,
   containerThresholds,
   inferWaterTableDepth,
@@ -137,17 +138,17 @@ export function runFormulaChecks(): FormulaReport {
    * approximation error and tight enough to catch a wrong coefficient.
    */
   const TETENS = 'SVP(T) = 0.61078 · exp(17.27·T / (T + 237.3))';
-  const TETENS_SRC = 'Tetens (1930); values cross-checked against standard steam tables';
+  const TETENS_SRC = 'Tetens (1930); reference values from IAPWS-95 steam tables';
   ref(c, 'svp-0', TETENS, TETENS_SRC, 'Saturation vapour pressure at 0 °C is 0.6112 kPa',
-    saturationVaporPressureKpa(0), 0.6112, 0.005);
-  ref(c, 'svp-10', TETENS, TETENS_SRC, 'Saturation vapour pressure at 10 °C is 1.2281 kPa',
-    saturationVaporPressureKpa(10), 1.2281, 0.005);
-  ref(c, 'svp-20', TETENS, TETENS_SRC, 'Saturation vapour pressure at 20 °C is 2.3388 kPa',
-    saturationVaporPressureKpa(20), 2.3388, 0.005);
-  ref(c, 'svp-25', TETENS, TETENS_SRC, 'Saturation vapour pressure at 25 °C is 3.1690 kPa',
-    saturationVaporPressureKpa(25), 3.1690, 0.005);
-  ref(c, 'svp-30', TETENS, TETENS_SRC, 'Saturation vapour pressure at 30 °C is 4.2455 kPa',
-    saturationVaporPressureKpa(30), 4.2455, 0.005);
+    saturationVaporPressureKpa(0), 0.61121, 0.005);
+  ref(c, 'svp-10', TETENS, TETENS_SRC, 'Saturation vapour pressure at 10 °C is 1.2282 kPa',
+    saturationVaporPressureKpa(10), 1.2282, 0.005);
+  ref(c, 'svp-20', TETENS, TETENS_SRC, 'Saturation vapour pressure at 20 °C is 2.3392 kPa',
+    saturationVaporPressureKpa(20), 2.3392, 0.005);
+  ref(c, 'svp-25', TETENS, TETENS_SRC, 'Saturation vapour pressure at 25 °C is 3.1699 kPa',
+    saturationVaporPressureKpa(25), 3.1699, 0.005);
+  ref(c, 'svp-30', TETENS, TETENS_SRC, 'Saturation vapour pressure at 30 °C is 4.2470 kPa',
+    saturationVaporPressureKpa(30), 4.2470, 0.005);
   prop(c, 'svp-monotone', TETENS, 'Clausius–Clapeyron: warmer air holds more vapour',
     'Saturation pressure rises with every degree, with no exceptions',
     Array.from({ length: 60 }, (_, i) => i).every(
@@ -214,6 +215,36 @@ export function runFormulaChecks(): FormulaReport {
     'Calling a compost more retentive raises what it holds at every tension',
     waterContentAt(TENSION.easilyAvailable, 'Standard mix', 'very-retentive')
       > waterContentAt(TENSION.easilyAvailable, 'Standard mix', 'fast'));
+
+  /* ── 3b. THE CURVES AGAINST PUBLISHED CONTAINER FIGURES ────────────────────
+   *
+   * The properties above hold for ANY parameters, which is exactly how a set
+   * that put cactus mix at 6% water and peat compost at 49% passed them for
+   * months. These pin the curves to measured container figures instead.
+   */
+  const CC_SRC = 'Univ. of Arkansas greenhouse substrates: 80/20 peat–perlite ≈ 68% water at container capacity; perlite ≈ 38% water, 25% air';
+  ref(c, 'cc-standard', 'θ(10 cm), standard mix', CC_SRC,
+    'A peat-based mix holds about 68% water by volume once drained',
+    waterContentAt(TENSION.containerCapacity, 'Standard mix'), 68, 0.05);
+  prop(c, 'cc-gritty', 'θ(10 cm), gritty mix', CC_SRC,
+    'A gritty / perlite-heavy mix holds 30–45% water once drained, not single figures',
+    waterContentAt(TENSION.containerCapacity, 'Gritty / cactus') >= 30
+      && waterContentAt(TENSION.containerCapacity, 'Gritty / cactus') <= 45);
+  prop(c, 'eaw-standard-ideal', 'EAW = θ(10) − θ(50), standard mix', 'De Boodt & Verdonck (1972): 20–30% easily available water is ideal',
+    'An ordinary peat compost is judged ideal, not retentive, by the 20–30% rule',
+    (() => {
+      const e = waterContentAt(10, 'Standard mix') - waterContentAt(50, 'Standard mix');
+      return e >= 20 && e <= 30;
+    })());
+  prop(c, 'afp-standard', 'air space = θs − θ(10), standard mix', CC_SRC,
+    'A peat-based mix keeps 10–30% air space once drained',
+    (() => {
+      const a = waterContentAt(0, 'Standard mix') - waterContentAt(10, 'Standard mix');
+      return a >= 10 && a <= 30;
+    })());
+  prop(c, 'display-inverse', 'display ↔ water content (Topp and its inverse)', 'Internal consistency',
+    'Converting a reading to water content and back returns the same reading',
+    [5, 20, 40, 60, 80, 95].every((d) => near(displayFromWaterContent(waterContentFromDisplay(d)), d, 0.01)));
 
   /* ── 4. DE BOODT & VERDONCK (1972): container water partitioning ─────────── */
   const DB = 'CC = θ(10 cm) · EAW = θ(10) − θ(50) · WBC = θ(50) − θ(100)';
@@ -343,20 +374,11 @@ export function runFormulaChecks(): FormulaReport {
   const INV_SRC = 'Internal consistency — an inverse that does not invert is a silent error';
   const geo = { potHeightCm: 20, soilMix: 'Standard mix' as const, soilRetention: null, probeDepthCm: null };
   /*
-   * The first run of this checker failed here, and the failure was worth having.
-   *
-   * A 20 cm standard-mix pot can only read 18.2%–33.1% AT HYDROSTATIC
-   * EQUILIBRIUM — that is the entire range the retention curve can produce when
-   * the water has finished settling. Ask the inverse for 45% and there is no
-   * water-table depth that answers, so it clamps, and the round-trip cannot
-   * close. The inverse is right; the original check was simply asking it for
-   * readings that do not exist in its domain.
-   *
-   * That equilibrium range being so narrow is not an artefact either. It is
-   * exactly why the app never trusts the modelled capacity on its own: a real
-   * watering does not leave a pot at equilibrium, it leaves it draining, and the
-   * probe reads far higher while that lasts. Hence `capacityAt` letting an
-   * observed ceiling outrank the model.
+   * The inverse only exists inside the range the curve can produce at
+   * hydrostatic equilibrium — about 8 to 67 on the display scale for a 20 cm
+   * standard pot. Asked for a reading outside it there is no water-table depth
+   * that answers, so it clamps. The property asserted is the true one: exact
+   * inside the domain, clamped and finite outside it.
    *
    * So the property worth asserting is the true one — exact inside the domain,
    * clamped and finite outside it — which is both stronger and honest about
@@ -376,9 +398,9 @@ export function runFormulaChecks(): FormulaReport {
       const d = inferWaterTableDepth(r, geo);
       return Number.isFinite(d) && d >= 0 && Number.isFinite(probeReads(geo, d));
     }));
-  prop(c, 'equilibrium-range-known', INV, INV_SRC,
-    'The app knows the equilibrium range is narrow, which is why an observed ceiling can outrank it',
-    equilibriumHigh > equilibriumLow && equilibriumHigh - equilibriumLow < 40);
+  prop(c, 'equilibrium-full-realistic', 'probeReads(d = 0)', 'Observed: real full pots in this app read 53–78',
+    'A just-drained 20 cm standard pot reads where real full pots read (50–85), not in the 30s',
+    equilibriumHigh >= 50 && equilibriumHigh <= 85 && equilibriumLow < equilibriumHigh);
   prop(c, 'thresholds-ordered', 'containerThresholds', INV_SRC,
     'A pot always refills below its capacity, and stresses below that again',
     [10, 16, 24, 32].every((h) => {

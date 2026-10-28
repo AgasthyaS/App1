@@ -28,6 +28,40 @@ const LIGHT_LEVELS: { key: string; label: string; hint: string; dli: number; emo
   { key: 'direct', label: 'Direct sun', hint: 'Hours of direct sun, or outdoors', dli: 16, emoji: '☀️' },
 ];
 
+/**
+ * GUIDED LIGHT. "How bright is it?" is a question people answer badly — a room
+ * that feels bright to us can be a tenth of what a plant needs. Distance from the
+ * window and the way it faces are things anyone can answer accurately, and
+ * together they set the light far better.
+ *
+ * Distance gives the light at a south-facing window (daily light integral,
+ * mol/m²/day): it falls off steeply, roughly halving with every metre or so into
+ * the room. Direction then scales it — a south window gets sun most of the day,
+ * east and west for half of it, north none directly (northern hemisphere).
+ */
+const WINDOW_DISTANCE: { key: string; label: string; hint: string; dli: number }[] = [
+  { key: 'sill', label: 'On the windowsill', hint: 'Right against the glass', dli: 10 },
+  { key: 'near', label: 'About 1 m away', hint: 'An arm’s length from the window', dli: 4.5 },
+  { key: 'mid', label: '2–3 m away', hint: 'Across part of the room', dli: 2 },
+  { key: 'far', label: 'Away from windows', hint: 'A hallway, a back corner', dli: 0.8 },
+];
+const WINDOW_FACING: { key: string; label: string; factor: number }[] = [
+  { key: 'south', label: 'South', factor: 1 },
+  { key: 'west', label: 'West', factor: 0.8 },
+  { key: 'east', label: 'East', factor: 0.7 },
+  { key: 'north', label: 'North', factor: 0.35 },
+  { key: 'unsure', label: 'Not sure', factor: 0.65 },
+];
+
+/** DLI for an indoor spot from its window distance and direction. */
+function guidedDli(distance: string | null, facing: string | null): number {
+  const d = WINDOW_DISTANCE.find((x) => x.key === distance) ?? WINDOW_DISTANCE[1];
+  const f = WINDOW_FACING.find((x) => x.key === facing) ?? WINDOW_FACING[4];
+  // Far from any window the light is mostly reflected, so direction matters little.
+  const factor = d.key === 'far' ? Math.max(0.75, f.factor) : f.factor;
+  return Math.round(d.dli * factor * 10) / 10;
+}
+
 type Step = 'camera' | 'identify' | 'details' | 'spot' | 'water' | 'score';
 
 /** Browse groups for the 1000+ catalog — search is exact, browsing is how you
@@ -76,6 +110,8 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
   const [newSpotName, setNewSpotName] = useState('');
   const [newSpotOutdoor, setNewSpotOutdoor] = useState(!!initialOutdoor);
   const [lightLevel, setLightLevel] = useState<string | null>(initialOutdoor ? 'direct' : null);
+  const [windowDistance, setWindowDistance] = useState<string | null>(null);
+  const [windowFacing, setWindowFacing] = useState<string | null>(null);
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
   const [lastWatered, setLastWatered] = useState<string | null>(null);
   const [browse, setBrowse] = useState<number | null>(null);
@@ -106,18 +142,19 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
 
   const createSpot = () => {
     const level = LIGHT_LEVELS.find((l) => l.key === lightLevel) ?? LIGHT_LEVELS[1];
+    const dli = newSpotOutdoor ? level.dli : guidedDli(windowDistance, windowFacing);
     const spot: Spot = {
       id: `sp-${Date.now().toString(36)}`,
       name: newSpotName.trim(),
       room: newSpotOutdoor ? 'Outdoors' : 'Living room',
-      dli: level.dli,
+      dli,
       tempRange: newSpotOutdoor ? [58, 94] : [68, 75],
       rh: newSpotOutdoor ? 48 : 55,
       measuredBySensor: false,
       outdoor: newSpotOutdoor || undefined,
       seasonalNote: newSpotOutdoor
         ? 'Weather-driven — temp and RH come from the local forecast.'
-        : 'Light is estimated from your description — a Greenr Sensor measures it exactly.',
+        : 'Light estimated from the window distance and direction you gave.',
     };
     addSpot(spot);
     setSpotId(spot.id);
@@ -739,44 +776,84 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
             ))}
           </View>
 
-          <Text style={[type.caption, { color: light.inkMuted, marginTop: 14 }]}>How bright is it?</Text>
-          <View style={{ gap: 8, marginTop: 6 }}>
-            {LIGHT_LEVELS.map((l) => (
-              <Pressable
-                key={l.key}
-                onPress={() => setLightLevel(l.key)}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 12,
-                  minHeight: 52,
-                  paddingHorizontal: 14,
-                  borderRadius: 12,
-                  backgroundColor: light.bg,
-                  borderWidth: 2,
-                  borderColor: lightLevel === l.key ? accent.verdant : 'transparent',
-                }}
-              >
-                <Text style={{ fontSize: 20 }}>{l.emoji}</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={[type.cardTitle, { color: light.ink, fontSize: 15 }]}>{l.label}</Text>
-                  <Text style={[type.micro, { color: light.inkMuted }]}>{l.hint}</Text>
-                </View>
-                {lightLevel === l.key && <Ionicons name="checkmark-circle" size={20} color={accent.verdant} />}
-              </Pressable>
-            ))}
-          </View>
-          <Text style={[type.micro, { color: light.inkMuted, marginTop: 8, lineHeight: 15 }]}>
-            This is an estimate from your description. A Greenr Sensor measures the exact light and
-            makes the score precise.
-          </Text>
+          {newSpotOutdoor ? (
+            <Text style={[type.caption, { color: light.inkMuted, marginTop: 14 }]}>
+              Outdoor light and temperature come from your local forecast.
+            </Text>
+          ) : (
+            <>
+              <Text style={[type.caption, { color: light.ink, marginTop: 14, fontWeight: '600' }]}>How far from the window?</Text>
+              <View style={{ gap: 8, marginTop: 6 }}>
+                {WINDOW_DISTANCE.map((d) => (
+                  <Pressable
+                    key={d.key}
+                    onPress={() => {
+                      setWindowDistance(d.key);
+                      setLightLevel('guided');
+                    }}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 12,
+                      minHeight: 50,
+                      paddingHorizontal: 14,
+                      borderRadius: 12,
+                      backgroundColor: light.bg,
+                      borderWidth: 2,
+                      borderColor: windowDistance === d.key ? accent.verdant : 'transparent',
+                    }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.cardTitle, { color: light.ink, fontSize: 15 }]}>{d.label}</Text>
+                      <Text style={[type.micro, { color: light.inkMuted }]}>{d.hint}</Text>
+                    </View>
+                    {windowDistance === d.key && <Ionicons name="checkmark-circle" size={20} color={accent.verdant} />}
+                  </Pressable>
+                ))}
+              </View>
+
+              {windowDistance !== 'far' && (
+                <>
+                  <Text style={[type.caption, { color: light.ink, marginTop: 14, fontWeight: '600' }]}>Which way does the window face?</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                    {WINDOW_FACING.map((f) => (
+                      <Pressable
+                        key={f.key}
+                        onPress={() => setWindowFacing(f.key)}
+                        style={{
+                          minHeight: 44,
+                          paddingHorizontal: 16,
+                          borderRadius: 12,
+                          justifyContent: 'center',
+                          backgroundColor: windowFacing === f.key ? accent.verdant : light.bg,
+                        }}
+                      >
+                        <Text style={[type.caption, { color: windowFacing === f.key ? '#FFFFFF' : light.ink, fontWeight: '600' }]}>
+                          {f.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <Text style={[type.micro, { color: light.inkMuted, marginTop: 6 }]}>
+                    In the southern hemisphere, swap north and south.
+                  </Text>
+                </>
+              )}
+
+              {windowDistance && (
+                <Text style={[type.caption, { color: accent.verdant, marginTop: 10 }]}>
+                  That works out to {dliWord(guidedDli(windowDistance, windowFacing))}.
+                </Text>
+              )}
+            </>
+          )}
 
           <GButton
             title="Add this spot"
             kind="secondary"
             mode="light"
             onPress={createSpot}
-            disabled={!newSpotName.trim() || !lightLevel}
+            disabled={!newSpotName.trim() || (newSpotOutdoor ? false : !windowDistance)}
             style={{ marginTop: 12 }}
           />
         </Card>

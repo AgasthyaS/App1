@@ -32,7 +32,7 @@ export default function GrowthJournal() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, logGrowth } = useGreenr();
+  const { plants, logGrowth, settings } = useGreenr();
   const plant = plants.find((p) => p.id === id);
 
   const [capturing, setCapturing] = useState(false);
@@ -154,6 +154,27 @@ export default function GrowthJournal() {
               ))}
             </View>
           </>
+        )}
+
+        {/* ── The journal feeds the photo check-up (Greenr+) ── */}
+        {summary.photos.length > 0 && (
+          <Card
+            style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+            onPress={() =>
+              settings.plus
+                ? router.push({ pathname: '/diagnose/[id]', params: { id: plant.id } })
+                : router.push('/plus')
+            }
+          >
+            <Ionicons name="medkit" size={20} color={accent.clay} />
+            <View style={{ flex: 1 }}>
+              <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Something look off in a photo?</Text>
+              <Text style={[type.caption, { color: dark.inkMuted, marginTop: 2 }]}>
+                Run a photo check-up for spots, yellowing or pests{settings.plus ? '' : ' · Greenr+'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
+          </Card>
         )}
 
         {/* ── Height / leaves charts ── */}
@@ -334,8 +355,8 @@ export default function GrowthJournal() {
             elevation: 8,
           }}
         >
-          <Ionicons name="add" size={24} color="#08110B" />
-          <Text style={[type.cardTitle, { color: '#08110B', fontSize: 15 }]}>Log growth</Text>
+          <Ionicons name="add" size={24} color="#FFFFFF" />
+          <Text style={[type.cardTitle, { color: '#FFFFFF', fontSize: 15 }]}>Log growth</Text>
         </Pressable>
       )}
     </View>

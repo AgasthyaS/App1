@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { Card, Chip, GButton, Hairline, Screen, SectionHeader } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
@@ -30,7 +30,7 @@ function fitScore(dli: number, min: number, max: number): number {
 export default function SpotDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { spots, plants } = useGreenr();
+  const { spots, plants, setSpotNote } = useGreenr();
   const spot = spots.find((s) => s.id === id);
 
   const occupants = useMemo(
@@ -111,6 +111,10 @@ export default function SpotDetail() {
         )}
       </Card>
 
+      {/* the owner's own note on this spot */}
+      <SectionHeader>Note</SectionHeader>
+      <SpotNote initial={spot.note ?? ''} onSave={(t) => setSpotNote(spot.id, t)} />
+
       {/* Light — honest estimate, no faked history */}
       <SectionHeader>Light</SectionHeader>
       <Card>
@@ -118,8 +122,7 @@ export default function SpotDetail() {
           {spot.dli.toFixed(1)} DLI · {dliWord(spot.dli)}
         </Text>
         <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, lineHeight: 15 }]}>
-          Estimated from this spot&apos;s description. Pair a sensor with a plant here and its light history
-          builds from real readings.
+          Estimated from how you described this spot.
         </Text>
       </Card>
 
@@ -186,3 +189,31 @@ export default function SpotDetail() {
   );
 }
 
+
+/** A note field that saves when you leave it, with a visible "Saved" tick. */
+function SpotNote({ initial, onSave }: { initial: string; onSave: (t: string) => void }) {
+  const [text, setText] = useState(initial);
+  const [saved, setSaved] = useState(false);
+  return (
+    <Card>
+      <TextInput
+        value={text}
+        onChangeText={(t) => {
+          setText(t);
+          setSaved(false);
+        }}
+        onBlur={() => {
+          if (text !== initial) {
+            onSave(text.trim());
+            setSaved(true);
+          }
+        }}
+        placeholder="Add a note about this spot — a cold draught, afternoon sun, the heater nearby"
+        placeholderTextColor={dark.inkMuted}
+        multiline
+        style={[type.body, { color: dark.ink, minHeight: 60, textAlignVertical: 'top', outlineStyle: 'none' } as any]}
+      />
+      {saved && <Text style={[type.micro, { color: accent.sage, marginTop: 6 }]}>Saved</Text>}
+    </Card>
+  );
+}

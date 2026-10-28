@@ -2,7 +2,7 @@ import type { Reading } from './devices';
 import { MAX_SINGLE_POUR_FRACTION, PROBE, containerThresholds, probeReads, waterFractionBetween } from './soilProfile';
 import { retentionEstimate, withMeasuredRetention } from './soilRetention';
 import type { Plant, PotShape } from './types';
-import { getSpecies } from './plants';
+import { getSpecies, waterProfileFor } from './plants';
 import { ABSOLUTE_MAX_POUR_ML, potVolume, wettingFor } from './watering';
 
 /**
@@ -884,16 +884,25 @@ export function wateringSchedule(
    * watered at the fern's threshold just because the mix holds water.
    */
   let refillAt = Math.max(band[0], th.refillReading);
+  /*
+   * …EXCEPT FOR SOAK-AND-DRY PLANTS. "Water when the easily available water runs
+   * out" is a rule for plants that want to stay moist. Succulents, cacti and
+   * snake plants are meant to dry out well past that point, and with realistic
+   * retention curves a gritty mix reaches its physical refill line while still
+   * wetter than the plant's own floor — so honouring it would water a succulent
+   * early, which is how they rot. For them the species floor alone decides.
+   */
+  if (waterProfileFor(plant.species).style === 'soak-and-dry') refillAt = band[0];
 
   /*
    * WHERE "FULL" IS. Three sources, and getting the precedence wrong breaks it.
    *
    * The modelled container capacity is `probeReads(geo, 0)`, and in a DEEP pot
-   * that number is small — 23.5% for a 29 cm standard mix — because at
-   * hydrostatic equilibrium the top 6.5 cm the probe occupies sits at 22–29 cm of
-   * tension and is genuinely the driest part of the pot. Used naively that put
-   * "full" BELOW a Peace lily's 30% floor, so the working range came out negative
-   * and every watering collapsed to the 25 ml minimum.
+   * that number is lower than in a shallow one — about 52 for a 30 cm standard
+   * mix — because at hydrostatic equilibrium the top 6.5 cm the probe occupies
+   * sits at 23–30 cm of tension and is genuinely the driest part of the pot.
+   * (Before the soil curves were refitted it came out at 23.5, below a Peace
+   * lily's 30% floor, which collapsed every watering to the 25 ml minimum.)
    *
    * The pot itself knows better. This one has been observed at 78% repeatedly,
    * because a real watering does not leave a pot at hydrostatic equilibrium — it
@@ -971,9 +980,28 @@ export function wateringSchedule(
     ABSOLUTE_MAX_POUR_ML,
   ));
 
-  const everyDays = ptsPerDay ? Math.max(0.5, (capacityAt - refillAt) / ptsPerDay) : null;
   const latest = soils.length ? soils[soils.length - 1].v : null;
-  const daysUntilDue = ptsPerDay != null && latest != null ? Math.max(0, (latest - refillAt) / ptsPerDay) : null;
+  /*
+   * ALONG THE CURVE, NOT A STRAIGHT LINE. Drying is exponential toward a floor
+   * (lib/soilRetention), fast when wet and slow near the end, so a straight line
+   * through the average rate calls a half-dry pot due too early. Where the fitted
+   * curve is available its time constant gives the exact time between two
+   * readings: t = τ·ln((from − floor) / (to − floor)). The straight line remains
+   * the fallback before any dry-down has been fitted.
+   */
+  const curve = ret && ret.tauObservedDays > 0 && refillAt > ret.residual + 0.5
+    ? { tau: ret.tauObservedDays, floor: ret.residual }
+    : null;
+  const along = (from: number, to: number) =>
+    curve ? curve.tau * Math.log((from - curve.floor) / (to - curve.floor)) : null;
+  const everyDays = curve && capacityAt > refillAt
+    ? Math.max(0.5, along(capacityAt, refillAt) as number)
+    : ptsPerDay ? Math.max(0.5, (capacityAt - refillAt) / ptsPerDay) : null;
+  const daysUntilDue = latest == null
+    ? null
+    : curve
+      ? latest > refillAt ? Math.max(0, along(latest, refillAt) as number) : 0
+      : ptsPerDay != null ? Math.max(0, (latest - refillAt) / ptsPerDay) : null;
 
   const basis: WateringSchedule['basis'] =
     ret?.confident && perPoint.cleanPours >= 1 ? 'measured'

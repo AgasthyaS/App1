@@ -19,6 +19,12 @@ export interface ScheduleOpts {
   now?: number;
   weather?: WeatherData | null;
   outdoor?: boolean;
+  /**
+   * The pot's fitted dry-down (lib/soilRetention). When present the date follows
+   * that exponential instead of a straight line through the last three days,
+   * which runs fast at the wet end and calls the date too early.
+   */
+  decay?: { tauDays: number; residual: number } | null;
 }
 
 export interface WaterSchedule {
@@ -189,7 +195,10 @@ export function computeSchedule(
   const rate = accelerated ? baseRate * 1.4 : baseRate;
   const readingsUsed = recent.length >= 3 ? recent.length : soils.length;
 
-  const daysToLow = (latest.v - lo) / rate;
+  const d = opts.decay;
+  const daysToLow = d && d.tauDays > 0 && lo > d.residual + 0.5 && latest.v > lo
+    ? (d.tauDays / (accelerated ? 1.4 : 1)) * Math.log((latest.v - d.residual) / (lo - d.residual))
+    : (latest.v - lo) / rate;
   if (!Number.isFinite(daysToLow) || !Number.isFinite(latest.t)) {
     return {
       ...none,
