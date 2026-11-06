@@ -198,6 +198,7 @@ export default function Briefing() {
 
           <GButton
             title="Start Care Mode"
+            track="briefing.start_care_mode"
             onPress={() => router.push('/care-mode')}
             style={{ marginTop: 20 }}
           />

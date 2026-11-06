@@ -1,4 +1,5 @@
 import { accent, dark, layout, light, type } from '@/constants/theme';
+import { track as trackEvent } from '@/lib/analytics';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
@@ -56,12 +57,15 @@ export function Card({
   style,
   onPress,
   accentBorder,
+  track,
 }: {
   children: React.ReactNode;
   mode?: 'dark' | 'light';
   elevated?: boolean;
   style?: StyleProp<ViewStyle>;
   onPress?: () => void;
+  /** analytics event recorded as `tap:<track>` on press (lib/analytics.ts) */
+  track?: string;
   /** 2px left border color (e.g. Clay for <48h critical rows) */
   accentBorder?: string;
 }) {
@@ -88,7 +92,10 @@ export function Card({
   if (onPress) {
     return (
       <Pressable
-        onPress={onPress}
+        onPress={() => {
+          if (track) trackEvent(`tap:${track}`);
+          onPress();
+        }}
         style={({ pressed }) => [base, pressed && { opacity: 0.9, transform: [{ scale: 0.985 }] }]}
       >
         {children}
@@ -127,6 +134,7 @@ export function GButton({
   mode = 'dark',
   style,
   disabled,
+  track,
 }: {
   title: string;
   onPress?: () => void;
@@ -134,12 +142,15 @@ export function GButton({
   mode?: 'dark' | 'light';
   style?: StyleProp<ViewStyle>;
   disabled?: boolean;
+  /** analytics event recorded as `tap:<track>` on press (lib/analytics.ts) */
+  track?: string;
 }) {
   const t = mode === 'dark' ? dark : light;
   const fg =
     kind === 'primary' ? '#FFFFFF' : kind === 'destructive' ? accent.clay : kind === 'ghost' ? accent.verdant : t.ink;
   const press = () => {
     Haptics.selectionAsync().catch(() => {});
+    if (track) trackEvent(`tap:${track}`);
     onPress?.();
   };
   const shape: ViewStyle = {
@@ -244,17 +255,26 @@ export function Row({
   onPress,
   mode = 'dark',
   danger,
+  track,
 }: {
   title: string;
   value?: string;
   onPress?: () => void;
   mode?: 'dark' | 'light';
   danger?: boolean;
+  /** analytics event recorded as `tap:<track>` on press (lib/analytics.ts) */
+  track?: string;
 }) {
   const t = mode === 'dark' ? dark : light;
   return (
     <Pressable
-      onPress={onPress}
+      onPress={
+        onPress &&
+        (() => {
+          if (track) trackEvent(`tap:${track}`);
+          onPress();
+        })
+      }
       disabled={!onPress}
       style={({ pressed }) => ({
         minHeight: layout.touchTarget,

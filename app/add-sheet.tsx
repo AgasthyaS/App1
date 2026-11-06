@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Hairline } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
+import { track } from '@/lib/analytics';
 import { useGreenr } from '@/lib/store';
 
 /** The (+) sheet (§3): Add plant · Add sensor · Scan in store (Plus). */
@@ -18,6 +19,7 @@ export default function AddSheet() {
     {
       icon: 'leaf-outline',
       title: 'Add plant',
+      track: 'add.add_plant',
       sub: 'Photo → species → first score',
       go: () => {
         router.back();
@@ -27,6 +29,7 @@ export default function AddSheet() {
     {
       icon: 'sparkles-outline',
       title: 'Suggest a plant',
+      track: 'add.suggest',
       sub: 'Not sure what to grow? Pick by your climate',
       go: () => {
         router.back();
@@ -36,6 +39,7 @@ export default function AddSheet() {
     {
       icon: 'hardware-chip-outline',
       title: 'Add sensor',
+      track: 'add.add_sensor',
       sub: 'Scan its QR → Wi-Fi setup in-app → pick its plant',
       go: () => {
         router.back();
@@ -45,6 +49,7 @@ export default function AddSheet() {
     {
       icon: 'barcode-outline',
       title: 'Scan in store',
+      track: 'add.scan',
       sub: settings.plus ? 'Verdict against your mapped spots' : 'Greenr+ — verdict against your mapped spots',
       go: () => {
         router.back();
@@ -70,7 +75,7 @@ export default function AddSheet() {
         {rows.map((r, i) => (
           <View key={r.title}>
             {i > 0 && <Hairline />}
-            <Pressable onPress={r.go} style={{ flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 64 }}>
+            <Pressable onPress={() => { track(`tap:${r.track}`); r.go(); }} style={{ flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 64 }}>
               <Ionicons name={r.icon as any} size={22} color={accent.verdant} />
               <View style={{ flex: 1 }}>
                 <Text style={[type.cardTitle, { color: dark.ink }]}>{r.title}</Text>

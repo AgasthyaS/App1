@@ -234,7 +234,7 @@ export default function SettingsScreen() {
 
       <SectionHeader>Data &amp; privacy</SectionHeader>
       <Card>
-        <Row title="Export all data" value="JSON" onPress={exportAll} />
+        <Row title="Export all data" value="JSON" track="settings.export" onPress={exportAll} />
         <Row
           title="Anonymized research"
           value={settings.researchOptIn ? 'On' : 'Off'}
@@ -253,18 +253,16 @@ export default function SettingsScreen() {
           {syncLine}
         </Text>
         <Row
-          title="Delete account"
-          danger
-          onPress={() =>
-            confirmAction({
-              title: 'Delete account',
-              message: 'Full and immediate. This cannot be undone.',
-              confirmLabel: 'Delete',
-              destructive: true,
-              onConfirm: resetApp,
-            })
-          }
+          title="Usage analytics"
+          value={settings.analyticsOptIn ? 'On' : 'Off'}
+          onPress={() => setSettings({ analyticsOptIn: !settings.analyticsOptIn })}
         />
+        <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4 }]}>
+          Counts which screens you open and which buttons you tap — never what you type, your plant
+          names, photos or location — so we know what to improve.
+        </Text>
+        <Row title="See what’s been recorded" value="→" track="settings.usage" onPress={() => router.push('/usage' as any)} />
+        <Row title="Delete your data" value="→" track="settings.data_deletion" onPress={() => router.push('/data-deletion' as any)} />
       </Card>
 
       <SectionHeader>Account</SectionHeader>
@@ -355,8 +353,9 @@ export default function SettingsScreen() {
       <Card>
         <Row title="Version" value={`2.0.0 · ${BUILD_STAMP}`} />
         <Row title="How Greenr calculates" value="→" onPress={() => router.push('/methodology')} />
-        <Row title="Privacy policy" value="→" onPress={() => router.push('/privacy' as any)} />
-        <Row title="Terms of Service" value="→" onPress={() => router.push('/terms' as any)} />
+        <Row title="Privacy policy" value="→" track="settings.privacy" onPress={() => router.push('/privacy' as any)} />
+        <Row title="Terms of Service" value="→" track="settings.terms" onPress={() => router.push('/terms' as any)} />
+        <Row title="All legal policies" value="→" track="settings.legal" onPress={() => router.push('/legal' as any)} />
       </Card>
     </Screen>
   );

@@ -146,6 +146,8 @@ export default function Security() {
       <Card>
         <Row title="Export all data" value="JSON" onPress={exportAll} />
         <Row title="Anonymized research" value={settings.researchOptIn ? 'On' : 'Off'} onPress={() => setSettings({ researchOptIn: !settings.researchOptIn })} />
+        <Row title="Usage analytics" value={settings.analyticsOptIn ? 'On' : 'Off'} onPress={() => setSettings({ analyticsOptIn: !settings.analyticsOptIn })} />
+        <Row title="See what’s been recorded" value="→" onPress={() => router.push('/usage' as any)} />
         <Row title="Privacy policy" value="→" onPress={() => router.push('/privacy' as any)} />
         <Row title="Terms of Service" value="→" onPress={() => router.push('/terms' as any)} />
         <Row

@@ -317,6 +317,8 @@ export interface Settings {
   voice: 'Standard' | 'Warm';
   appearance: 'Dark' | 'Light' | 'System';
   researchOptIn: boolean;
+  /** counts screen views and taps (lib/analytics.ts); off stops every write */
+  analyticsOptIn: boolean;
   plus: boolean;
   /** local care reminders (water / move / feed) scheduled on-device */
   remindersEnabled: boolean;

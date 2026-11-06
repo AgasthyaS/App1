@@ -6,6 +6,7 @@ import { Pressable, StyleProp, Text, View, ViewStyle } from 'react-native';
 
 import { SectionHeader } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
+import { track as trackEvent } from '@/lib/analytics';
 
 /*
  * Apple-style building blocks. These are what make a screen read like a native
@@ -183,7 +184,10 @@ export function ListRow({
   right,
   titleLines = 1,
   subtitleLines = 2,
+  track,
 }: {
+  /** analytics event recorded as `tap:<track>` on press (lib/analytics.ts) */
+  track?: string;
   titleLines?: number;
   subtitleLines?: number;
   icon?: string;
@@ -199,7 +203,13 @@ export function ListRow({
 }) {
   return (
     <Pressable
-      onPress={onPress}
+      onPress={
+        onPress &&
+        (() => {
+          if (track) trackEvent(`tap:${track}`);
+          onPress();
+        })
+      }
       disabled={!onPress}
       style={({ pressed }) => ({
         flexDirection: 'row',

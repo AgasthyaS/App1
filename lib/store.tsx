@@ -8,6 +8,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { clearLocalUsage, track } from './analytics';
 import { useAuth } from './auth';
 import { type CalMetricKey, type SensorCalibration, emptyCalibration, withCalibration } from './calibration';
 import { pullGarden, pushGarden } from './cloud';
@@ -70,6 +71,7 @@ const DEFAULT_SETTINGS: Settings = {
   voice: 'Standard',
   appearance: 'Dark',
   researchOptIn: true,
+  analyticsOptIn: true,
   plus: false,
   remindersEnabled: false,
   bleGatewayEnabled: false,
@@ -306,7 +308,10 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, [hydrated, user, state]);
 
   const completeOnboarding = useCallback(
-    () => setState((s) => ({ ...s, onboarded: true })),
+    () => {
+      track('action:onboarding_complete');
+      setState((s) => ({ ...s, onboarded: true }));
+    },
     [],
   );
 
@@ -325,16 +330,23 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const addPlant = useCallback(
-    (p: Plant) => setState((s) => ({ ...s, plants: [...s.plants, p] })),
+    (p: Plant) => {
+      track('action:plant_added');
+      setState((s) => ({ ...s, plants: [...s.plants, p] }));
+    },
     [],
   );
 
   const addSpot = useCallback(
-    (sp: Spot) => setState((s) => ({ ...s, spots: [...s.spots, sp] })),
+    (sp: Spot) => {
+      track('action:spot_added');
+      setState((s) => ({ ...s, spots: [...s.spots, sp] }));
+    },
     [],
   );
 
   const logWater = useCallback((plantId: string) => {
+    track('action:water_logged');
     setState((s) => {
       const plant = s.plants.find((p) => p.id === plantId);
       const [plo, phi] = plant?.comfortBand ?? [0, 100];
@@ -421,6 +433,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       at?: string;
     },
   ) => {
+    track('action:water_logged', { source: meta?.source ?? 'unknown' });
     const at = meta?.at ?? new Date().toISOString();
     const source: WaterAmountSource = meta?.source ?? 'preset';
     setState((s) => ({
@@ -470,6 +483,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logCare = useCallback((plantId: string, note: string) => {
+    track('action:care_logged');
     setState((s) => ({
       ...s,
       plants: s.plants.map((p) =>
@@ -487,6 +501,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const completeTask = useCallback((taskId: string, verified: boolean) => {
+    track('action:task_completed');
     setState((s) => ({
       ...s,
       tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, done: true, verified } : t)),
@@ -494,6 +509,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const skipTask = useCallback((taskId: string) => {
+    track('action:task_skipped');
     setState((s) => ({
       ...s,
       tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, done: true, skipped: true } : t)),
@@ -521,6 +537,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const movePlant = useCallback((plantId: string, spotId: string) => {
+    track('action:plant_moved');
     setState((s) => ({
       ...s,
       plants: s.plants.map((p) =>
@@ -544,6 +561,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const archivePlant = useCallback((plantId: string, cause?: string) => {
+    track('action:plant_archived');
     setState((s) => ({
       ...s,
       plants: s.plants.map((p) =>
@@ -554,6 +572,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const addDiagnosis = useCallback((plantId: string, text: string) => {
+    track('action:diagnosis_added');
     setState((s) => ({
       ...s,
       plants: s.plants.map((p) =>
@@ -575,6 +594,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setPlantPhoto = useCallback((plantId: string, uri: string) => {
+    track('action:photo_set');
     setState((s) => ({
       ...s,
       plants: s.plants.map((p) =>
@@ -597,6 +617,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       plantId: string,
       entry: { photoUri?: string; heightCm?: number | null; leaves?: number | null; note?: string },
     ) => {
+      track('action:growth_logged');
       const now = Date.now();
       const id = `gr-${now}`;
       const bits: string[] = [];
@@ -672,6 +693,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
 
   const repotPlant = useCallback(
     (plantId: string, change: { soilMix?: SoilMix; hasDrainage?: boolean; potCm?: number | null; potHeightCm?: number | null }) => {
+      track('action:plant_repotted');
       setState((s) => ({
         ...s,
         plants: s.plants.map((p) => {
@@ -886,6 +908,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const loadDemoGarden = useCallback(() => {
+    track('action:demo_loaded');
     setState((s) => ({
       ...s,
       demo: true,
@@ -910,6 +933,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
 
   const resetApp = useCallback(() => {
     AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
+    clearLocalUsage();
     setState(emptyState());
   }, []);
 

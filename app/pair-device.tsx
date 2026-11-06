@@ -4,6 +4,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { QRScanner } from '@/components/greenr/QRScanner';
+import { PowerArt, ProbeDepthArt, ScanArt } from '@/components/greenr/SetupArt';
+import { SetupStepper } from '@/components/greenr/SetupStepper';
 import { Card, GButton, Screen } from '@/components/greenr/UI';
 import { WifiSetupFlow } from '@/components/greenr/WifiSetupFlow';
 import { accent, light, type } from '@/constants/theme';
@@ -17,21 +19,32 @@ import {
   type Reading,
 } from '@/lib/devices';
 import { useGreenr } from '@/lib/store';
+import { isWifiSetupSupported } from '@/lib/wifiSetup';
+
+const PREP: { icon: string; text: string }[] = [
+  { icon: 'hardware-chip-outline', text: 'Your Greenr sensor — its QR code is on the back and on the box' },
+  { icon: 'flash-outline', text: 'A wall USB adapter. Not a laptop port: laptops sleep and cut power' },
+  { icon: 'wifi-outline', text: 'Your home Wi-Fi name and password (a 2.4 GHz network)' },
+  { icon: 'time-outline', text: 'About 3 minutes, close to the sensor' },
+];
 
 /**
- * Real sensor pairing: scan the QR on the device (phone) or paste its code
- * (web), which claims the device for this account. Then assign it to a plant
- * and watch the first live reading land.
+ * Real sensor pairing: a checklist of what's needed, then scan the QR on the
+ * device (phone) or paste its code (web), which claims the device for this
+ * account. Then Wi-Fi, assign it to a plant, and show how to put it in the soil
+ * while the first live reading lands.
  */
 
-type Step = 'scan' | 'linking' | 'wifi' | 'assign' | 'done';
+type Step = 'prep' | 'scan' | 'linking' | 'wifi' | 'assign' | 'done';
 
 export default function PairDevice() {
   const router = useRouter();
   const { user, enabled, initializing } = useAuth();
   const { plants } = useGreenr();
 
-  const [step, setStep] = useState<Step>('scan');
+  const [step, setStep] = useState<Step>('prep');
+  // true when pairing without a QR: the sensor's identity is read over Bluetooth
+  const [viaBluetooth, setViaBluetooth] = useState(false);
   const [manual, setManual] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
@@ -98,34 +111,64 @@ export default function PairDevice() {
     );
   }
 
+  // --- what you need ---
+  if (step === 'prep') {
+    return (
+      <Screen mode="light">
+        <SetupStepper current={0} />
+        <Text style={[type.ritualTitle, { color: light.ink }]}>Before you start</Text>
+        <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
+          Setting up a sensor takes about three minutes. Here’s what you’ll need.
+        </Text>
+        <View style={{ marginTop: 16 }}>
+          <PowerArt />
+        </View>
+        <Card mode="light" style={{ marginTop: 14, gap: 12 }}>
+          {PREP.map((p) => (
+            <View key={p.icon} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Ionicons name={p.icon as any} size={20} color={accent.verdant} />
+              <Text style={[type.body, { color: light.ink, flex: 1, lineHeight: 20 }]}>{p.text}</Text>
+            </View>
+          ))}
+        </Card>
+        <GButton title="I’m ready" track="pair.prep_ready" onPress={() => setStep('scan')} style={{ marginTop: 18 }} />
+        <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', minHeight: 44, justifyContent: 'center', marginTop: 4 }}>
+          <Text style={[type.body, { color: light.inkMuted }]}>Not now</Text>
+        </Pressable>
+      </Screen>
+    );
+  }
+
   // --- scan / enter code ---
   if (step === 'scan') {
     return (
-      <Screen mode="light" scroll={false} style={{ justifyContent: 'center' }}>
-        <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', letterSpacing: 0.5 }]}>
-          STEP 1 OF 3 · LINK IT TO YOUR ACCOUNT
-        </Text>
-        <Text style={[type.ritualTitle, { color: light.ink, textAlign: 'center', marginTop: 6 }]}>
-          Scan your sensor's QR code
-        </Text>
-        <Text style={[type.body, { color: light.inkMuted, textAlign: 'center', marginTop: 8 }]}>
-          It's on the device (or its box). After this, step 2 connects it to your Wi-Fi
-          right here in the app, and step 3 picks which plant it lives with.
+      <Screen mode="light">
+        <SetupStepper current={0} />
+        <Text style={[type.ritualTitle, { color: light.ink }]}>Scan your sensor’s QR code</Text>
+        <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
+          This links the sensor to your account so only you can see its readings.
         </Text>
 
-        <View style={{ height: 260, borderRadius: 20, overflow: 'hidden', marginTop: 22, backgroundColor: '#000' }}>
+        <View style={{ marginTop: 16 }}>
           {scanning ? (
-            <QRScanner onScan={(data) => { if (step === 'scan') claim(data); }} />
+            <View style={{ height: 280, borderRadius: 18, overflow: 'hidden', backgroundColor: '#000' }}>
+              <QRScanner onScan={(data) => { if (step === 'scan') claim(data); }} />
+            </View>
           ) : (
-            <Pressable onPress={() => setScanning(true)} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-              <Ionicons name="qr-code-outline" size={44} color="#fff" />
-              <Text style={{ color: '#fff', marginTop: 10 }}>Tap to scan the QR code</Text>
-            </Pressable>
+            <ScanArt />
           )}
         </View>
+        {!scanning && (
+          <GButton title="Start scanning" track="pair.scan_start" onPress={() => setScanning(true)} style={{ marginTop: 14 }} />
+        )}
+        {scanning && (
+          <Text style={[type.caption, { color: light.inkMuted, textAlign: 'center', marginTop: 10 }]}>
+            Fill the frame with the QR code and hold still. Good light helps.
+          </Text>
+        )}
 
-        <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 18 }]}>
-          Or enter the code printed under the QR:
+        <Text style={[type.micro, { color: light.inkMuted, marginTop: 20 }]}>
+          Camera not working? Type the code printed under the QR:
         </Text>
         <TextInput
           value={manual}
@@ -139,18 +182,23 @@ export default function PairDevice() {
           }]}
         />
         {error && <Text style={[type.micro, { color: '#C0392B', marginTop: 10 }]}>{error}</Text>}
-        <GButton title="Pair sensor" onPress={() => claim(manual)} disabled={!manual.trim()} style={{ marginTop: 12 }} />
-        <GButton
-          title="No code? Set it up over Bluetooth"
-          kind="secondary"
-          onPress={() => { setError(null); setWifiStartedAt(Date.now()); setStep('wifi'); }}
-          style={{ marginTop: 10 }}
-        />
-        <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 6, lineHeight: 15 }]}>
-          Don’t want to scan? We’ll find your sensor over Bluetooth and claim it automatically — no code needed.
-        </Text>
-        <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', minHeight: 44, justifyContent: 'center', marginTop: 4 }}>
-          <Text style={[type.body, { color: light.inkMuted }]}>Cancel</Text>
+        <GButton title="Pair with this code" kind="secondary" mode="light" onPress={() => claim(manual)} disabled={!manual.trim()} style={{ marginTop: 10 }} />
+        {isWifiSetupSupported && (
+          <>
+            <GButton
+              title="No code? Find it over Bluetooth"
+              kind="ghost"
+              mode="light"
+              onPress={() => { setError(null); setViaBluetooth(true); setWifiStartedAt(Date.now()); setStep('wifi'); }}
+              style={{ marginTop: 6 }}
+            />
+            <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', lineHeight: 15 }]}>
+              Only for sensors built with Bluetooth setup.
+            </Text>
+          </>
+        )}
+        <Pressable onPress={() => setStep('prep')} style={{ alignSelf: 'center', minHeight: 44, justifyContent: 'center', marginTop: 4 }}>
+          <Text style={[type.body, { color: light.inkMuted }]}>Back</Text>
         </Pressable>
       </Screen>
     );
@@ -169,10 +217,12 @@ export default function PairDevice() {
   if (step === 'wifi') {
     return (
       <Screen mode="light">
-        <Text style={[type.micro, { color: accent.sage, marginTop: 8 }]}>
-          {deviceId ? 'PAIRED ✓ · ' : ''}STEP 2 OF 3 — CONNECT IT TO WI-FI
-        </Text>
+        <SetupStepper current={1} />
+        {deviceId && (
+          <Text style={[type.micro, { color: accent.sage }]}>LINKED TO YOUR ACCOUNT ✓</Text>
+        )}
         <WifiSetupFlow
+          startWith={viaBluetooth && !deviceId ? 'bluetooth' : 'hotspot'}
           onDone={() => setStep('assign')}
           doneCta="Continue"
           onSkip={() => setStep('assign')}
@@ -200,12 +250,10 @@ export default function PairDevice() {
     const active = plants.filter((p) => !p.archived);
     return (
       <Screen mode="light">
-        <Text style={[type.micro, { color: light.inkMuted, marginTop: 8, letterSpacing: 0.5 }]}>
-          STEP 3 OF 3 · PICK ITS PLANT
-        </Text>
-        <Text style={[type.ritualTitle, { color: light.ink, marginTop: 6 }]}>Almost done</Text>
+        <SetupStepper current={2} />
+        <Text style={[type.ritualTitle, { color: light.ink }]}>Which plant is it for?</Text>
         <Text style={[type.body, { color: light.inkMuted, marginTop: 8 }]}>
-          Which plant does this sensor live with?
+          Its readings will appear on that plant’s page.
         </Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
           {active.map((p) => (
@@ -260,7 +308,8 @@ export default function PairDevice() {
   const reportedNow =
     reading != null && (readingMs >= wifiStartedAt || Date.now() - readingMs < ONE_CYCLE_MS);
   return (
-    <Screen mode="light" scroll={false} style={{ justifyContent: 'center' }}>
+    <Screen mode="light">
+      <SetupStepper current={3} />
       <View style={{ alignItems: 'center' }}>
         <Ionicons
           name={reportedNow ? 'checkmark-circle' : 'time-outline'}
@@ -290,15 +339,16 @@ export default function PairDevice() {
             The sensor is linked to your account, but it hasn’t sent a reading yet — so
             it probably still needs its Wi-Fi.
           </Text>
-          <Card mode="light" style={{ marginTop: 14, flexDirection: 'row', gap: 10 }}>
-            <Ionicons name="wifi" size={20} color={accent.verdant} />
-            <Text style={[type.caption, { color: light.ink, flex: 1, lineHeight: 19 }]}>
-              <Text style={{ fontWeight: '600' }}>To give it Wi-Fi:</Text> open your phone’s
-              Settings → Wi-Fi and join <Text style={{ fontWeight: '600' }}>“greenr-setup”</Text> (no
-              password). A page opens where you pick your home network — then rejoin your normal
-              Wi-Fi. Works on any phone, no Bluetooth needed.
-            </Text>
-          </Card>
+          <GButton
+            title="Show the Wi-Fi steps again"
+            kind="secondary"
+            mode="light"
+            onPress={() => { setWifiStartedAt(Date.now()); setStep('wifi'); }}
+            style={{ marginTop: 14 }}
+          />
+          <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 8 }]}>
+            This screen updates by itself the moment the first reading arrives.
+          </Text>
           {reading && (
             <Text style={[type.micro, { color: light.inkMuted, textAlign: 'center', marginTop: 12 }]}>
               Its last reading was {new Date(reading.created_at).toLocaleString()} — from before this setup.
@@ -306,6 +356,25 @@ export default function PairDevice() {
           )}
         </>
       )}
+      <Text style={[type.cardTitle, { color: light.ink, fontSize: 18, marginTop: 28 }]}>Put it in the soil</Text>
+      <Text style={[type.body, { color: light.inkMuted, marginTop: 4, marginBottom: 12 }]}>
+        Where the probe sits decides how good its readings are.
+      </Text>
+      <ProbeDepthArt />
+      <Card mode="light" style={{ marginTop: 12, gap: 10 }}>
+        {[
+          ['arrow-down-outline', 'Push it in up to the line. Deeper wets the electronics; shallower reads only the dry top layer.'],
+          ['resize-outline', 'Halfway between the stem and the rim, where the roots drink. Not touching the pot wall.'],
+          ['sunny-outline', 'The top facing up and uncovered, so its light reading is real.'],
+          ['water-outline', 'Water around it, not onto it.'],
+        ].map(([icon, text]) => (
+          <View key={icon} style={{ flexDirection: 'row', gap: 12 }}>
+            <Ionicons name={icon as any} size={18} color={accent.verdant} style={{ marginTop: 1 }} />
+            <Text style={[type.caption, { color: light.ink, flex: 1, lineHeight: 19 }]}>{text}</Text>
+          </View>
+        ))}
+      </Card>
+
       <GButton
         title={plantId ? 'See it on your plant' : 'Done'}
         onPress={() => {

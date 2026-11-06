@@ -86,6 +86,7 @@ export default function PlusSheet() {
             </View>
             <GButton
               title="Continue"
+              track={yearly ? 'plus.continue_yearly' : 'plus.continue_monthly'}
               onPress={() => {
                 setPlus(true);
                 closeModal();

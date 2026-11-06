@@ -14,21 +14,18 @@ const TOPICS: { group: string; items: Topic[] }[] = [
     group: 'Setting up a sensor',
     items: [
       {
-        q: "The app can't find my sensor over Bluetooth",
+        q: "I can't find the “greenr-setup” network",
         a: [
-          'Make sure the sensor has power and is within a few feet of your phone.',
-          'A brand-new sensor offers itself in short bursts rather than continuously, so it can take up to ~30 seconds to appear. Unplugging and plugging it back in wakes it into fast setup mode.',
-          'On the web, use Chrome or Edge (Safari can’t do in-app Bluetooth). On iPhone, use the Greenr app.',
-          'If your phone asks to pair, accept — that’s the encryption that protects your Wi-Fi password.',
+          'The sensor only offers “greenr-setup” while it has no saved Wi-Fi. Plug it into a wall adapter, wait about 10 seconds, and refresh your phone’s Wi-Fi list.',
+          'If it was set up before, it is still trying its old network. A few seconds after plugging it in, hold its BOOT button for 3 seconds to make it forget that network and reopen setup.',
+          'When your phone warns the network has no internet, choose to stay connected — the setup page is served by the sensor itself.',
         ],
         cta: { label: 'Set up Wi-Fi', to: '/wifi-setup' },
       },
       {
         q: 'Do I have to set it up right when I power it on?',
         a: [
-          'No. The sensor waits for you — it keeps taking readings and keeps offering Bluetooth setup indefinitely.',
-          'It checks often for the first half hour (so setup feels instant if you do it right away), then settles into a low-power rhythm while staying findable.',
-          'Whenever you are ready, open Wi-Fi setup and tap “Find my sensor”. Readings it took before setup upload too, with their real timestamps.',
+          'No. Until it has Wi-Fi, the sensor keeps its “greenr-setup” network open with no time limit — set it up whenever suits you.',
         ],
       },
       {
@@ -56,9 +53,8 @@ const TOPICS: { group: string; items: Topic[] }[] = [
       {
         q: 'I moved house (or changed my router) — what happens?',
         a: [
-          'Nothing is lost. The sensor keeps reading and storing measurements internally, and a nearby phone can still collect them over Bluetooth.',
-          'After a few failed attempts to reach the old network, it automatically reopens Bluetooth setup so you can point it at the new Wi-Fi.',
-          'Just plug it in at the new place, open Wi-Fi setup, tap “Find my sensor”, and pick the new network. Everything it stored while offline uploads once it reconnects.',
+          'Your history is safe in your account. The sensor just needs to learn the new network.',
+          'Plug it in at the new place, wait a few seconds, then hold its BOOT button for 3 seconds. It forgets the old network and opens “greenr-setup” again — then follow Wi-Fi setup.',
           'A brief outage (router reboot) needs no action at all — it keeps the old network and reconnects by itself.',
         ],
         cta: { label: 'Open Wi-Fi setup', to: '/wifi-setup' },

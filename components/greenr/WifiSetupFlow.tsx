@@ -2,6 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 
+import {
+  BootButtonArt,
+  HotspotOnArt,
+  JoinHotspotArt,
+  PortalArt,
+  ReportingArt,
+} from '@/components/greenr/SetupArt';
 import { Card, GButton } from '@/components/greenr/UI';
 import { accent, light, type } from '@/constants/theme';
 import {
@@ -15,31 +22,80 @@ import { isAlreadyConfigured, isChooserCancelled } from '@/lib/wifiSetupTypes';
 /**
  * Sensor Wi-Fi setup.
  *
- * Primary path (Ring-style): the sensor advertises over Bluetooth while it has
- * no Wi-Fi. The app finds it, shows the networks IT can see, and the user picks
- * theirs and types the password right here — the app hands the credentials to
- * the sensor, which connects and remembers them. No switching Wi-Fi networks.
+ * Primary path: the setup hotspot. Until it has Wi-Fi, the sensor broadcasts an
+ * open network called "greenr-setup"; joining it pops up a setup page served by
+ * the sensor itself (firmware/greenr_sensor, runSetup). This needs no Bluetooth
+ * and no app, so it works on every phone and browser — and it is the ONLY path
+ * on stock firmware, which ships with USE_BLE_SETUP 0.
  *
- * Fallback path (no in-browser Bluetooth here — e.g. iOS Safari/Firefox):
- * setup NEEDS Bluetooth, so the fallback explains where to get it. (Firmware
- * v3+ no longer broadcasts a setup hotspot; the old captive-portal steps died
- * with it.)
+ * Secondary path (builds flashed with USE_BLE_SETUP 1, on platforms that can do
+ * Bluetooth): the app finds the sensor, lists the networks it can see, and hands
+ * it the password directly.
+ *
+ * Either way, when the caller passes `verify`, success is confirmed from the
+ * cloud — the sensor uploads the moment it joins — so the guide moves on by
+ * itself instead of asking the person to judge whether it worked.
  */
 
-/**
- * The universal setup route: the sensor broadcasts its own "greenr-setup" Wi-Fi
- * and shows a setup page when you join it. This needs no Bluetooth and no app, so
- * it works on iPhone, Android and laptops alike — it is the one path that always
- * works, which is why it's what we tell people to do.
- */
-const MANUAL_STEPS: { icon: string; text: string }[] = [
-  { icon: 'power-outline', text: 'Give the sensor power and keep it nearby. Until it has Wi-Fi it offers its own setup network — there’s no time limit, so do this whenever suits you.' },
-  { icon: 'wifi-outline', text: 'On your phone, open Settings → Wi-Fi and join the network called “greenr-setup”. It has no password.' },
-  { icon: 'globe-outline', text: 'A setup page opens automatically. (If it doesn’t, open a browser and go to 192.168.4.1.) Pick your home Wi-Fi and type its password.' },
-  { icon: 'checkmark-circle-outline', text: 'Rejoin your normal Wi-Fi. The sensor saves the network permanently and starts reporting — a one-time step.' },
+interface GuideStep {
+  Art: () => React.JSX.Element;
+  title: string;
+  body: string;
+  tip?: string;
+}
+
+const GUIDE: GuideStep[] = [
+  {
+    Art: HotspotOnArt,
+    title: 'Plug in the sensor',
+    body: 'Plug it into a wall USB adapter and keep it within a few metres of you. Within about 10 seconds it starts its own setup Wi-Fi network called “greenr-setup”.',
+    tip: 'No rush — it keeps the setup network open until it’s connected.',
+  },
+  {
+    Art: JoinHotspotArt,
+    title: 'Join “greenr-setup”',
+    body: 'Open your phone’s Settings → Wi-Fi and tap “greenr-setup”. It has no password.',
+    tip: 'Your phone may warn “No internet connection”. That’s expected — choose Stay connected / Keep Wi-Fi.',
+  },
+  {
+    Art: PortalArt,
+    title: 'Choose your home Wi-Fi',
+    body: 'A setup page opens by itself. Pick your home network, type its password and tap Connect.',
+    tip: 'Page didn’t open? Open your browser and go to 192.168.4.1. Only 2.4 GHz networks show up.',
+  },
+  {
+    Art: ReportingArt,
+    title: 'Rejoin your home Wi-Fi',
+    body: 'Switch your phone back to your normal Wi-Fi. The sensor saves the network for good and sends its first reading within a minute.',
+    tip: 'If “greenr-setup” reappears, the password was wrong — join it again and retry.',
+  },
 ];
 
-type Phase = 'intro' | 'searching' | 'form' | 'sending' | 'success' | 'unsure' | 'manual';
+const TROUBLE: { q: string; a: string; boot?: boolean }[] = [
+  {
+    q: 'I don’t see “greenr-setup”',
+    a: 'The sensor only offers it while it has no saved Wi-Fi. Unplug it, plug it back in and wait 10 seconds. If it was set up before, make it forget the old network: a few seconds after plugging it in, hold the BOOT button for 3 seconds.',
+    boot: true,
+  },
+  {
+    q: 'My phone keeps leaving “greenr-setup”',
+    a: 'Phones drop networks without internet. When asked, choose Stay connected (Android) or just stay on the setup page (iPhone). Turning off mobile data for a minute also helps.',
+  },
+  {
+    q: 'The setup page didn’t open',
+    a: 'While joined to “greenr-setup”, open any browser and type 192.168.4.1 into the address bar (http, not https).',
+  },
+  {
+    q: 'My home network isn’t in the list',
+    a: 'The sensor can only use 2.4 GHz Wi-Fi. Many routers show a separate 2.4 GHz name — pick that one. Moving the sensor closer to the router helps too.',
+  },
+  {
+    q: 'It connected, but no reading arrives',
+    a: 'Check it’s on a wall adapter — computer USB ports sleep and cut power. Then look at Device health in a few minutes.',
+  },
+];
+
+type Phase = 'guide' | 'intro' | 'searching' | 'form' | 'sending' | 'success' | 'unsure';
 
 /** How long to wait for confirmation before offering a way forward. */
 const CONFIRM_TIMEOUT_MS = 45000;
@@ -51,9 +107,12 @@ export function WifiSetupFlow({
   skipLabel,
   verify,
   onIdentified,
+  startWith = 'hotspot',
 }: {
+  /** 'bluetooth' when the caller needs the sensor's identity read over BLE (no-QR pairing). */
+  startWith?: 'hotspot' | 'bluetooth';
   onDone: () => void;
-  /** Label of the confirm button on the manual/instruction path. */
+  /** Label of the confirm button at the end of the hotspot guide. */
   doneCta: string;
   onSkip?: () => void;
   skipLabel?: string;
@@ -70,8 +129,10 @@ export function WifiSetupFlow({
    */
   onIdentified?: (deviceId: string, deviceKey: string) => void;
 }) {
-  // No in-app Bluetooth here (e.g. iOS Safari) → go straight to the manual steps.
-  const [phase, setPhase] = useState<Phase>(isWifiSetupSupported ? 'intro' : 'manual');
+  // The hotspot works with every firmware build and every phone, so it leads.
+  const [phase, setPhase] = useState<Phase>(startWith === 'bluetooth' && isWifiSetupSupported ? 'intro' : 'guide');
+  const [page, setPage] = useState(0);
+  const [trouble, setTrouble] = useState<number | null>(null);
   const [session, setSession] = useState<WifiSetupSession | null>(null);
   const [ssid, setSsid] = useState('');
   const [otherSsid, setOtherSsid] = useState('');
@@ -134,6 +195,29 @@ export function WifiSetupFlow({
     };
   }, [phase, verify, onDone]);
 
+  /**
+   * On the hotspot path nothing talks back to the app, so watch the cloud: the
+   * sensor's first upload is the proof, and the guide finishes by itself.
+   */
+  useEffect(() => {
+    if (phase !== 'guide' || !verify) return;
+    let alive = true;
+    const poll = setInterval(async () => {
+      try {
+        if (alive && (await verify())) {
+          setPhase('success');
+          setTimeout(onDone, 1500);
+        }
+      } catch {
+        // offline for a moment — keep watching
+      }
+    }, 4000);
+    return () => {
+      alive = false;
+      clearInterval(poll);
+    };
+  }, [phase, verify, onDone]);
+
   const search = async () => {
     setErr(null);
     setStatus(null);
@@ -173,7 +257,7 @@ export function WifiSetupFlow({
         // Chrome throws NotFoundError both for "you cancelled" and "nothing
         // matched". Saying nothing here is what made this look broken.
         setErr(
-          'No sensor appeared. A sensor that already has Wi-Fi only shows up briefly, and a new one advertises in short bursts — unplug it, plug it back in, and tap “Find my sensor” within about 30 seconds.',
+          'No sensor appeared. Bluetooth setup only works on sensors built with it switched on — if yours isn’t listed, use the “greenr-setup” hotspot instead.',
         );
       } else if (/in progress|InvalidState/i.test(msg)) {
         setErr(
@@ -181,10 +265,10 @@ export function WifiSetupFlow({
         );
       } else if (/no sensor found|not found|timeout|timed out/i.test(msg)) {
         setErr(
-          'Couldn’t find your sensor. Make sure it’s powered and its light is slow-blinking (setup mode) — unplug and replug to restart setup — then keep it close and try again.',
+          'Couldn’t find your sensor over Bluetooth. Most sensors set up through the “greenr-setup” hotspot instead — tap “Use the setup hotspot instead” below.',
         );
       } else {
-        setErr(msg || 'Could not reach the sensor. Make sure it has power, its light is blinking, and it’s nearby.');
+        setErr(msg || 'Could not reach the sensor. Make sure it has power and is nearby, or use the setup hotspot.');
       }
     }
   };
@@ -218,49 +302,97 @@ export function WifiSetupFlow({
     );
   }
 
-  // ── Manual captive-portal fallback ──
-  if (phase === 'manual') {
+  // ── Hotspot guide (primary) ──
+  if (phase === 'guide') {
+    const step = GUIDE[page];
+    const last = page === GUIDE.length - 1;
     return (
       <View>
         <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Connect it to your Wi-Fi</Text>
-        {!isWifiSetupSupported ? (
-          // Be blunt: this browser CANNOT talk to the sensor, so nothing on this
-          // screen will connect it. Saying so up front stops people from tapping
-          // through and believing setup finished when it never started.
-          <Card mode="light" style={{ marginTop: 10, flexDirection: 'row', gap: 10 }}>
-            <Ionicons name="information-circle" size={20} color={accent.verdant} />
-            <Text style={[type.caption, { color: light.ink, flex: 1, lineHeight: 19 }]}>
-              <Text style={{ fontWeight: '600' }}>Use the sensor’s own setup network.</Text> This
-              browser can’t do Bluetooth, but you don’t need it — just follow the steps below. It
-              works on any phone, including iPhone.
-            </Text>
-          </Card>
-        ) : (
-          <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
-            The sensor remembers the network afterwards — this is a one-time step.
-          </Text>
-        )}
-        <View style={{ marginTop: 14, gap: 8 }}>
-          {MANUAL_STEPS.map((s, i) => (
-            <Card key={s.icon} mode="light" style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <Ionicons name={s.icon as any} size={20} color={accent.verdant} />
-              <Text style={[type.body, { color: light.ink, flex: 1, lineHeight: 20 }]}>
-                <Text style={{ color: light.inkMuted }}>{i + 1}. </Text>
-                {s.text}
-              </Text>
-            </Card>
+        <Text style={[type.body, { color: light.inkMuted, marginTop: 4 }]}>
+          A one-time step — about two minutes. Works on any phone.
+        </Text>
+
+        <View style={{ marginTop: 14 }}>
+          <step.Art />
+        </View>
+
+        {/* page dots, tappable */}
+        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 12 }}>
+          {GUIDE.map((g, i) => (
+            <Pressable key={g.title} onPress={() => setPage(i)} hitSlop={8}>
+              <View style={{ width: i === page ? 20 : 8, height: 8, borderRadius: 4, backgroundColor: i <= page ? accent.verdant : light.hairline }} />
+            </Pressable>
           ))}
         </View>
-        <Text style={[type.micro, { color: light.inkMuted, marginTop: 12, lineHeight: 16 }]}>
-          Sensor not showing up? Unplug it and plug it back in — that restarts its Bluetooth
-          setup window.
+
+        <Text style={[type.micro, { color: accent.verdant, marginTop: 12, letterSpacing: 0.5 }]}>
+          STEP {page + 1} OF {GUIDE.length}
         </Text>
-        <GButton title={doneCta} onPress={onDone} style={{ marginTop: 16 }} />
+        <Text style={[type.cardTitle, { color: light.ink, fontSize: 18, marginTop: 2 }]}>{step.title}</Text>
+        <Text style={[type.body, { color: light.ink, marginTop: 6, lineHeight: 22 }]}>{step.body}</Text>
+        {step.tip && (
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+            <Ionicons name="bulb-outline" size={16} color={accent.sunbeamText} style={{ marginTop: 2 }} />
+            <Text style={[type.caption, { color: light.inkMuted, flex: 1, lineHeight: 18 }]}>{step.tip}</Text>
+          </View>
+        )}
+
+        {verify && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 }}>
+            <ActivityIndicator size="small" color={accent.verdant} />
+            <Text style={[type.caption, { color: light.inkMuted, flex: 1 }]}>
+              Watching for your sensor — this moves on by itself once it reports.
+            </Text>
+          </View>
+        )}
+
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+          {page > 0 && (
+            <GButton title="Back" kind="secondary" mode="light" onPress={() => setPage(page - 1)} style={{ flex: 1 }} />
+          )}
+          <GButton
+            title={last ? doneCta : 'Next'}
+            track={last ? 'pair.wifi_guide_done' : undefined}
+            onPress={() => (last ? onDone() : setPage(page + 1))}
+            style={{ flex: 2 }}
+          />
+        </View>
+
+        {/* troubleshooting */}
+        <Text style={[type.sectionHeader, { color: light.inkMuted, marginTop: 24, marginBottom: 6 }]}>Having trouble?</Text>
+        <Card mode="light" style={{ paddingVertical: 4 }}>
+          {TROUBLE.map((t, i) => {
+            const open = trouble === i;
+            return (
+              <View key={t.q} style={{ borderTopWidth: i ? 1 : 0, borderTopColor: light.hairline }}>
+                <Pressable
+                  onPress={() => setTrouble(open ? null : i)}
+                  style={{ flexDirection: 'row', alignItems: 'center', minHeight: 46, gap: 8 }}
+                >
+                  <Text style={[type.body, { color: light.ink, flex: 1 }]}>{t.q}</Text>
+                  <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={light.inkMuted} />
+                </Pressable>
+                {open && (
+                  <View style={{ paddingBottom: 12 }}>
+                    <Text style={[type.caption, { color: light.inkMuted, lineHeight: 19 }]}>{t.a}</Text>
+                    {t.boot && (
+                      <View style={{ marginTop: 10 }}>
+                        <BootButtonArt />
+                      </View>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </Card>
+
         {isWifiSetupSupported && (
-          <GButton title="Use in-app setup instead" kind="ghost" mode="light" onPress={() => setPhase('intro')} style={{ marginTop: 8 }} />
+          <GButton title="Set up over Bluetooth instead" kind="ghost" mode="light" onPress={() => setPhase('intro')} style={{ marginTop: 10 }} />
         )}
         {onSkip && (
-          <GButton title={skipLabel ?? 'Skip for now'} kind="ghost" mode="light" onPress={onSkip} style={{ marginTop: 8 }} />
+          <GButton title={skipLabel ?? 'Skip for now'} kind="ghost" mode="light" onPress={onSkip} style={{ marginTop: 4 }} />
         )}
       </View>
     );
@@ -276,7 +408,7 @@ export function WifiSetupFlow({
         </Text>
         <Text style={[type.micro, { color: light.inkMuted, marginTop: 8, textAlign: 'center', lineHeight: 16 }]}>
           Keep it powered and close to your phone. If it doesn’t appear, unplug it and plug it back
-          in — that wakes it into fast setup mode.
+          in.
         </Text>
       </View>
     );
@@ -422,7 +554,7 @@ export function WifiSetupFlow({
         {err && <Text style={[type.micro, { color: '#C0392B', marginTop: 10 }]}>{err}</Text>}
 
         <GButton title="Connect" onPress={connect} disabled={!chosen} style={{ marginTop: 16 }} />
-        <GButton title="Can’t connect? See the checklist" kind="ghost" mode="light" onPress={() => setPhase('manual')} style={{ marginTop: 8 }} />
+        <GButton title="Use the setup hotspot instead" kind="ghost" mode="light" onPress={() => setPhase('guide')} style={{ marginTop: 8 }} />
       </View>
     );
   }
@@ -432,8 +564,8 @@ export function WifiSetupFlow({
     <View>
       <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Connect it to your Wi-Fi</Text>
       <Text style={[type.body, { color: light.inkMuted, marginTop: 6, lineHeight: 22 }]}>
-        Set it up right here — no switching Wi-Fi networks. Give the sensor power, keep it close,
-        and we’ll find it over Bluetooth. There’s no rush: it stays findable until you’re ready.
+        For sensors built with Bluetooth setup: keep it powered and close, and we’ll find it and hand
+        it your Wi-Fi — no switching networks.
       </Text>
 
       <Card mode="light" style={{ marginTop: 16, gap: 10 }}>
@@ -452,7 +584,7 @@ export function WifiSetupFlow({
       {err && <Text style={[type.micro, { color: '#C0392B', marginTop: 12 }]}>{err}</Text>}
 
       <GButton title="Find my sensor" onPress={search} style={{ marginTop: 16 }} />
-      <GButton title="Can’t connect? See the checklist" kind="ghost" mode="light" onPress={() => setPhase('manual')} style={{ marginTop: 8 }} />
+      <GButton title="Use the setup hotspot instead" kind="ghost" mode="light" onPress={() => setPhase('guide')} style={{ marginTop: 8 }} />
       {onSkip && (
         <GButton title={skipLabel ?? 'Skip for now'} kind="ghost" mode="light" onPress={onSkip} style={{ marginTop: 8 }} />
       )}

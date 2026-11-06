@@ -19,6 +19,7 @@ import { Card, GButton } from '@/components/greenr/UI';
 import VitalityRing from '@/components/greenr/VitalityRing';
 import { accent, dark, layout, type } from '@/constants/theme';
 import { type AlertLevel, notificationsFor } from '@/lib/alerts';
+import { track } from '@/lib/analytics';
 import { attentionFor, byAttention, type Attention } from '@/lib/attention';
 import { applyCalibration, calibrationFor } from '@/lib/calibration';
 import { careScoreValue } from '@/lib/careScore';
@@ -344,8 +345,8 @@ ${est.detail}` : ''}`;
         title="Today"
         right={
           <>
-            <NavButton icon="add" label="Add" onPress={() => router.push('/add-sheet')} />
-            <AvatarButton name={profile?.name ?? 'Gardener'} onPress={() => router.push('/you' as any)} />
+            <NavButton icon="add" label="Add" onPress={() => { track('tap:home.add'); router.push('/add-sheet'); }} />
+            <AvatarButton name={profile?.name ?? 'Gardener'} onPress={() => { track('tap:home.avatar'); router.push('/you' as any); }} />
           </>
         }
       />
@@ -360,7 +361,7 @@ ${est.detail}` : ''}`;
           {avg != null && <VitalityRing score={avg} size={64} showLabel trackColor={dark.hairline} />}
         </View>
         {plants.length === 0 && (
-          <GButton title="Add your first plant" onPress={() => router.push('/add-plant')} style={{ marginTop: 16 }} />
+          <GButton title="Add your first plant" track="home.add_first_plant" onPress={() => router.push('/add-plant')} style={{ marginTop: 16 }} />
         )}
       </Card>
 
@@ -386,6 +387,7 @@ ${est.detail}` : ''}`;
             title="Keep going"
             kind="secondary"
             style={{ marginTop: 14, minHeight: 40 }}
+            track="home.milestones_dismiss"
             onPress={() => setSettings({ milestonesSeen: [...(settings.milestonesSeen ?? []), ...wins.map((m) => m.id)] })}
           />
         </Card>
@@ -401,6 +403,7 @@ ${est.detail}` : ''}`;
             iconColor={fleet.severity >= 65 ? accent.clay : accent.sunbeam}
             title={fleet.headline}
             subtitle={fleet.detail}
+            track="home.fleet_alert"
             onPress={() => router.push('/device-health' as any)}
           />
         </ListGroup>
@@ -423,6 +426,7 @@ ${est.detail}` : ''}`;
                       color={accent.verdant}
                       onPress={() => {
                         if (ticked) return;
+                        track('tap:home.todo_check');
                         logWaterAmount(p.id, ml, { suggestedMl: ml, source: 'preset' });
                         setDone((d) => ({ ...d, [p.id]: ml }));
                       }}
@@ -442,6 +446,7 @@ ${est.detail}` : ''}`;
                         : a.reason
                 }
                 subtitleLines={3}
+                track="home.todo_item"
                 onPress={() => router.push(`/plant/${p.id}`)}
               />
             );
@@ -461,6 +466,7 @@ ${est.detail}` : ''}`;
                 title={`${p.name} · ${a.label}`}
                 subtitle={a.reason}
                 subtitleLines={3}
+                track="home.worth_a_look"
                 onPress={() => router.push(`/plant/${p.id}`)}
               />
             );
@@ -477,6 +483,7 @@ ${est.detail}` : ''}`;
               iconColor={a.level === 'bad' ? accent.clay : a.level === 'warn' ? accent.sunbeam : accent.verdant}
               title={a.text}
               titleLines={3}
+              track="home.sensor_alert"
               onPress={() => router.push(`/plant/${a.plantId}`)}
             />
           ))}
@@ -509,6 +516,7 @@ ${est.detail}` : ''}`;
               title={p.name}
               subtitle={whenFor(p)}
               subtitleLines={4}
+              track="home.coming_up"
               onPress={() => router.push(`/plant/${p.id}`)}
             />
           ))}
@@ -527,13 +535,14 @@ ${est.detail}` : ''}`;
                 .join(' · ')
             }
             right={showFullBriefing ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: accent.verdant }} /> : undefined}
+            track="home.weekly_briefing"
             onPress={() => router.push('/briefing')}
           />
         </ListGroup>
       )}
 
       {plants.length === 0 && (
-        <Pressable onPress={() => router.push('/pair-device' as any)} style={{ marginTop: 10 }}>
+        <Pressable onPress={() => { track('tap:home.pair_sensor'); router.push('/pair-device' as any); }} style={{ marginTop: 10 }}>
           <Text style={[type.caption, { color: accent.verdant, textAlign: 'center' }]}>Have a Greenr sensor? Pair it</Text>
         </Pressable>
       )}

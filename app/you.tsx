@@ -234,13 +234,14 @@ export default function AccountScreen() {
         </Text>
 
         <ListGroup header="Your garden">
-          <ListRow icon="leaf" title="Plants" value={String(plants.length)} onPress={() => router.push('/plants' as any)} />
-          <ListRow icon="home" iconColor="#5B8DB8" title="Rooms" value={String(spots.length)} onPress={() => router.push('/rooms' as any)} />
-          <ListRow icon="bar-chart" iconColor="#8A6FB0" title="Garden report" onPress={() => router.push('/report' as any)} />
+          <ListRow icon="leaf" title="Plants" track="you.plants" value={String(plants.length)} onPress={() => router.push('/plants' as any)} />
+          <ListRow icon="home" iconColor="#5B8DB8" title="Rooms" track="you.rooms" value={String(spots.length)} onPress={() => router.push('/rooms' as any)} />
+          <ListRow icon="bar-chart" iconColor="#8A6FB0" title="Garden report" track="you.report" onPress={() => router.push('/report' as any)} />
           <ListRow
             icon="checkmark-done"
             iconColor={accent.sage}
             title="Forecast accuracy"
+            track="you.accuracy"
             value={accuracyPct != null ? `${accuracyPct}%` : undefined}
             subtitle={accuracyPct != null ? `on your garden (±1 day, 90 days)` : 'Builds as forecasts resolve'}
             onPress={() => router.push('/accuracy')}
@@ -258,6 +259,7 @@ export default function AccountScreen() {
                 title={d.device.label?.trim() || 'Greenr sensor'}
                 subtitle={conn.sinceLabel}
                 right={<StatusDot status={connToStatus(conn.status)} />}
+                track="you.device"
                 onPress={() => router.push('/devices')}
               />
             );
@@ -270,6 +272,7 @@ export default function AccountScreen() {
               title={s.name}
               subtitle={`Battery ${s.batteryPct}%`}
               right={<StatusDot status={s.status} />}
+              track="you.sensor"
               onPress={() => router.push(`/sensor/${s.id}`)}
             />
           ))}
@@ -277,14 +280,15 @@ export default function AccountScreen() {
             <ListRow
               icon="add"
               title="Pair a sensor"
+              track="you.pair_sensor"
               subtitle="Turns estimates into measurements"
               onPress={() => router.push('/pair-device' as any)}
             />
           ) : (
-            <ListRow icon="settings" iconColor="#4F8A8B" title="Manage sensors" onPress={() => router.push('/devices')} />
+            <ListRow icon="settings" iconColor="#4F8A8B" title="Manage sensors" track="you.manage_sensors" onPress={() => router.push('/devices')} />
           )}
           {deviceCount > 0 && (
-            <ListRow icon="pulse" iconColor={accent.sunbeam} title="Sensor health" onPress={() => router.push('/device-health' as any)} />
+            <ListRow icon="pulse" iconColor={accent.sunbeam} title="Sensor health" track="you.sensor_health" onPress={() => router.push('/device-health' as any)} />
           )}
         </ListGroup>
 
@@ -293,25 +297,27 @@ export default function AccountScreen() {
             icon="sparkles"
             iconColor={accent.warm}
             title={settings.plus ? 'Greenr+ is active' : 'Greenr+'}
+            track="you.plus"
             subtitle={settings.plus ? undefined : '10-day forecasts, full history, photo diagnosis'}
             onPress={() => router.push('/plus')}
           />
         </ListGroup>
 
         <ListGroup header="Settings">
-          <ListRow icon="settings" iconColor="#7D8790" title="Settings" onPress={() => router.push('/settings')} />
-          <ListRow icon="notifications" iconColor={accent.clay} title="Notifications" onPress={() => router.push('/notifications' as any)} />
-          <ListRow icon="people" iconColor="#5B8DB8" title="Household & sharing" onPress={() => router.push('/household' as any)} />
-          <ListRow icon="lock-closed" iconColor="#4F8A8B" title="Security & privacy" onPress={() => router.push('/security' as any)} />
+          <ListRow icon="settings" iconColor="#7D8790" title="Settings" track="you.settings" onPress={() => router.push('/settings')} />
+          <ListRow icon="notifications" iconColor={accent.clay} title="Notifications" track="you.notifications" onPress={() => router.push('/notifications' as any)} />
+          <ListRow icon="people" iconColor="#5B8DB8" title="Household & sharing" track="you.household" onPress={() => router.push('/household' as any)} />
+          <ListRow icon="lock-closed" iconColor="#4F8A8B" title="Security & privacy" track="you.security" onPress={() => router.push('/security' as any)} />
         </ListGroup>
 
         <ListGroup header="Support">
-          <ListRow icon="help-buoy" iconColor="#5B8DB8" title="Help" onPress={() => router.push('/help' as any)} />
-          <ListRow icon="information-circle" iconColor="#7D8790" title="About Greenr" onPress={() => router.push('/about' as any)} />
+          <ListRow icon="help-buoy" iconColor="#5B8DB8" title="Help" track="you.help" onPress={() => router.push('/help' as any)} />
+          <ListRow icon="information-circle" iconColor="#7D8790" title="About Greenr" track="you.about" onPress={() => router.push('/about' as any)} />
           <ListRow
             icon="share"
             iconColor={accent.verdant}
             title="Share Greenr"
+            track="you.share"
             chevron={false}
             onPress={() =>
               shareContent({

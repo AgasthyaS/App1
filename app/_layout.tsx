@@ -7,6 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { applyAppearance, currentScheme, dark } from '@/constants/theme';
 import { AuthProvider } from '@/lib/auth';
+import { AnalyticsSync } from '@/lib/useAnalytics';
 import { GreenrProvider } from '@/lib/store';
 import { BleGatewaySync } from '@/lib/useBleGateway';
 import { ReminderSync } from '@/lib/useReminders';
@@ -42,6 +43,7 @@ export default function RootLayout() {
           <GreenrProvider>
             <ReminderSync />
             <BleGatewaySync />
+            <AnalyticsSync />
             <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
             <Stack
               key={scheme}
@@ -74,6 +76,13 @@ export default function RootLayout() {
               <Stack.Screen name="suggest" options={{ presentation: 'modal' }} />
               <Stack.Screen name="privacy" options={{ presentation: 'modal' }} />
               <Stack.Screen name="terms" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="legal" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="cookies" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="acceptable-use" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="subscription-terms" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="data-deletion" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="hardware-warranty" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="usage" />
               <Stack.Screen name="notifications" />
               <Stack.Screen name="device-health" />
               <Stack.Screen name="report" />

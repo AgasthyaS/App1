@@ -86,6 +86,7 @@ export default function AboutScreen() {
         <ListGroup header="Legal">
           <ListRow icon="hand-left" iconColor="#4F8A8B" title="Privacy policy" onPress={() => router.push('/privacy' as any)} />
           <ListRow icon="document-text" iconColor="#7D8790" title="Terms of service" onPress={() => router.push('/terms' as any)} />
+          <ListRow icon="library" iconColor="#7D8790" title="All legal policies" subtitle="Cookies, acceptable use, subscription, warranty, data deletion" onPress={() => router.push('/legal' as any)} />
         </ListGroup>
       </ScrollView>
     </View>

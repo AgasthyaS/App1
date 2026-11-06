@@ -113,6 +113,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const uid = session?.user?.id;
     // 1) Remove the cloud garden (RLS lets a user delete their own row).
     if (uid) await supabase.from('gardens').delete().eq('user_id', uid);
+    // Usage events cascade with the login too, but delete them explicitly so
+    // they go even when delete_user() isn't installed.
+    if (uid) await supabase.from('analytics_events').delete().eq('user_id', uid);
     // 2) Remove the login itself. Needs the delete_user() SQL function; if it
     //    isn't installed yet the data is still gone and we still sign out, so
     //    the practical "start fresh" result holds either way.
