@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { applyCalibration, emptyCalibration, isCalibrated, withSoilEndpoint } from '@/lib/calibration';
 import { normalizeReading, type Reading } from '@/lib/devices';
 import { dayLight, daytimeLightAvg, recentLightAvg, type DayLight } from '@/lib/insights';
-import { dliToIndex, estimateDli, indexToLux, luxToIndex, luxToPpfd, photonMeanIndex, ppfdToDli } from '@/lib/lightModel';
+import { LDR_SIGMA, LUX_SENSOR_SIGMA, dliToIndex, estimateDli, indexToLux, luxToIndex, luxToPpfd, photonMeanIndex, ppfdToDli } from '@/lib/lightModel';
 import { lightStatus, lightTone } from '@/lib/plantStatus';
-import { TYPICAL_LDR, calibrateLdr, ldrCeilingLux, ldrLux, validateLight } from '@/lib/sensing/light';
+import { BH1750_FULL_SCALE_LUX, TYPICAL_LDR, calibrateLdr, ldrCeilingLux, ldrLux, luxQuality, validateLight } from '@/lib/sensing/light';
 import {
   ADC_MAX, FACTORY_SOIL_ENDPOINTS, cleanCurve, endpointsValid, rawFromIndex, soilIndex,
   thetaFromCurve, thetaFromWeights, traceConsistency, validateSoil,
@@ -28,8 +28,18 @@ describe('soil: raw → validated', () => {
     [150, 'disconnected'], [1000, 'beyond-wet'], [1400, 'ok'], [2200, 'ok'], [3020, 'ok'],
     [3120, 'not-inserted'], [4095, 'not-inserted'], [4096, 'invalid'], [-1, 'invalid'],
     [NaN, 'invalid'], [Infinity, 'invalid'],
-  ])('raw %s → %s', (raw, quality) => {
-    expect(validateSoil(raw as number).quality).toBe(quality);
+  ])('against a known scale: raw %s → %s', (raw, quality) => {
+    expect(validateSoil(raw as number, FACTORY_SOIL_ENDPOINTS).quality).toBe(quality);
+  });
+  it('without the sensor’s own scale, only structural faults are flagged', () => {
+    // An ESP32-C3 can read 3500 in dry soil. Judged against the dev-kit's factory
+    // pair that looked like "not in the soil"; it must not.
+    expect(validateSoil(3500).quality).toBe('ok');
+    expect(validateSoil(900).quality).toBe('ok');
+    expect(validateSoil(150).quality).toBe('disconnected');
+    expect(validateSoil(4096).quality).toBe('invalid');
+    expect(validateSoil(3500, { dryAdc: 3700, wetAdc: 1700 }).quality).toBe('ok');
+    expect(validateSoil(3850, { dryAdc: 3700, wetAdc: 1700 }).quality).toBe('not-inserted');
   });
   it('null and undefined are invalid, not zero', () => {
     expect(validateSoil(null).quality).toBe('invalid');
@@ -318,5 +328,72 @@ describe('air: saturation vapour pressure and VPD', () => {
   });
   it('warmer air at the same humidity is thirstier', () => {
     expect(vpdKpa(28, 60)!).toBeGreaterThan(vpdKpa(22, 60)! * 1.3);
+  });
+});
+
+describe('ESP32-C3 rows: BH1750 lux, battery, own-scale soil checks', () => {
+  const c3 = (over: Partial<Reading>) =>
+    row({ soil_pct: 2900, soil_raw: 2900, lux: 1200, battery_mv: 3950, rssi_dbm: -61, temp_c: 21.5, humidity_pct: 48, ...over });
+
+  it('a lux reading becomes the light index exactly, and the photoresistor path is not used', () => {
+    const r = normalizeReading(c3({}));
+    expect(r.light_lux).toBeCloseTo(luxToIndex(1200), 10);
+    expect(indexToLux(r.light_lux!)).toBeCloseTo(1200, 6);
+    expect(r.light_raw).toBeNull();
+    expect(r.light_quality).toBe('ok');
+    expect(r.battery_mv).toBe(3950);
+    expect(r.rssi_dbm).toBe(-61);
+  });
+
+  it('is idempotent with lux', () => {
+    const once = normalizeReading(c3({}));
+    expect(normalizeReading(once)).toEqual(once);
+  });
+
+  it('lux at the BH1750 ceiling is flagged as a lower bound; dark is 0, not an error', () => {
+    expect(normalizeReading(c3({ lux: 121557 })).light_quality).toBe('saturated-bright');
+    expect(luxQuality(BH1750_FULL_SCALE_LUX - 1)).toBe('ok');
+    const dark = normalizeReading(c3({ lux: 0 }));
+    expect(dark.light_lux).toBe(0);
+    expect(dark.light_quality).toBe('ok');
+  });
+
+  it('a missing or negative lux falls back to whatever light the row has, never NaN', () => {
+    expect(normalizeReading(c3({ lux: null, light_lux: null })).light_lux).toBeNull();
+    expect(normalizeReading(c3({ lux: -1, light_lux: null })).light_lux).toBeNull();
+    expect(normalizeReading(c3({ lux: NaN, light_lux: null })).light_lux).toBeNull();
+  });
+
+  it('an old LDR row is still read as before', () => {
+    const r = normalizeReading(row({ soil_pct: 2210, light_lux: 1700 }));
+    expect(r.lux).toBeNull();
+    expect(r.light_raw).toBe(1700);
+  });
+
+  it('a dry C3 probe is not called "not in the soil" until its own air reading is known', () => {
+    const r = normalizeReading(c3({ soil_pct: 3500, soil_raw: 3500 }));
+    expect(r.soil_quality).toBe('ok');
+    const cal = withSoilEndpoint(withSoilEndpoint(emptyCalibration(), 'dry', 3700), 'wet', 1700);
+    expect(applyCalibration(r, cal).soil_quality).toBe('ok');
+    expect(applyCalibration(normalizeReading(c3({ soil_pct: 3850, soil_raw: 3850 })), cal).soil_quality).toBe('not-inserted');
+    expect(applyCalibration(r, cal).soil_pct).toBeCloseTo(10, 6); // (3700 − 3500) / 2000
+  });
+
+  it('a "reversed light sensor" switch left on from an LDR does not flip a lux sensor', () => {
+    const cal = { ...emptyCalibration(), lightInverted: true };
+    const r = normalizeReading(c3({ lux: 20000 }));
+    expect(applyCalibration(r, cal).light_lux).toBeCloseTo(r.light_lux!, 10);
+    const ldr = normalizeReading(row({ light_lux: 1700 }));
+    expect(applyCalibration(ldr, cal).light_lux).toBeCloseTo(100 - ldr.light_lux!, 10);
+  });
+
+  it('the daily-light band is narrower for a lux sensor than for an LDR', () => {
+    const ldr = estimateDli(60);
+    const lux = estimateDli(60, undefined, LUX_SENSOR_SIGMA);
+    expect(lux.dli).toBeCloseTo(ldr.dli, 10);
+    expect(ldr.high / ldr.low).toBeCloseTo(LDR_SIGMA ** 2, 10);
+    expect(lux.high / lux.low).toBeCloseTo(LUX_SENSOR_SIGMA ** 2, 10);
+    // a nonsense band falls back to the conservative one
+    expect(estimateDli(60, undefined, 0.5).high / estimateDli(60, undefined, 0.5).low).toBeCloseTo(LDR_SIGMA ** 2, 10);
   });
 });

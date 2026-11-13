@@ -47,9 +47,9 @@ interface GuideStep {
 const GUIDE: GuideStep[] = [
   {
     Art: HotspotOnArt,
-    title: 'Plug in the sensor',
-    body: 'Plug it into a wall USB adapter and keep it within a few metres of you. Within about 10 seconds it starts its own setup Wi-Fi network called “greenr-setup”.',
-    tip: 'No rush — it keeps the setup network open until it’s connected.',
+    title: 'Power on the sensor',
+    body: 'Connect its battery, or plug it into a wall USB adapter, and keep it within a few metres of you. Within about 10 seconds it starts its own setup Wi-Fi network called “greenr-setup”.',
+    tip: 'On USB power it waits as long as you need. On battery it closes after 20 minutes to save power: press the sensor’s RST button to open it again.',
   },
   {
     Art: JoinHotspotArt,
@@ -74,7 +74,7 @@ const GUIDE: GuideStep[] = [
 const TROUBLE: { q: string; a: string; boot?: boolean }[] = [
   {
     q: 'I don’t see “greenr-setup”',
-    a: 'The sensor only offers it while it has no saved Wi-Fi. Unplug it, plug it back in and wait 10 seconds. If it was set up before, make it forget the old network: a few seconds after plugging it in, hold the BOOT button for 3 seconds.',
+    a: 'The sensor only offers it while it has no saved Wi-Fi. Press its RST button (or unplug and replug it) and wait 10 seconds. If it was set up before, make it forget the old network: tap RST, then within 2 seconds press and hold BOOT for 3 seconds.',
     boot: true,
   },
   {
@@ -91,7 +91,7 @@ const TROUBLE: { q: string; a: string; boot?: boolean }[] = [
   },
   {
     q: 'It connected, but no reading arrives',
-    a: 'Check it’s on a wall adapter — computer USB ports sleep and cut power. Then look at Device health in a few minutes.',
+    a: 'On battery, check it is charged. On USB, use a wall adapter: computer ports sleep and cut power. Then look at Device health in a few minutes.',
   },
 ];
 
@@ -407,7 +407,7 @@ export function WifiSetupFlow({
           Looking for your sensor…
         </Text>
         <Text style={[type.micro, { color: light.inkMuted, marginTop: 8, textAlign: 'center', lineHeight: 16 }]}>
-          Keep it powered and close to your phone. If it doesn’t appear, unplug it and plug it back
+          Keep it powered and close to your phone. If it doesn’t appear, press its RST button, or unplug it and plug it back
           in.
         </Text>
       </View>

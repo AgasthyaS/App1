@@ -42,7 +42,7 @@ export default function PrivacyPolicy() {
         {
           heading: 'Information collected automatically',
           body: [
-            '• Sensor readings: Greenr sensors report soil moisture, light, temperature, humidity and battery level, along with the sensor’s identifier, firmware version, check-in interval and the time it was last seen.',
+            '• Sensor readings: Greenr sensors report soil moisture, light, temperature, humidity and battery level, along with the sensor’s identifier, firmware version, battery voltage, Wi-Fi signal strength, check-in interval and the time it was last seen.',
             '• Wi-Fi setup: when you connect a sensor to Wi-Fi, your network name and password go over Bluetooth straight to the sensor. They are not sent to our servers.',
             `• Usage analytics: the names of the screens you open (for example "briefing" or "plant detail"), which named buttons you tap (for example "weekly briefing" on the Today screen), and core actions such as logging a watering. Each event carries a timestamp, your platform (iOS, Android or web), the app version, a random install identifier, and your account identifier if you are signed in. Analytics never records what you type, plant names, notes, photos, email addresses or location.`,
             '• Advice history: the watering advice the app gave for each plant, the readings it was based on, and whether a watering followed. This lets the app check its own advice against what happened.',

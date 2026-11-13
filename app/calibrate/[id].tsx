@@ -17,8 +17,6 @@ import {
 } from '@/lib/calibration';
 import SoilRangeCard from '@/components/greenr/SoilRangeCard';
 import { useGreenr } from '@/lib/store';
-import { useAllLiveReadings } from '@/lib/useLiveReading';
-
 const METRICS: CalMetricKey[] = ['moisture', 'temperature', 'humidity', 'light'];
 
 /**
@@ -34,9 +32,6 @@ export default function Calibrate() {
   const sensor = sensors.find((s) => s.id === key);
   const cal = calibrations[key] ?? emptyCalibration();
   const inverted = !!cal.lightInverted;
-  // The newest reading from THIS device, for capturing its own air/water counts.
-  const readings = useAllLiveReadings();
-  const latestForDevice = [...readings.values()].find((r) => r?.device_id === key) ?? null;
   const isRealDevice = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(key);
 
   const [openMetric, setOpenMetric] = useState<CalMetricKey | null>(null);
@@ -84,7 +79,7 @@ export default function Calibrate() {
       {isRealDevice && (
         <>
           <SectionHeader>Soil sensor scale</SectionHeader>
-          <SoilRangeCard sensorKey={key} calibration={cal} latest={latestForDevice} />
+          <SoilRangeCard sensorKey={key} calibration={cal} />
           <Text style={[type.micro, { color: dark.inkMuted, marginTop: 8, marginHorizontal: 4, lineHeight: 16 }]}>
             The fine-tuning below adds a fixed correction on top of this scale. Set the scale first.
           </Text>

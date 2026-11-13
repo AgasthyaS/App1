@@ -1,5 +1,5 @@
 import type { Reading } from './devices';
-import { endpointsValid, soilIndex, type MoisturePoint, type SoilEndpoints } from './sensing/moisture';
+import { endpointsValid, soilIndex, validateSoil, type MoisturePoint, type SoilEndpoints } from './sensing/moisture';
 
 /**
  * Sensor calibration (§8). A sensor's raw output drifts from truth — capacitive
@@ -104,19 +104,22 @@ export function isOverdue(metric: CalMetric, key: CalMetricKey, now = Date.now()
 export function applyCalibration(reading: Reading, cal?: SensorCalibration | null): Reading {
   if (!cal) return reading;
   const clampPct = (v: number) => Math.max(0, Math.min(100, v));
-  // Reversed LDR modules read high in the dark — flip first, then offset.
+  // Reversed LDR modules read high in the dark — flip first, then offset. A lux
+  // sensor reports light directly and cannot be wired backwards, so a "reversed"
+  // switch left on from an LDR is ignored for it.
+  const fromLux = typeof reading.lux === 'number' && Number.isFinite(reading.lux);
   const light =
     reading.light_lux == null
       ? reading.light_lux
-      : clampPct((cal.lightInverted ? 100 - reading.light_lux : reading.light_lux) + cal.light.offset);
-  // Per-sensor endpoints re-derive the index from the raw count. Rows without a
-  // raw count (older firmware) keep the value they arrived with.
-  const base =
-    reading.soil_raw != null && endpointsValid(cal.soilEndpoints)
-      ? soilIndex(reading.soil_raw, cal.soilEndpoints)
-      : reading.soil_pct;
+      : clampPct((cal.lightInverted && !fromLux ? 100 - reading.light_lux : reading.light_lux) + cal.light.offset);
+  // Per-sensor endpoints re-derive the index from the raw count — and re-judge it,
+  // since "not in the soil" can only be decided against this probe's own air
+  // reading. Rows without a raw count (older firmware) keep what they arrived with.
+  const own = reading.soil_raw != null && endpointsValid(cal.soilEndpoints) ? cal.soilEndpoints : null;
+  const base = own ? soilIndex(reading.soil_raw as number, own) : reading.soil_pct;
   return {
     ...reading,
+    soil_quality: own ? validateSoil(reading.soil_raw, own).quality : reading.soil_quality,
     soil_pct: base == null ? base : clampPct(base + cal.moisture.offset),
     temp_c: reading.temp_c == null ? reading.temp_c : Math.round((reading.temp_c + cal.temperature.offset) * 10) / 10,
     humidity_pct:

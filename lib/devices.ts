@@ -1,5 +1,6 @@
 import { relTime } from './format';
-import { validateLight, type LightQuality } from './sensing/light';
+import { luxToIndex } from './lightModel';
+import { luxQuality, validateLight, type LightQuality } from './sensing/light';
 import { FACTORY_SOIL_ENDPOINTS, validateSoil, type SoilQuality } from './sensing/moisture';
 import { supabase } from './supabase';
 
@@ -19,6 +20,15 @@ export interface Reading {
    */
   soil_raw?: number | null;
   light_raw?: number | null;
+  /**
+   * Illuminance in lux from a BH1750 (ESP32-C3 firmware). When present it is the
+   * light reading, and `light_lux` below is derived from it.
+   */
+  lux?: number | null;
+  /** battery voltage at the cell, mV; null on USB power or older firmware */
+  battery_mv?: number | null;
+  /** Wi-Fi signal at upload, dBm */
+  rssi_dbm?: number | null;
   /** whether each raw value can be used, and if not, why (lib/sensing) */
   soil_quality?: SoilQuality;
   light_quality?: LightQuality;
@@ -196,17 +206,29 @@ export function normalizeReading(r: Reading): Reading {
   // The database is gaining explicit raw columns (see docs/DATABASE.md); until
   // every row has them, the legacy columns hold the same counts.
   const soil = finite(r.soil_raw) ?? finite(r.soil_pct);
-  const light = finite(r.light_raw) ?? finite(r.light_lux);
   const vSoil = soil == null ? null : validateSoil(soil);
+  /*
+   * LIGHT: a measured lux value outranks a photoresistor count. A BH1750 row is
+   * mapped onto the same 0–100 index every light calculation reads, through the
+   * index's own definition (lib/lightModel), so it is exact wherever the index is
+   * defined (80 – 65 000 lux) and clamps outside it. The averaging code converts
+   * the index back to lux, so nothing is lost in between.
+   */
+  const lux = finite(r.lux);
+  const usableLux = lux != null && lux >= 0 ? lux : null;
+  const light = usableLux == null ? finite(r.light_raw) ?? finite(r.light_lux) : null;
   const vLight = light == null ? null : validateLight(light);
   return {
     ...r,
     soil_raw: vSoil?.raw ?? null,
     light_raw: vLight?.raw ?? null,
+    lux: usableLux,
+    battery_mv: finite(r.battery_mv),
+    rssi_dbm: finite(r.rssi_dbm),
     soil_quality: vSoil?.quality,
-    light_quality: vLight?.quality,
+    light_quality: usableLux != null ? luxQuality(usableLux) : vLight?.quality,
     soil_pct: soil == null ? null : maybeRawToPct(soil, SOIL_DRY_ADC, SOIL_WET_ADC),
-    light_lux: light == null ? null : rawToPct(light, LIGHT_DARK_ADC, LIGHT_BRIGHT_ADC),
+    light_lux: usableLux != null ? luxToIndex(usableLux) : light == null ? null : rawToPct(light, LIGHT_DARK_ADC, LIGHT_BRIGHT_ADC),
     temp_c: finite(r.temp_c),
     humidity_pct: finite(r.humidity_pct),
     dli: finite(r.dli),
@@ -214,12 +236,21 @@ export function normalizeReading(r: Reading): Reading {
   };
 }
 
+/*
+ * READING_COLUMNS_NOTE — readings are selected with `*`, not a column list.
+ * Columns are added by migrations (soil_raw, lux, battery_mv, …), and PostgREST
+ * rejects a request that names a column the database does not have yet. With a
+ * list, deploying the app before running the SQL would lose every reading; with
+ * `*`, older databases simply return fewer columns and normalizeReading copes.
+ * The table holds nothing sensitive (no secrets), so `*` exposes nothing extra.
+ */
+
 /** Recent readings for a device, oldest→newest, for history charts. */
 export async function getReadingHistory(deviceId: string, limit = 48): Promise<Reading[]> {
   if (!supabase) return [];
   const { data } = await supabase
     .from('readings')
-    .select('device_id,light_lux,dli,soil_pct,temp_c,humidity_pct,battery_pct,created_at')
+    .select('*') // every column the database has; see READING_COLUMNS_NOTE
     .eq('device_id', deviceId)
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -231,7 +262,7 @@ export async function getReadingsSince(deviceId: string, sinceMs: number): Promi
   if (!supabase) return [];
   const { data } = await supabase
     .from('readings')
-    .select('device_id,light_lux,dli,soil_pct,temp_c,humidity_pct,battery_pct,created_at')
+    .select('*') // every column the database has; see READING_COLUMNS_NOTE
     .eq('device_id', deviceId)
     .gte('created_at', new Date(sinceMs).toISOString())
     .order('created_at', { ascending: true })
@@ -275,7 +306,7 @@ export async function getLatestReading(deviceId: string): Promise<Reading | null
   if (!supabase) return null;
   const { data } = await supabase
     .from('readings')
-    .select('device_id,light_lux,dli,soil_pct,temp_c,humidity_pct,battery_pct,created_at')
+    .select('*') // every column the database has; see READING_COLUMNS_NOTE
     .eq('device_id', deviceId)
     .order('created_at', { ascending: false })
     .limit(1)

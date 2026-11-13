@@ -17,7 +17,7 @@ copy `.env.example` to `.env` and fill in the two Supabase values.
 
 ```bash
 npm run typecheck         # TypeScript
-npm test                  # 274 tests: formulas, substrate, sensing, advice, AI handler, database
+npm test                  # 308 tests: formulas, substrate, sensing, advice, AI handler, database
 npm run lint
 ```
 
@@ -28,6 +28,7 @@ row-level security.
 ## Set up the backend
 
 1. Run the SQL files in the order listed in [docs/DATABASE.md](docs/DATABASE.md).
+   File 14 must be in place before flashing the ESP32-C3 firmware.
 2. Photo identification (optional):
    ```bash
    supabase secrets set GEMINI_API_KEY=<key>
@@ -61,5 +62,7 @@ supabase/
   functions/            identify-plant edge function and its shared logic
   seed/                 generated from lib/substrate — npm run gen:substrates
 tests/                  Vitest; tests/db runs the SQL
-firmware/               sensor firmware (see docs/HARDWARE.md before flashing)
+firmware/
+  greenr_sensor_c3/     ESP32-C3 + BH1750 + AHT10 + battery (current; see docs/HARDWARE.md)
+  greenr_sensor/        ESP32 dev kit + LDR (legacy)
 ```

@@ -28,6 +28,7 @@ test suite runs the whole list twice on a populated database to prove it.
 | 11 | `supabase-analytics.sql` | `analytics_events`, `analytics_admins` |
 | 12 | `supabase/migrations/20261112000000_platform.sql` | everything marked **new** below |
 | 13 | `supabase/seed/substrates.sql` | fills the substrate reference tables |
+| 14 | `supabase/migrations/20261112120000_c3_sensors.sql` | ESP32-C3 support: `lux`, `battery_mv`, `rssi_dbm`; `ingest_v2`; battery percentage; lux in daily summaries; `v_reading_daily_v2` |
 
 `supabase-sensors.sql`, `supabase-sensors-v2.sql` and `supabase-idle-3h.sql` are
 superseded by file 2 and need not be run on a new project.
@@ -114,12 +115,21 @@ One row per sensor report.
 | `quality` | smallint | Derived | bit flags, 0 = clean. **new** |
 | `soil_pct`, `light_lux` | numeric | | **legacy names** holding the same raw counts; kept for old app builds |
 | `dli` | numeric | | unused, firmware sends 0 |
-| `battery_pct` | int | Measured | null with current firmware |
+| `battery_pct` | int | Derived | from `battery_mv` by `battery_pct_from_mv()`; null on USB power and for LDR-era firmware |
+| `lux` | numeric | Measured | BH1750 illuminance, lux (ESP32-C3 firmware). Null for LDR sensors. **new (file 14)** |
+| `battery_mv` | int | Measured | cell voltage, mV, read before Wi-Fi starts. **new (file 14)** |
+| `rssi_dbm` | smallint | Measured | Wi-Fi signal at upload; only on the newest row of each upload. **new (file 14)** |
 
 `quality` bits: `1` soil outside 0–4095, `2` probe disconnected, `4` probe not in
-soil, `8` light at a rail, `16` temperature outside −40…85 °C, `32` humidity
-outside 0…100 %. Flagged rows are kept; summaries and aggregates skip them per
-metric.
+soil, `8` light at a rail (LDR) or at the BH1750's ceiling of about 121 500 lux,
+`16` temperature outside −40…85 °C, `32` humidity outside 0…100 %. Flagged rows
+are kept; summaries and aggregates skip them per metric.
+
+Bit `4` differs by upload path. `ingest_reading` (older firmware) compares with the
+ESP32 dev kit's fixed air count. `ingest_v2` (ESP32-C3) sets it only when the
+device has its own air/water endpoints in `sensor_calibrations` and the count is
+above its own air reading, because a C3 turns the same voltage into a different
+count.
 
 Raw counts are converted to a 0–100 index **in the app**, with the sensor's own
 endpoints (`lib/sensing/moisture.ts`). The database stores no converted soil
@@ -138,6 +148,9 @@ means are `sum / n` and days combine correctly. `v_reading_daily` exposes the
 means.
 
 Use it for any chart longer than a few days. A month is 30 rows instead of 240.
+File 14 adds `lux_n`, `lux_sum`, `lux_max` and `bat_mv_min`, and publishes the
+means including lux as `v_reading_daily_v2`. `v_reading_daily` keeps the columns
+file 12 gave it, so that file stays safe to re-run.
 
 Limitation: days are UTC. A chart drawn in local time is offset by the user's
 UTC offset at the day boundary.
@@ -249,6 +262,28 @@ is called by the sensor with the anon key. It checks the device secret, clamps
 `ingest_batch(p_device, p_rows)` is called by the phone gateway as the signed-in
 owner. Up to 2 000 rows; rows with the same `(device, at)`, an unparseable
 timestamp, a future timestamp or one older than 400 days are skipped and counted.
+
+`ingest_v2(p_device, p_secret, p_rows, p_fw, p_rssi)` (file 14) is what the
+ESP32-C3 firmware calls, with the anon key and the device secret. One request
+per wake carries the new reading plus any the sensor could not upload earlier:
+
+```json
+{"p_device":"…","p_secret":"…","p_fw":"c3-1.0","p_rssi":-61,
+ "p_rows":[{"ago":0,"soil":2311,"lux":845.2,"t":21.4,"h":54.0,"bat":3987}]}
+```
+
+`ago` is seconds since the reading was taken, clamped to 0…30 days. At most 48
+rows. A row already stored within ±30 s with the same soil count and lux is
+skipped, so a retry after a lost response does not duplicate it; a malformed row
+is skipped without losing the others. It stamps `plant_key`, computes
+`battery_pct` with `battery_pct_from_mv()`, records `firmware_version`,
+`battery_mv` and `rssi_dbm` on the device, and returns
+`{read_now, wake_seconds, inserted, skipped}`.
+
+`battery_pct_from_mv()` maps a resting single-cell lithium voltage to percent of
+usable charge: 4.20 V = 100, 3.80 V = 50, 3.40 V = 0 (below that the board's
+regulator cannot hold 3.3 V through a Wi-Fi transmission). Outside 2.5–4.5 V it
+returns null. The curve is in SQL so it can be corrected without reflashing.
 
 ---
 
@@ -376,8 +411,8 @@ recreates it.
   consistency.
 - `readings.plant_key` for rows before 2026-11-12 was filled from the assignment
   current on that date, which is wrong for any sensor that had been moved.
-- The app does not yet read `v_reading_daily`; charts still fetch raw rows. The
-  summary is in place and tested, the client switch is not done.
+- The app does not yet read `v_reading_daily` or `v_reading_daily_v2`; charts still
+  fetch raw rows. The summary is in place and tested, the client switch is not done.
 - The migration has been executed against PGlite, not against the live Supabase
   project. Storage policies in particular are untested, because PGlite has no
   storage schema.

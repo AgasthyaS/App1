@@ -23,7 +23,7 @@ import { isWifiSetupSupported } from '@/lib/wifiSetup';
 
 const PREP: { icon: string; text: string }[] = [
   { icon: 'hardware-chip-outline', text: 'Your Greenr sensor — its QR code is on the back and on the box' },
-  { icon: 'flash-outline', text: 'A wall USB adapter. Not a laptop port: laptops sleep and cut power' },
+  { icon: 'flash-outline', text: 'Power: a charged battery, or a wall USB adapter. Not a laptop port: laptops sleep and cut power' },
   { icon: 'wifi-outline', text: 'Your home Wi-Fi name and password (a 2.4 GHz network)' },
   { icon: 'time-outline', text: 'About 3 minutes, close to the sensor' },
 ];

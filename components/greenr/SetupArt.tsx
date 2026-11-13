@@ -150,7 +150,7 @@ function Pot({ x, y, w = 90, h = 70 }: { x: number; y: number; w?: number; h?: n
 
 // ───────────────────────────────── Scenes ─────────────────────────────────
 
-/** Step 0 — what you need: the sensor on a wall adapter, not a laptop port. */
+/** Step 0 — what you need: power from a wall adapter or a battery, not a laptop port. */
 export function PowerArt() {
   return (
     <Frame>
@@ -162,7 +162,7 @@ export function PowerArt() {
       <Rect x={230} y={73} width={8} height={4} fill={light.ink} />
       <Rect x={230} y={83} width={8} height={4} fill={light.ink} />
       <Tick x={230} y={62} />
-      <Label x={216} y={112} color={light.ink} weight="600">Wall USB adapter</Label>
+      <Label x={216} y={112} color={light.ink} weight="600">USB adapter or battery</Label>
       {/* laptop: crossed out */}
       <G opacity={0.85}>
         <Rect x={200} y={122} width={32} height={19} rx={3} fill="none" stroke={light.inkMuted} strokeWidth={2} />
@@ -339,9 +339,9 @@ export function BootButtonArt() {
     <Frame ratio={300 / 130}>
       <Rect x={40} y={30} width={150} height={70} rx={6} fill={BOARD} />
       <Rect x={95} y={45} width={46} height={40} rx={3} fill="#9AA6AE" />
-      <Label x={118} y={69} size={7} color={BOARD} weight="700">ESP32</Label>
+      <Label x={118} y={69} size={7} color={BOARD} weight="700">ESP32-C3</Label>
       <Rect x={20} y={56} width={22} height={18} rx={3} fill="#9AA6AE" />
-      {[['EN', 60], ['BOOT', 170]].map(([name, x]) => (
+      {[['RST', 60], ['BOOT', 170]].map(([name, x]) => (
         <G key={name as string}>
           <Rect x={(x as number) - 9} y={78} width={18} height={14} rx={3} fill="#E8E8E8" />
           <Circle cx={x as number} cy={85} r={4.5} fill={name === 'BOOT' ? accent.verdant : '#555'} />
@@ -351,8 +351,8 @@ export function BootButtonArt() {
       <Circle cx={170} cy={85} r={14} fill="none" stroke={accent.verdant} strokeWidth={2} strokeDasharray="4 3" />
       <Label x={250} y={58} size={10} color={light.ink} weight="700">Hold BOOT</Label>
       <Label x={250} y={72} size={10} color={light.ink} weight="700">for 3 seconds</Label>
-      <Label x={250} y={88} size={8}>a few seconds after</Label>
-      <Label x={250} y={99} size={8}>plugging it in</Label>
+      <Label x={250} y={88} size={8}>within 2 seconds of</Label>
+      <Label x={250} y={99} size={8}>tapping RST</Label>
     </Frame>
   );
 }

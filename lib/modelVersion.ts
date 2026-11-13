@@ -10,11 +10,11 @@
  */
 export const MODEL_VERSIONS = {
   /** raw counts → index, validation, per-sensor endpoints (lib/sensing) */
-  sensing: 's2',
+  sensing: 's3',
   /** substrate library, blend model, container physics (lib/substrate, lib/soilProfile) */
   substrate: 'b2',
   /** light averaging and daily-light estimate (lib/lightModel, lib/insights) */
-  light: 'l2',
+  light: 'l3',
   /** the water decision and its evidence grade (lib/waterAction, lib/recommendation) */
   decision: 'd2',
 } as const;

@@ -19,8 +19,9 @@
  *      photoperiod:  DLI = PPFD · photoperiodSeconds / 1e6.
  *
  * Because step 1 is uncalibrated, every result carries a confidence band — the
- * math is rigorous, the input is coarse, and the UI is told to say so. A real
- * lux meter (e.g. a BH1750) would collapse the band to a point.
+ * math is rigorous, the input is coarse, and the UI is told to say so. With a
+ * lux sensor (the BH1750 on the ESP32-C3 build) step 1 is measured instead and
+ * the band narrows to the lux→photon conversion; see LUX_SENSOR_SIGMA.
  */
 
 /** Illuminance a light index of 0 maps to (dim interior, lux). */
@@ -112,22 +113,35 @@ export interface DliEstimate {
  * about 2 for an uncalibrated part behind the case lid) through the
  * (monotonic) photometry chain.
  */
-export function estimateDli(index: number, photoperiodH: number = PHOTOPERIOD_H): DliEstimate {
+export function estimateDli(index: number, photoperiodH: number = PHOTOPERIOD_H, sigma: number = LDR_SIGMA): DliEstimate {
   const lux = indexToLux(index);
   const ppfd = luxToPpfd(lux);
   const dli = ppfdToDli(ppfd, photoperiodH);
-  // Multiplicative 1σ uncertainty. Uncalibrated photoresistors vary by about a
-  // factor of two from part to part, and the case's lid window cuts the light
-  // again before it reaches the sensor — 1.4 was optimistic.
-  const SIGMA = 2.0;
+  const s = Number.isFinite(sigma) && sigma >= 1 ? sigma : LDR_SIGMA;
   return {
     dli,
-    low: dli / SIGMA,
-    high: dli * SIGMA,
+    low: dli / s,
+    high: dli * s,
     lux,
     ppfd,
   };
 }
+
+/**
+ * Multiplicative 1σ uncertainty of a daily-light estimate, by light sensor.
+ *
+ * LDR: uncalibrated photoresistors vary by about a factor of two from part to
+ * part, and the case's lid window cuts the light again before it reaches the
+ * sensor.
+ *
+ * BH1750: the lux reading itself is within about ±20 % (datasheet), and turning
+ * lux into photons for plants adds about ±20 % more, because the conversion
+ * depends on the light source (0.0185 µmol·m⁻²·s⁻¹ per lux for daylight, roughly
+ * 0.013–0.020 across lamps and glass). Combined, √(0.2² + 0.2²) ≈ 0.28, so a
+ * factor of about 1.3. Judgement from those two figures, not a measurement.
+ */
+export const LDR_SIGMA = 2.0;
+export const LUX_SENSOR_SIGMA = 1.3;
 
 /** The inverse: what light index corresponds to a target DLI (for labelling axes/goals). */
 export function dliToIndex(dli: number, photoperiodH: number = PHOTOPERIOD_H): number {

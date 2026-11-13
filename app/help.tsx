@@ -16,8 +16,9 @@ const TOPICS: { group: string; items: Topic[] }[] = [
       {
         q: "I can't find the “greenr-setup” network",
         a: [
-          'The sensor only offers “greenr-setup” while it has no saved Wi-Fi. Plug it into a wall adapter, wait about 10 seconds, and refresh your phone’s Wi-Fi list.',
-          'If it was set up before, it is still trying its old network. A few seconds after plugging it in, hold its BOOT button for 3 seconds to make it forget that network and reopen setup.',
+          'The sensor only offers “greenr-setup” while it has no saved Wi-Fi. Press its RST button (or unplug and replug it), wait about 10 seconds, and refresh your phone’s Wi-Fi list.',
+          'On battery the setup network closes after 20 minutes to save power. Press RST to open it again.',
+          'If it was set up before, it is still trying its old network. Tap RST, then within 2 seconds press and hold BOOT for 3 seconds. It forgets that network and reopens setup.',
           'When your phone warns the network has no internet, choose to stay connected — the setup page is served by the sensor itself.',
         ],
         cta: { label: 'Set up Wi-Fi', to: '/wifi-setup' },
@@ -54,7 +55,7 @@ const TOPICS: { group: string; items: Topic[] }[] = [
         q: 'I moved house (or changed my router) — what happens?',
         a: [
           'Your history is safe in your account. The sensor just needs to learn the new network.',
-          'Plug it in at the new place, wait a few seconds, then hold its BOOT button for 3 seconds. It forgets the old network and opens “greenr-setup” again — then follow Wi-Fi setup.',
+          'At the new place, tap its RST button, then within 2 seconds press and hold BOOT for 3 seconds. It forgets the old network and opens “greenr-setup” again — then follow Wi-Fi setup.',
           'A brief outage (router reboot) needs no action at all — it keeps the old network and reconnects by itself.',
         ],
         cta: { label: 'Open Wi-Fi setup', to: '/wifi-setup' },

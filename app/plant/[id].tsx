@@ -19,7 +19,7 @@ import { useGreenr } from '@/lib/store';
 import { useLiveReading } from '@/lib/useLiveReading';
 import { idealsFor, type Tone } from '@/lib/plantStatus';
 import { plantsForEnvironment, scoreSpeciesForEnvironment, type Match } from '@/lib/compatibility';
-import { estimateDli, dliBracket } from '@/lib/lightModel';
+import { LDR_SIGMA, LUX_SENSOR_SIGMA, estimateDli, dliBracket } from '@/lib/lightModel';
 import { insightsFor, lightBenchmark, dayLight, daytimeLightAvg, recentLightAvg, lightVerdict } from '@/lib/insights';
 import { careProfileFor } from '@/lib/plantCare';
 import { computeHealth, vitalityFor, BASELINE_DAYS, type HealthComponent } from '@/lib/health';
@@ -525,11 +525,14 @@ export default function PlantDetail() {
   );
   // The physically-grounded DLI estimate for this spot (log-photometry). Prefer
   // the accumulated multi-day light average when we have it.
+  // A lux sensor narrows the band; an LDR keeps the factor-of-two one.
+  const luxSensor = typeof calReading?.lux === 'number';
   const dliHere = useMemo(() => {
-    if (lightAvg) return estimateDli(lightAvg.avg);
-    if (envLight != null) return estimateDli(envLight);
+    const sigma = luxSensor ? LUX_SENSOR_SIGMA : LDR_SIGMA;
+    if (lightAvg) return estimateDli(lightAvg.avg, undefined, sigma);
+    if (envLight != null) return estimateDli(envLight, undefined, sigma);
     return null;
-  }, [lightAvg, envLight]);
+  }, [lightAvg, envLight, luxSensor]);
 
   if (!plant) {
     return (

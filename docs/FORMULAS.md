@@ -16,7 +16,7 @@ computes what its definition says; "reference" means it reproduces a published
 number; "simulated" means it behaves coherently on generated traces. None of
 those is evidence of real-world accuracy.
 
-Run everything: `npm test` (274 tests).
+Run everything: `npm test` (308 tests).
 
 ---
 
@@ -24,7 +24,7 @@ Run everything: `npm test` (274 tests).
 
 | # | Name | File | Status |
 |---|---|---|---|
-| 1.1 | Raw validation | `lib/sensing/moisture.ts` | new |
+| 1.1 | Raw validation | `lib/sensing/moisture.ts` | new; changed for the ESP32-C3 |
 | 1.2 | Moisture index | `lib/sensing/moisture.ts` | changed |
 | 1.3 | Offset correction | `lib/calibration.ts` | kept |
 | 1.4 | Weighed calibration curve | `lib/sensing/moisture.ts` | new |
@@ -40,12 +40,22 @@ Classifies a stored count without changing it.
 | not finite, < 0, > 4095 | `invalid` |
 | 0–100 | `legacy-index` (row from firmware that converted on-device) |
 | 101–199 | `disconnected` |
-| ≥ dry endpoint + 100 | `not-inserted` |
-| < wet endpoint − 250 | `beyond-wet` |
+| ≥ dry endpoint + 100 | `not-inserted` — **only with this sensor's own endpoints** |
+| < wet endpoint − 250 | `beyond-wet` — **only with this sensor's own endpoints** |
 | otherwise | `ok` |
 
 Assumes a connected probe never reads below 200. That is the same assumption the
 app already made; it is now stated and tested.
+
+**Changed (sensing `s3`).** The two positional checks used to run against the
+factory pair (3020 / 1400), measured on an ESP32 dev kit. An ESP32-C3 turns the
+same voltage into a different count, so a correctly buried C3 probe in dry soil
+could be called "not in the soil" on every reading. They now run only once the
+sensor's own air and water counts are captured: in the app at
+`applyCalibration`, and in the database at upload (`reading_quality_v2`). Before
+calibration only structural faults are flagged. Cost: an uncalibrated dev-kit
+sensor no longer gets this check from the raw count; `probeInsertion` still
+judges insertion from the trace.
 
 ### 1.2 Moisture index
 
@@ -336,6 +346,8 @@ behind them. They apply only to plants without a sensor.
 | 4.5 | Daily light | `lib/lightModel.ts`, `lib/insights.ts` | **changed** |
 | 4.6 | Divider model | `lib/sensing/light.ts` | new, not wired in |
 | 4.7 | Light verdict | `lib/plantStatus.ts`, `lib/insights.ts` | changed (one definition) |
+| 4.8 | BH1750 lux → index | `lib/devices.ts`, `lib/sensing/light.ts`, firmware | new |
+| 4.9 | Daily-light band by sensor | `lib/lightModel.ts` | changed |
 
 ### 4.3 Index ↔ illuminance
 
@@ -386,7 +398,47 @@ more. So the sensor very likely cannot tell bright shade from full sun, and the
 
 This is implemented and tested but **not used for advice**, because R_fixed, R₁₀
 and γ are not known for the module in use. `calibrateLdr` fixes R₁₀ from one
-reference lux reading; a screen to collect it has not been built.
+reference lux reading; a screen to collect it has not been built. It applies to
+the legacy LDR build only.
+
+### 4.8 BH1750 lux (ESP32-C3 build) — new, light `l3`
+
+The BH1750 reports illuminance directly:
+
+```
+lux = counts / 1.2 × 69 / MTreg            datasheet; the library applies it
+```
+
+At the default MTreg 69 full scale is 65535 / 1.2 ≈ 54 600 lux. The firmware
+re-measures at MTreg 31 when the first reading exceeds 40 000 lux, giving full
+scale 65535 / 1.2 × 69/31 ≈ 121 557 lux. At or above 121 000 lux a reading is
+flagged as pinned (`saturated-bright`, quality bit 8).
+
+In the app, `normalizeReading` maps lux onto the existing 0–100 index with
+`luxToIndex`, the exact inverse of 4.3's `indexToLux`. Every light calculation
+(4.5's photon-weighted averaging, the verdicts) then runs unchanged, and because
+the averaging converts the index back to lux, a BH1750 reading round-trips
+exactly between 80 and 65 000 lux. Outside that range the index clamps: below
+80 lux reads as 0, above 65 000 as 100. That under-counts the brightest hours of
+full sun, which matters only for outdoor plants.
+
+A "reversed light sensor" switch left on from the LDR build is ignored for lux
+rows: a photodiode cannot be wired backwards.
+
+Validation: unit tests only. The BH1750's own accuracy (±20 %) is the
+manufacturer's; nothing here was compared with a lux meter.
+
+### 4.9 Daily-light uncertainty by sensor — changed, light `l3`
+
+`estimateDli(index, photoperiod, σ)` returns `[DLI/σ, DLI·σ]`.
+
+| Sensor | σ | Basis |
+|---|---|---|
+| LDR | 2.0 | part-to-part spread of uncalibrated photoresistors, plus the case window |
+| BH1750 | 1.3 | √(0.2² + 0.2²) ≈ 0.28: the sensor's ±20 % and about ±20 % in converting lux to photons, which depends on the light source (0.0185 µmol·m⁻²·s⁻¹ per lux for daylight, 0.013–0.020 across lamps) |
+
+Both are judgement from the stated figures, not measurements. The plant page uses
+1.3 when the latest reading carries lux.
 
 ---
 
@@ -469,6 +521,47 @@ unexplained, with the causes a sensor cannot see.
 
 ---
 
+## 8. Battery — new
+
+| # | Name | File | Status |
+|---|---|---|---|
+| 8.1 | Cell voltage | firmware `readBatteryMv` | new |
+| 8.2 | Voltage → percent | SQL `battery_pct_from_mv` | new |
+
+### 8.1 Cell voltage
+
+```
+V_cell = mean(16 × analogReadMilliVolts(GPIO1)) × (R_top + R_bottom) / R_bottom
+```
+
+Two equal 100 kΩ resistors give a factor of 2, so 4.2 V at the cell is 2.1 V at
+the pin, inside the C3 ADC's most accurate range. `analogReadMilliVolts` applies
+the chip's factory calibration. Read before Wi-Fi starts, because a transmission
+sags the cell by 100 mV or more and would make it look emptier than it is. Below
+2 500 mV nothing is treated as connected (USB power), and the reading is sent as null.
+
+The divider draws 4.2 V / 200 kΩ = 21 µA continuously.
+
+### 8.2 Voltage → percent
+
+Piecewise linear through a typical single-cell lithium resting-voltage curve:
+
+| mV | 4200 | 4100 | 4000 | 3900 | 3800 | 3700 | 3600 | 3500 | 3400 |
+|---|---|---|---|---|---|---|---|---|---|
+| % | 100 | 90 | 80 | 65 | 50 | 30 | 12 | 5 | 0 |
+
+0 % is set at 3.40 V, not the cell's 3.0 V, because the board's regulator cannot
+hold 3.3 V through a Wi-Fi transmission below about that, and the firmware stops
+using Wi-Fi there. Outside 2.5–4.5 V the result is null. It lives in SQL so it can
+be corrected without reflashing every sensor.
+
+Limits: a lithium cell's resting voltage is flat through its middle, so the
+percentage is good to roughly ±10 points there, and depends on temperature and
+cell age. Validation: monotonicity and the table above are tested; the curve
+itself is typical published behaviour, not measured on your cell.
+
+---
+
 ## What would validate each open item
 
 | Item | Experiment |
@@ -480,4 +573,6 @@ unexplained, with the causes a sensor cannot see.
 | 2.8 thresholds | compare modelled "full" with the reading an hour after a thorough watering, per substrate |
 | 3.2 dry-down fit | already self-validating: residuals of the fit are stored per run |
 | 4.3 and 4.6 light | a lux meter beside the sensor at ten levels from 50 to 50 000 lx |
+| 4.8 BH1750 in its housing | the same lux-meter comparison, through whatever cover the sensor sits behind |
+| 8.2 battery percent | log voltage on every wake through one full discharge, then fit the curve to the hours actually delivered |
 | 3.8 evidence grade | once `recommendations.outcome` accumulates, check that higher grades predict the soil's response better |

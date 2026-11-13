@@ -175,11 +175,11 @@ export default function DeviceHealth() {
           {helpOpen && (
             <View style={{ marginTop: 8, gap: 8 }}>
               {[
-                'Confirm it has power — a wall charger or power bank, not a PC USB port (those cut power when the PC sleeps).',
+                'Confirm it has power: a charged battery, or a wall charger. Not a PC USB port (those cut power when the PC sleeps).',
                 'Your Wi-Fi must be 2.4 GHz — the sensor can’t see 5 GHz networks.',
                 'If your Wi-Fi name or password changed, re-run setup: Devices → the sensor → Set up Wi-Fi.',
                 'Move it closer to the router to rule out range, then move it back once it reports.',
-                'Still stuck? Unplug it for 10 seconds and plug it back in to restart the cycle.',
+                'Still stuck? Press its RST button, or unplug it for 10 seconds, to restart the cycle. A battery sensor waits longer between tries after each failure, so a restart is the quickest test.',
               ].map((t, i) => (
                 <View key={i} style={{ flexDirection: 'row', gap: 8 }}>
                   <Text style={[type.caption, { color: accent.verdant }]}>{i + 1}.</Text>

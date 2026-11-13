@@ -98,15 +98,23 @@ export interface ValidatedSoil {
  * cannot be told apart from a genuine raw count that low except by the fact that
  * a connected probe never produces one, which is the same assumption the app
  * has always made here.
+ *
+ * "Not in the soil" and "beyond the water reading" are POSITIONAL checks: they
+ * ask where this count sits relative to the probe's own air and water counts.
+ * Those depend on the probe and on the board it is wired to — an ESP32-C3 reads
+ * the same voltage as a different count from the original ESP32 the factory pair
+ * was measured on — so they run only when this sensor's own endpoints are given.
+ * Judged against the factory pair, a correctly buried probe on a C3 could be
+ * reported as "not in the soil" on every reading.
  */
-export function validateSoil(value: number | null | undefined, endpoints: SoilEndpoints = FACTORY_SOIL_ENDPOINTS): ValidatedSoil {
+export function validateSoil(value: number | null | undefined, endpoints?: Partial<SoilEndpoints> | null): ValidatedSoil {
   if (typeof value !== 'number' || !Number.isFinite(value)) return { raw: null, quality: 'invalid' };
   if (value < 0 || value > ADC_MAX) return { raw: null, quality: 'invalid' };
   if (value <= 100) return { raw: null, quality: 'legacy-index' };
   if (value < DISCONNECTED_BELOW) return { raw: value, quality: 'disconnected' };
-  const e = endpointsValid(endpoints) ? endpoints : FACTORY_SOIL_ENDPOINTS;
-  if (value >= e.dryAdc + NOT_INSERTED_MARGIN) return { raw: value, quality: 'not-inserted' };
-  if (value < e.wetAdc - WET_OVERSHOOT_OK) return { raw: value, quality: 'beyond-wet' };
+  if (!endpointsValid(endpoints)) return { raw: value, quality: 'ok' };
+  if (value >= endpoints.dryAdc + NOT_INSERTED_MARGIN) return { raw: value, quality: 'not-inserted' };
+  if (value < endpoints.wetAdc - WET_OVERSHOOT_OK) return { raw: value, quality: 'beyond-wet' };
   return { raw: value, quality: 'ok' };
 }
 

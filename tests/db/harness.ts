@@ -30,6 +30,7 @@ export const SQL_FILES = [
   'supabase-analytics.sql',
   'supabase/migrations/20261112000000_platform.sql',
   'supabase/seed/substrates.sql',
+  'supabase/migrations/20261112120000_c3_sensors.sql',
 ];
 
 const BOOTSTRAP = `

@@ -2,20 +2,65 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "redirects": [
-    { "source": "/garden", "destination": "/plants", "permanent": true },
-    { "source": "/home", "destination": "/rooms", "permanent": true }
+    {
+      "source": "/garden",
+      "destination": "/plants",
+      "permanent": true
+    },
+    {
+      "source": "/home",
+      "destination": "/rooms",
+      "permanent": true
+    }
   ],
   "rewrites": [
-    { "source": "/plant/:id", "destination": "/plant/[id]" },
-    { "source": "/dashboard/:id", "destination": "/dashboard/[id]" },
-    { "source": "/growth/:id", "destination": "/growth/[id]" },
-    { "source": "/diagnose/:id", "destination": "/diagnose/[id]" },
-    { "source": "/autopsy/:id", "destination": "/autopsy/[id]" },
-    { "source": "/move/:id", "destination": "/move/[id]" },
-    { "source": "/repot/:id", "destination": "/repot/[id]" },
-    { "source": "/spot/:id", "destination": "/spot/[id]" },
-    { "source": "/sensor/:id", "destination": "/sensor/[id]" },
-    { "source": "/calibrate/:id", "destination": "/calibrate/[id]" },
-    { "source": "/climate/:id", "destination": "/climate/[id]" }
+    {
+      "source": "/plant/:id",
+      "destination": "/plant/[id]"
+    },
+    {
+      "source": "/dashboard/:id",
+      "destination": "/dashboard/[id]"
+    },
+    {
+      "source": "/growth/:id",
+      "destination": "/growth/[id]"
+    },
+    {
+      "source": "/diagnose/:id",
+      "destination": "/diagnose/[id]"
+    },
+    {
+      "source": "/autopsy/:id",
+      "destination": "/autopsy/[id]"
+    },
+    {
+      "source": "/move/:id",
+      "destination": "/move/[id]"
+    },
+    {
+      "source": "/repot/:id",
+      "destination": "/repot/[id]"
+    },
+    {
+      "source": "/spot/:id",
+      "destination": "/spot/[id]"
+    },
+    {
+      "source": "/sensor/:id",
+      "destination": "/sensor/[id]"
+    },
+    {
+      "source": "/calibrate/:id",
+      "destination": "/calibrate/[id]"
+    },
+    {
+      "source": "/climate/:id",
+      "destination": "/climate/[id]"
+    },
+    {
+      "source": "/substrate/:id",
+      "destination": "/substrate/[id]"
+    }
   ]
 }

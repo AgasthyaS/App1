@@ -209,6 +209,7 @@ Ordered by dependency. Each phase ends with type-check and tests green.
 | 8 | Substrate picker and custom mixture screen; "why" card | 1, 4 | done |
 | 9 | Visual refinement of Home, plant list, plant page | 7, 8 | **not done** beyond the new surfaces; see DESIGN.md |
 | 10 | Docs, hardware table, review passes, report | all | done |
+| 11 | ESP32-C3 build: BH1750, battery, firmware `c3-1.0`, `ingest_v2` (SQL file 14), app lux/battery path | 2, 3, 5 | done; compiled, not run on hardware |
 
 Findings from section A and where they stand:
 
@@ -217,7 +218,7 @@ Findings from section A and where they stand:
 | 1 | Fabricated identification confidences | fixed |
 | 2 | Simulated photo diagnosis | replaced by the check-up |
 | 3 | Daily light from mean of log index | fixed |
-| 4 | Firmware is not for the ESP32-C3 | documented; firmware untouched |
+| 4 | Firmware is not for the ESP32-C3 | C3 firmware added (`firmware/greenr_sensor_c3`); dev-kit firmware kept as legacy |
 | 5 | Four substrate classes | fixed: 23 ingredients, 26 presets, custom blends, unknown |
 | 6 | Global soil endpoints | fixed in software; each sensor must be captured |
 | 7 | Raw values in misnamed columns | explicit raw columns added; legacy kept |
@@ -229,7 +230,7 @@ Findings from section A and where they stand:
 | 13 | Two light classifiers | unified |
 | 14 | Conditions score worded as health | Home fixed; score words remain |
 | 15 | Two-state decision, no stated basis | nine states and an evidence grade |
-| 16 | Firmware credentials and TLS | documented, not changed |
+| 16 | Firmware credentials and TLS | TLS verified in the C3 firmware; per-unit credentials still compile-time |
 | 17 | No tests | 274 |
 | 18 | Loose SQL files, order undocumented | order documented and tested |
 

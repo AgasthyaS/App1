@@ -34,6 +34,23 @@ import { ADC_MAX } from './moisture';
  * lib/lightModel.ts until a reference lux reading pins the parameters.
  */
 
+/**
+ * A BH1750 (the ESP32-C3 build) reports illuminance directly, in lux, through its
+ * own photodiode with a response close to the eye's — so none of the divider
+ * maths below applies to it. Its datasheet accuracy is about ±20 %.
+ *
+ * Full scale is 65535 counts. The firmware switches to the shortest integration
+ * time (MTreg 31) above 40 000 lux, where full scale is 65535 / 1.2 × 69/31 ≈
+ * 121 557 lux. A reading at or above BH1750_FULL_SCALE_LUX is pinned, i.e. a lower
+ * bound. Mirrored in reading_quality_v2() in the database.
+ */
+export const BH1750_FULL_SCALE_LUX = 121000;
+
+export function luxQuality(lux: number | null | undefined): LightQuality {
+  if (typeof lux !== 'number' || !Number.isFinite(lux) || lux < 0) return 'invalid';
+  return lux >= BH1750_FULL_SCALE_LUX ? 'saturated-bright' : 'ok';
+}
+
 export type LightQuality =
   | 'ok'
   /** pinned at the bright end of the divider — a lower bound, not a value */

@@ -61,6 +61,6 @@ console.log(`\n✅ Provisioned "${label}"\n`);
 console.log('  Device ID :', id);
 console.log('  Device key:', key);
 console.log('  QR sticker:', png, '(print this and stick it on the unit)');
-console.log('\n  Paste into firmware/greenr_sensor/greenr_sensor.ino before flashing THIS unit:');
+console.log('\n  Paste into firmware/greenr_sensor_c3/greenr_sensor_c3.ino before flashing THIS unit:');
 console.log(`    #define DEVICE_ID   "${id}"`);
 console.log(`    #define DEVICE_KEY  "${key}"\n`);

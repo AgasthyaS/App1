@@ -1,111 +1,169 @@
 # Greenr hardware
 
-What the sensor is, how it is wired according to the firmware in this repository,
-what each part can and cannot measure, and what to add next.
+What the sensor is, how it is wired, what each part can and cannot measure, and
+what to add next.
 
-**Nothing here was physically inspected or tested.** It is drawn from
-`firmware/greenr_sensor/greenr_sensor.ino` (version banner "v13"), the app's
-conversion code, and the parts' published characteristics. Anything that needs a
-meter or the board in hand is listed under "Needs physical verification".
-
----
-
-## The firmware in this repository is not for the ESP32-C3
-
-The stated current hardware is an **ESP32-C3 Super Mini**. The firmware source in
-the repository says "THIS BUILD = ESP32 dev kit" and uses these pins:
-
-| Firmware constant | GPIO | On an ESP32-C3 Super Mini |
-|---|---|---|
-| `LDR_PIN` | 34 | does not exist (the C3 has GPIO 0–10, 20, 21) |
-| `SOIL_PIN` | 39 | does not exist |
-| `SENSOR_PWR` | 19 | is the USB D+ line |
-| `AHT_SDA` | 21 | is UART TX |
-| `AHT_SCL` | 22 | does not exist |
-| `BOOT_BTN` | 0 | the C3's BOOT button is GPIO 9 |
-
-So either the C3 build lives somewhere else and was never committed, or the
-device in use is still the dev kit. **The pin assignments on the real C3 board
-are unknown from this repository.** No firmware was changed in this overhaul.
-
-This matters beyond wiring: the app's factory soil endpoints (3020 in air, 1400
-in water) and light endpoints (3200 dark, 200 bright) were measured through the
-original ESP32's converter. The C3's converter has a different input range, so
-those constants are probably wrong for it. Per-sensor endpoint capture
-(Calibrate → Soil sensor scale) exists for exactly this.
+**Nothing here was physically inspected or tested.** It is drawn from the
+firmware in this repository, the app's conversion code, and the parts' published
+characteristics. The ESP32-C3 firmware has been compiled against the ESP32
+Arduino core 3.3.12 with the exact settings below, in every configuration; it
+has not been run on a board. Anything that needs a meter or the board in hand is
+listed under "Needs physical verification".
 
 ---
 
-## Wiring as the committed firmware defines it (ESP32 dev kit)
+## Current build: ESP32-C3 Super Mini
 
-| Component | Component pin | ESP32 dev kit | Voltage | Purpose |
+Firmware: [`firmware/greenr_sensor_c3/greenr_sensor_c3.ino`](../firmware/greenr_sensor_c3/greenr_sensor_c3.ino),
+version `c3-1.0`. It uploads through `ingest_v2`, so run SQL file 14 (see
+[DATABASE.md](DATABASE.md)) **before** flashing it.
+
+| Part | Role |
+|---|---|
+| ESP32-C3 Super Mini | microcontroller, Wi-Fi |
+| Capacitive soil moisture sensor (v1.2 type) | soil signal |
+| BH1750 module (GY-302) | light, in lux |
+| AHT10 module | air temperature and humidity |
+| One lithium cell, 3.7 V nominal | power |
+| Two equal resistors, 100 kΩ each | battery voltage divider |
+
+The LDR from the previous build is gone: the BH1750 replaces it.
+
+### Wiring
+
+Pins follow the C3 map proposed in the previous version of this document. Use
+the GPIO numbers **printed on the board**, not positions.
+
+| Component | Component pin | ESP32-C3 connection | Voltage | Purpose |
 |---|---|---|---|---|
-| Capacitive soil probe | VCC | GPIO 19 | 3.3 V, switched | powered only while reading (600 ms settle) |
+| Soil sensor | AOUT | GPIO3 (ADC1_CH3) | 0 to about 3 V analog | soil signal, high = dry |
+| | VCC | GPIO10 | 3.3 V, switched | powered only for the ~0.8 s of a reading |
 | | GND | GND | | |
-| | AOUT | GPIO 39 ("VN"), ADC1 | 0 to about 3 V analog | soil signal |
-| LDR module | VCC | 3V3 (not stated in firmware) | 3.3 V | |
+| AHT10 | SDA | GPIO6 | 3.3 V I²C | address 0x38 |
+| | SCL | GPIO7 | 3.3 V I²C | |
+| | VIN / VCC | 3V3 | 3.3 V | |
 | | GND | GND | | |
-| | AO | GPIO 34, ADC1 | 0–3.3 V analog | light signal, high = dark |
-| AHT10 | VCC | 3V3 | 3.3 V | |
+| BH1750 | SDA | GPIO6 (shared with AHT10) | 3.3 V I²C | address 0x23 |
+| | SCL | GPIO7 (shared with AHT10) | 3.3 V I²C | |
+| | VCC | 3V3 | 3.3 V | |
 | | GND | GND | | |
-| | SDA | GPIO 21 | 3.3 V I²C | address 0x38 |
-| | SCL | GPIO 22 | 3.3 V I²C | |
-| BOOT button | | GPIO 0, internal pull-up | | hold 3 s after power-on to clear Wi-Fi |
-| DHT22 (old build, `USE_DHT22 1`) | DATA | GPIO 18 + 10 kΩ to 3V3 | 3.3 V | not the current configuration |
+| | ADDR | not connected | | the module pulls it low → 0x23 |
+| Battery divider | top resistor, 100 kΩ | battery + | up to 4.2 V | |
+| | midpoint | GPIO1 (ADC1_CH1) | up to 2.1 V | battery measurement |
+| | bottom resistor, 100 kΩ | GND | | |
+| Battery | + | 5V pin (through a charger/protection board if used) | 3.0–4.2 V | feeds the board's 3.3 V regulator |
+| | − | GND | | |
+| BOOT button | on the board | GPIO9 | | hold to forget Wi-Fi |
+| RST button | on the board | EN | | restart; also takes a reading |
 
-Other facts from the firmware:
+```
+                  ESP32-C3 Super Mini (GPIO numbers as printed)
+                 ┌───────────────────────────────┐
+  battery + ─────┤ 5V                       GPIO5 ├
+  all GND ───────┤ GND                      GPIO6 ├──── SDA: AHT10 + BH1750
+  AHT10 + BH1750 ┤ 3V3                      GPIO7 ├──── SCL: AHT10 + BH1750
+     VCC         │ GPIO4                    GPIO8 │     (LED, strapping — unused)
+  soil AOUT ─────┤ GPIO3                    GPIO9 │     (BOOT button)
+                 │ GPIO2 (strapping, unused)GPIO10├──── soil VCC (switched)
+  divider mid ───┤ GPIO1                   GPIO20 │     (UART RX, unused)
+                 │ GPIO0                   GPIO21 │     (UART TX, unused)
+                 └───────────────────────────────┘
 
-- `analogReadResolution(12)`: counts 0–4095. Attenuation is left at the core's default.
-- Each analog value is the median of 7 samples 20 ms apart.
-- Soil and light are sent as raw counts. Temperature (°C) and humidity (%) are sent as read.
-- Battery is not measured: the firmware sends `-1`.
-- Reports every 3 hours by default; the server can change the interval
-  (`devices.wake_seconds`, accepted range 60 s to 24 h). A failed upload retries in 5 minutes.
-- `USE_DEEP_SLEEP 0`: this build stays awake on wall power. Deep sleep is a compile-time option.
-- `USE_BLE_SETUP 0`: setup is through the "greenr-setup" hotspot only.
-- I²C pull-ups: none in the firmware. AHT10 breakout boards normally carry their own.
+  battery + ──[100 kΩ]──┬──[100 kΩ]── GND
+                        └──────────── GPIO1
+```
+
+Why these pins:
+
+- **ADC1 only for analog** (GPIO0–4). ADC2 (GPIO5) stops working while Wi-Fi is on.
+- **GPIO2, GPIO8 and GPIO9 are strapping pins**, sampled at reset to decide the boot
+  mode. Nothing external is wired to them. GPIO9 is the on-board BOOT button;
+  GPIO8 drives the on-board LED, which the firmware does not use.
+- **GPIO18/19** are the USB lines and **GPIO20/21** the UART; left free.
+- **One I²C bus** for both sensors. Their addresses differ (0x38, 0x23), and both
+  modules carry pull-up resistors. Some AHT10 units are reported to misbehave on a
+  shared bus; if the Serial Monitor says AHT10 or BH1750 "NOT FOUND" with the
+  wiring correct, try the AHT10 alone to find out.
+
+### Power
+
+- The battery goes to the **5V pin**, which feeds the on-board 3.3 V regulator.
+  **Never to the 3V3 pin**: a full cell is 4.2 V and the chip's limit is 3.6 V.
+- **Unplug the battery before plugging in USB** to upload, unless your board or
+  charger module keeps the two apart. On many Super Mini boards the 5V pin is
+  joined to USB power, which would push 5 V into the cell.
+- A cell without a protection circuit should not be run flat. The firmware stops
+  using Wi-Fi below 3.40 V, but a protected cell or a charger board with
+  protection (TP4056 + DW01 type) is the safe choice.
+- If your battery is not a single lithium cell (for example 3 × AA), change
+  `BAT_DIVIDER`, `BAT_CUTOFF_MV` and the percentage curve in SQL file 14.
+
+**The red power LED** (on boards that have one) stays lit and draws roughly 1–3 mA,
+far more than everything else does in deep sleep. Rough budget for a 3-hourly
+sensor, from typical datasheet currents, not measured:
+
+| | per day |
+|---|---|
+| 8 wakes × ~8 s × ~90 mA (Wi-Fi + TLS + upload) | ≈ 1.6 mAh |
+| deep sleep: chip ≈ 5 µA, regulator ≈ 40–60 µA, divider 21 µA | ≈ 1.6–2.0 mAh |
+| red power LED, if fitted, 1–3 mA | ≈ 24–72 mAh |
+
+So a 1000 mAh cell lasts on the order of months without the LED, and weeks with
+it. Removing the LED (or its resistor) is the single biggest battery saving.
+
+### Arduino IDE
+
+1. Boards Manager: install **esp32** by Espressif (version 3.x).
+2. Tools → Board → **ESP32C3 Dev Module**.
+3. Tools → **USB CDC On Boot: Enabled** (otherwise the Serial Monitor shows nothing),
+   **Flash Mode: DIO**, Partition Scheme: **Default 4MB with spiffs**.
+4. Library Manager: **Adafruit AHTX0** (accept its dependencies, Adafruit BusIO and
+   Adafruit Unified Sensor) and **BH1750** by Christopher Laws.
+5. Open `firmware/greenr_sensor_c3/greenr_sensor_c3.ino`, unplug the battery,
+   connect USB, Upload.
+6. If the upload does not start: hold **BOOT**, tap **RST**, let go of BOOT, upload
+   again. Because the sensor spends almost all its time asleep, this is the normal
+   way to reach it once the firmware is running.
+7. Serial Monitor at 115200 baud, then tap RST: the first line should read
+   `===== greenr sensor c3-1.0 =====`.
+
+Compiled size with these settings: 1.21 MB of the 1.31 MB app partition. Turning
+on `USE_BLE_SETUP` needs the "Huge APP" partition (1.49 MB).
+
+### What the firmware does on each wake
+
+1. Powers the soil probe, reads the battery (before Wi-Fi, so unloaded), the
+   AHT10, and the BH1750 (once, then the sensor powers itself down), then the probe
+   after 600 ms of warm-up; switches the probe off.
+2. Below 3.40 V on battery: no Wi-Fi, keep the reading, sleep 12 h.
+3. Joins Wi-Fi, reusing the last channel and router to save a scan; transmit power
+   8.5 dBm (`WIFI_TX_POWER`).
+4. Uploads the new reading plus any not delivered before, in one HTTPS request,
+   with the server's certificate checked against embedded root CAs.
+5. On success sleeps for the server's interval (3 h default). On failure keeps the
+   readings (up to 24) in RTC memory and retries after 5, 10, 20, 40, 80 minutes…
+   never longer than the interval.
+
+After RST or power-up there is a 2-second window to hold BOOT and forget the
+Wi-Fi. With no saved Wi-Fi it opens the "greenr-setup" hotspot: indefinitely on
+USB power, for 20 minutes on battery, then sleeps until RST.
 
 ---
 
-## Proposed wiring for the ESP32-C3 Super Mini
+## Legacy build: ESP32 dev kit (firmware v13)
 
-**A proposal, not a description of any existing board.** It follows the C3's
-constraints; confirm against the board in hand before using it.
+`firmware/greenr_sensor/greenr_sensor.ino` targets a classic ESP32 dev kit with an
+LDR. It is kept for units still running it. Its pins do not exist on an ESP32-C3.
 
-| Component | Component pin | ESP32-C3 GPIO | Why this pin |
+| Component | Component pin | ESP32 dev kit | Purpose |
 |---|---|---|---|
-| Soil probe | AOUT | GPIO 3 (ADC1_CH3) | ADC1 works with Wi-Fi on; ADC2 (GPIO 5) does not |
-| | VCC | GPIO 10 | a free output, to keep the switched-power design |
-| LDR module | AO | GPIO 4 (ADC1_CH4) | ADC1 |
-| | VCC | GPIO 10, shared with the probe | cuts the module's idle draw in deep sleep |
-| AHT10 | SDA | GPIO 6 | avoids the strapping pins |
-| | SCL | GPIO 7 | |
-| | VCC | 3V3 | |
-| Battery divider (new) | midpoint | GPIO 1 (ADC1_CH1) | see upgrades |
-| BOOT button | | GPIO 9 (on board) | already there |
+| Soil probe | VCC / AOUT | GPIO19 (switched) / GPIO39 | soil signal |
+| LDR module | AO | GPIO34 | light, high = dark |
+| AHT10 | SDA / SCL | GPIO21 / GPIO22 | air |
+| BOOT button | | GPIO0 | forget Wi-Fi |
 
-Pins to avoid on the C3: GPIO 2, 8, 9 (strapping; 8 is also the on-board LED),
-GPIO 18 and 19 (USB), GPIO 20 and 21 (UART), GPIO 5 for analog (ADC2).
-
-```
-                 ESP32-C3 Super Mini
-                ┌──────────────────┐
-   Soil AOUT ───┤ GPIO3      3V3   ├─── AHT10 VCC
-    LDR AO  ────┤ GPIO4      GND   ├─── all grounds
-  AHT10 SDA ────┤ GPIO6      GPIO10├─── Soil VCC + LDR VCC (switched)
-  AHT10 SCL ────┤ GPIO7      GPIO1 ├─── battery divider midpoint (optional)
-                │            5V    ├─── USB / battery boost
-                └──────────────────┘
-```
-
-Voltage notes for the C3:
-
-- The converter's usable range at the highest attenuation is about 0 to 2.5 V.
-  The LDR module can output up to 3.3 V in darkness, which will read as full
-  scale. That only flattens the dark end, which carries no useful information.
-- A GPIO should not be asked for more than a few tens of milliamps. The probe
-  draws about 5 mA. An LDR module with a comparator and LED can draw more; if the
-  switched rail sags, power the modules through a small P-channel MOSFET instead.
+It uploads through `ingest_reading`, sends no battery, firmware version or signal,
+and does not check the server's certificate.
 
 ---
 
@@ -120,110 +178,95 @@ Voltage notes for the C3:
 - **Cannot measure:** water content in absolute terms (without a weighed
   calibration for that pot), salinity, nutrients, pH, or anything below the
   6.5 cm the blade reaches.
-- **Limits:** unit-to-unit variation in endpoints; drift with temperature and
-  salts; the reading depends on how firmly soil is packed against the blade;
-  cheap copies of this board are reported to ship with a missing voltage
-  regulator or a timer chip that does not run at 3.3 V.
+- **Limits:** unit-to-unit variation in its air and water readings, which is why
+  each sensor needs its own (Calibrate → Soil sensor scale); drift with
+  temperature and salts; the reading depends on how firmly soil is packed against
+  the blade. Some v1.2 boards are sold with an NE555 timer instead of a TLC555,
+  which does not run at 3.3 V: if the raw reading barely changes between air and
+  water, that is the likely cause.
 - **Verdict:** keep. It is the right sensor at this price. Calibrate each unit.
 
-### LDR module
+### BH1750
 
-- **Measures:** resistance of a photoresistor on a voltage divider.
-- **The app derives:** a relative light index and a daily-light estimate with a
-  stated factor-of-two uncertainty.
-- **Cannot measure:** lux, PPFD or DLI in any calibrated sense. Its spectral
-  response matches neither the eye nor photosynthesis, and part-to-part
-  variation is ±50 %.
-- **The serious limit:** with typical parts the divider stops resolving at a few
-  thousand lux. Direct sun is 50 000 or more. It probably cannot tell bright
-  shade from full sun. See FORMULAS.md §4.6.
-- **Verdict:** replace. This is the weakest part of the system and the cheapest to fix.
+- **Measures:** illuminance in lux, with a response close to the eye's.
+  Datasheet accuracy about ±20 %.
+- **The app derives:** the light index (exactly, between 80 and 65 000 lux), daily
+  light with a 1.3× uncertainty band instead of the LDR's 2×, light suitability.
+- **Range:** about 54 600 lux at the default setting; the firmware switches to the
+  shortest integration time above 40 000 lux, reaching about 121 500 lux. Above
+  that it reads full scale and the database flags it.
+- **Cannot measure:** photosynthetic photons (PPFD) directly. Lux to PPFD depends
+  on the light source, which is most of the remaining uncertainty.
+- **Mounting:** sensor window facing up and uncovered. Behind a lid or tinted
+  case it reads low by whatever the cover absorbs.
 
 ### AHT10
 
-- **Measures:** air temperature and relative humidity. Datasheet accuracy is
-  about ±0.3 °C and ±2 % RH.
+- **Measures:** air temperature and relative humidity, about ±0.3 °C and ±2 % RH.
 - **The app derives:** VPD, comfort against the species range, and the
   evaporative-demand correction to drying rate.
 - **Cannot measure:** leaf or soil temperature.
-- **Limits:** mounted in the housing next to a Wi-Fi radio it will read warm
-  after each transmission; RH sensors of this class drift over years.
-- **Verdict:** keep. Read it before turning Wi-Fi on, and mount it away from the board.
+- **Now read before Wi-Fi starts**, so radio self-heating does not bias it. Mount it
+  away from the board and the battery.
+
+### Battery divider
+
+- **Measures:** the cell's voltage, through `analogReadMilliVolts()` (factory ADC
+  calibration) × 2.
+- **The app derives:** battery percent (SQL curve), low-battery warnings.
+- **Limits:** resting voltage is only a rough guide to remaining charge, especially
+  in the flat middle of a lithium cell's curve. Expect ±10 % on the percentage.
 
 ### ESP32-C3
 
-Adequate. Wi-Fi and BLE, deep sleep in the microamp range, five ADC1 inputs,
-I²C. No change needed.
+Adequate: Wi-Fi, deep sleep in the microamp range, five ADC1 inputs, I²C. No change needed.
 
 ---
 
-## What to add
+## What to add next
 
 Prices are typical hobby-module prices from memory, **not checked on the day**.
-Confirm before ordering.
 
-| Sensor | Measures | What Greenr gains | Rough cost | Power | C3 fit | Class |
-|---|---|---|---|---|---|---|
-| **Battery voltage divider** (2 resistors) | supply voltage | battery level and "replace soon"; the app already has the fields | cents | negligible with high-value resistors | 1 ADC pin | **necessary now** |
-| **Digital lux sensor**: BH1750, or VEML7700 for wider range | illuminance in lux, calibrated, to 65 k (BH1750) or 120 k lux (VEML7700) | a real lux reading replaces the LDR guess; daily-light uncertainty falls from a factor of two to the spectral conversion alone (about ±15 %) | $1–5 | under 0.2 mA active, microamps asleep | I²C, shares the AHT10 bus | **necessary now** |
-| **DS18B20 waterproof probe** | soil temperature | temperature compensation of the soil reading; root-zone cold warnings | $2–4 | about 1 mA while converting | 1 GPIO, 4.7 kΩ pull-up | valuable later |
-| **SHT40 / SHT41** in place of AHT10 | temperature, humidity (about ±0.2 °C, ±1.8 % RH) | modestly better VPD; less drift | $2–6 | microamps | I²C | valuable later |
-| **Load cell + HX711**, as a calibration stand, not in every unit | pot mass | actual water content by weight: the reference that validates the index, the substrate library and the dose model | $3–8 | about 1.5 mA active | 2 GPIO | **valuable now, for the lab** |
-| Spectral sensor (AS7341) | 11 spectral bands | an approximation of PAR under any lamp | $10–16 | under 1 mA | I²C | later, only if grow-light users matter |
-| Soil EC probe | electrical conductivity | salt build-up, fertiliser timing | cheap resistive probes corrode within months; reliable ones cost more than the whole unit | varies | varies | unnecessary for now |
-| True PAR quantum sensor | PPFD | exact DLI | $300 and up | | analog | unnecessary |
-| Soil pH probe | pH | | glass electrodes need wet storage and regular calibration | | | unnecessary |
+| Sensor | Status | Notes |
+|---|---|---|
+| Battery divider | **done** | GPIO1 |
+| Digital lux sensor (BH1750) | **done** | replaces the LDR |
+| Read AHT10 before Wi-Fi | **done** | firmware |
+| DS18B20 waterproof probe, soil temperature | valuable later, $2–4 | temperature compensation of the soil reading; 1 GPIO + 4.7 kΩ pull-up (GPIO0 is free) |
+| SHT40 in place of AHT10 | valuable later, $2–6 | better humidity accuracy and less drift; same I²C bus |
+| Load cell + HX711, as a calibration stand | valuable now, for the lab, $3–8 | actual water content by weight: the reference that validates the index, the substrate library and the dose model |
+| VEML7700 instead of BH1750 | optional | reaches 120 klx without range switching; only worth it for full-sun outdoor plants |
+| Soil EC probe | unnecessary for now | cheap ones corrode within months |
+| PAR quantum sensor, pH probe | unnecessary | cost and maintenance far beyond the product |
 
-### Stage 1: current hardware
-
-Everything in this overhaul. The remaining gains are free: capture each sensor's
-own soil endpoints, set pot dimensions and substrate, log waterings with amounts.
-
-### Stage 2: highest value for least money (about $2–6 per unit)
-
-1. **Battery divider.** Cents. Removes "why did it stop reporting".
-2. **BH1750 or VEML7700 instead of the LDR.** Fixes the weakest measurement in
-   the product. Software path: the firmware sends lux in a new field; the app
-   uses it in place of the index when present (`lightModel.luxToIndex` already
-   exists for the conversion, and the light pipeline already averages in lux).
-3. **Read the AHT10 before Wi-Fi starts**, firmware only.
-
-### Stage 3: fuller configuration (adds about $5–10)
-
-4. DS18B20 soil temperature.
-5. SHT40 in place of the AHT10.
-6. One load-cell calibration stand per lab, used to produce weighed curves and
-   to validate the substrate library. Not a per-unit part.
-
-How new sensors fit the software: `readings` gains nullable columns
-(`lux`, `soil_temp_c`, `battery_mv`), the ingest function gains optional
-parameters under a new name so deployed firmware is unaffected, and
-`normalizeReading` prefers a calibrated field over a derived one when both
-exist. Nothing else needs to change.
+How a new sensor fits the software: `readings` gains a nullable column, `ingest_v2`
+gains an optional row field, and `normalizeReading` prefers the measured field
+when it is present. That is exactly how lux and battery were added.
 
 ---
 
-## Firmware issues noticed
+## Firmware issues
 
-Not changed here; listed for whoever maintains the firmware.
-
-| Issue | Where | Why it matters |
-|---|---|---|
-| Device id and secret are compile-time constants in the source | `DEVICE_ID`, `DEVICE_KEY` | every unit needs its own build; the pair in the repository is a real credential |
-| TLS certificate checking disabled | `client.setInsecure()` | the upload can be intercepted on a hostile network |
-| No firmware version in the upload | `uploadRaw` | readings cannot be tied to a firmware build |
-| No battery measurement | `p_battery: -1` | the app's battery features have no data |
-| Temperature is read after the radio has been on | `readAndSend` order | self-heating bias |
-| Readings are not buffered when an upload fails | retry re-reads | a Wi-Fi outage loses those hours |
+| Issue | Status |
+|---|---|
+| Device id and secret are compile-time constants | **open.** Each unit needs its own build (`npm run provision` makes the pair and the QR sticker); the pair in this repository is a real credential |
+| TLS certificate checking disabled | **fixed in c3-1.0.** The server's chain (supabase.co ← WE1 ← GTS Root R4) is checked against embedded roots (GTS R1/R4, ISRG X1/X2), verified against the live server with a strict TLS client before shipping. If Supabase's certificate authority changes, uploads fail with a certificate error: add its root to `ROOT_CAS`, or set `VERIFY_TLS 0` to confirm that is the cause |
+| No firmware version in the upload | **fixed** (`p_fw`) |
+| No battery measurement | **fixed** |
+| Temperature read after the radio was on | **fixed** |
+| Readings lost when an upload fails | **fixed**: up to 24 kept in RTC memory (lost on RST or power loss) |
+| `read_now` ignored | open; a sleeping sensor cannot hear it until its next wake |
 
 ---
 
 ## Needs physical verification
 
-- Which board is actually deployed, and its real pin assignments.
-- The raw soil count in open air and in water on that board, for several units.
-- The resistor value and LDR type on the light module, and its reading against
-  a lux meter from 50 to 50 000 lux.
+- The raw soil count in open air and in water on the C3, for several units (the
+  app's factory pair was measured on the dev kit).
+- That the C3 joins Wi-Fi at 8.5 dBm at your distance from the router.
+- The BH1750 against a lux meter from 50 to 50 000 lux, in its final housing.
 - Whether the AHT10 reads warm in the housing, and by how much.
-- Current draw in deep sleep with the sensor rail switched off.
-- That the capacitive probe's electronics are sealed against watering.
+- Deep-sleep current with the soil rail off, with and without the power LED.
+- That the 5V pin and USB are separated on your board before charging and
+  uploading at the same time.
+- That the TLS check passes on the device (it passes from a computer).

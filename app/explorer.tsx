@@ -65,7 +65,7 @@ export default function Explorer() {
       setLoading(false);
     })();
     return () => { alive = false; };
-  }, [days, user?.id]);
+  }, [days, user]);
 
   const n = (v: unknown) => (typeof v === 'number' ? v.toLocaleString() : v == null ? '—' : String(v));
   const pct = (v: unknown) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—');
