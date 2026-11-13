@@ -298,7 +298,9 @@ export default function TodayTab() {
       ? 'Add a plant and Greenr will tell you exactly when and how much to water it.'
       : `${
           avg != null
-            ? `${healthy} of ${plants.length} plants are healthy`
+            // The score rates measured CONDITIONS; it cannot see the plant, so it
+            // does not get to call one healthy.
+            ? `${healthy} of ${plants.length} plants have good conditions`
             : `${plants.length} plant${plants.length === 1 ? '' : 's'}`
         } · ${dueSoon > 0 ? `${dueSoon} need${dueSoon === 1 ? 's' : ''} water in the next few days` : 'no watering due soon'}.`;
 

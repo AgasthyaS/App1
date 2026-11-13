@@ -1,4 +1,6 @@
 import { relTime } from './format';
+import { validateLight, type LightQuality } from './sensing/light';
+import { FACTORY_SOIL_ENDPOINTS, validateSoil, type SoilQuality } from './sensing/moisture';
 import { supabase } from './supabase';
 
 /**
@@ -9,6 +11,17 @@ import { supabase } from './supabase';
 
 export interface Reading {
   device_id: string;
+  /**
+   * The soil and light values exactly as the firmware sent them (ADC counts),
+   * kept beside the converted ones so a per-sensor calibration can re-derive
+   * from the source instead of correcting a value that has already been clamped.
+   * Null for rows written by firmware that converted on the device.
+   */
+  soil_raw?: number | null;
+  light_raw?: number | null;
+  /** whether each raw value can be used, and if not, why (lib/sensing) */
+  soil_quality?: SoilQuality;
+  light_quality?: LightQuality;
   light_lux: number | null;
   dli: number | null;
   soil_pct: number | null;
@@ -114,8 +127,10 @@ export async function getMyDevices(): Promise<Device[]> {
  * downward, that depth also samples the upper root zone, which is exactly the
  * layer that dries first and should drive watering decisions.
  */
-const SOIL_DRY_ADC = 3020; // raw in open air        → 0 %
-const SOIL_WET_ADC = 1400; // raw sitting in water   → 100 %
+// The values themselves live in lib/sensing/moisture.ts with the rest of the
+// signal pipeline; a sensor with its own endpoints overrides them there.
+const SOIL_DRY_ADC = FACTORY_SOIL_ENDPOINTS.dryAdc; // raw in open air      → 0
+const SOIL_WET_ADC = FACTORY_SOIL_ENDPOINTS.wetAdc; // raw sitting in water → 100
 /**
  * Above this raw value the probe is reading mostly air — either it's barely
  * inserted or it isn't in soil at all. Even bone-dry potting mix holds enough
@@ -178,10 +193,18 @@ const finite = (v: number | null | undefined): number | null =>
   typeof v === 'number' && Number.isFinite(v) ? v : null;
 
 export function normalizeReading(r: Reading): Reading {
-  const soil = finite(r.soil_pct);
-  const light = finite(r.light_lux);
+  // The database is gaining explicit raw columns (see docs/DATABASE.md); until
+  // every row has them, the legacy columns hold the same counts.
+  const soil = finite(r.soil_raw) ?? finite(r.soil_pct);
+  const light = finite(r.light_raw) ?? finite(r.light_lux);
+  const vSoil = soil == null ? null : validateSoil(soil);
+  const vLight = light == null ? null : validateLight(light);
   return {
     ...r,
+    soil_raw: vSoil?.raw ?? null,
+    light_raw: vLight?.raw ?? null,
+    soil_quality: vSoil?.quality,
+    light_quality: vLight?.quality,
     soil_pct: soil == null ? null : maybeRawToPct(soil, SOIL_DRY_ADC, SOIL_WET_ADC),
     light_lux: light == null ? null : rawToPct(light, LIGHT_DARK_ADC, LIGHT_BRIGHT_ADC),
     temp_c: finite(r.temp_c),

@@ -483,7 +483,7 @@ export interface PourOutcome {
  * has moved enough to measure; guessing from noise would poison the calibration.
  */
 export function pourOutcome(
-  plant: Pick<Plant, 'lastWateredAt' | 'waterLog' | 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage'> & { id?: string },
+  plant: Pick<Plant, 'lastWateredAt' | 'waterLog' | 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage'> & { id?: string },
   history: Reading[],
   predictedRisePts?: number | null,
   now = Date.now(),

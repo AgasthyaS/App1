@@ -20,7 +20,7 @@ export default function AddSheet() {
       icon: 'leaf-outline',
       title: 'Add plant',
       track: 'add.add_plant',
-      sub: 'Photo → species → first score',
+      sub: 'Photo → identify → pot and soil',
       go: () => {
         router.back();
         router.push('/add-plant');

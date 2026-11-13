@@ -1,50 +1,65 @@
-# Welcome to your Expo app 👋
+# Greenr
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A plant-care app with a soil sensor. Expo / React Native (iOS, Android, web) on
+Supabase.
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run
 
 ```bash
-npm run reset-project
+npm install
+npx expo start            # press w for web, or scan for a device
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Without a `.env` the app runs locally with no account server. To connect one,
+copy `.env.example` to `.env` and fill in the two Supabase values.
 
-## Learn more
+## Check
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm run typecheck         # TypeScript
+npm test                  # 274 tests: formulas, substrate, sensing, advice, AI handler, database
+npm run lint
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+The database tests run every SQL file in this repository, in install order,
+against a real Postgres (PGlite) and exercise ingest, summaries, history and
+row-level security.
 
-## Join the community
+## Set up the backend
 
-Join our community of developers creating universal apps.
+1. Run the SQL files in the order listed in [docs/DATABASE.md](docs/DATABASE.md).
+2. Photo identification (optional):
+   ```bash
+   supabase secrets set GEMINI_API_KEY=<key>
+   supabase functions deploy identify-plant
+   ```
+   The key never goes in the app or the repository. See [docs/AI.md](docs/AI.md).
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Documentation
+
+| | |
+|---|---|
+| [docs/BLUEPRINT.md](docs/BLUEPRINT.md) | audit findings, architecture, roadmap and status |
+| [docs/DATABASE.md](docs/DATABASE.md) | every table, where its values come from, access rules, analytics |
+| [docs/FORMULAS.md](docs/FORMULAS.md) | every calculation: definition, units, assumptions, tests, what is unverified |
+| [docs/AI.md](docs/AI.md) | model choice, measured comparison, routing, cost, key handling |
+| [docs/HARDWARE.md](docs/HARDWARE.md) | wiring from the firmware, sensor limits, upgrade path |
+| [docs/DESIGN.md](docs/DESIGN.md) | the visual system, what changed, what is still to do |
+
+## Layout
+
+```
+app/                    screens (expo-router)
+components/greenr/      shared UI
+lib/                    all logic
+  sensing/              raw counts → validated → index; light rails
+  substrate/            ingredient library, blend model, retention curves
+  recommendation.ts     the advice, its states and its evidence grade
+  records.ts            per-plant history written to the account
+supabase/
+  migrations/           platform migration
+  functions/            identify-plant edge function and its shared logic
+  seed/                 generated from lib/substrate — npm run gen:substrates
+tests/                  Vitest; tests/db runs the SQL
+firmware/               sensor firmware (see docs/HARDWARE.md before flashing)
+```

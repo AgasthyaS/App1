@@ -126,6 +126,24 @@ export interface GrowthEntry {
   note?: string;
 }
 
+/** What an owner can report seeing on a plant. Mirrors `plant_observations.kind`. */
+export type ObservationKind =
+  | 'new-growth' | 'flowering' | 'wilting' | 'yellowing' | 'browning'
+  | 'leaf-drop' | 'pests' | 'mould' | 'leggy' | 'looks-well' | 'other';
+
+/**
+ * Something the owner SAW — the one kind of evidence no sensor provides. It is a
+ * report, not a diagnosis: "leaves yellowing" is recorded as exactly that.
+ */
+export interface PlantObservation {
+  id: string;
+  at: string; // ISO timestamp
+  kind: ObservationKind;
+  /** 1 slight · 2 clear · 3 severe */
+  severity?: 1 | 2 | 3;
+  note?: string;
+}
+
 export interface Plant {
   id: string;
   name: string;
@@ -172,6 +190,13 @@ export interface Plant {
    * expected to dry, and therefore when watering is actually due.
    */
   soilMix?: SoilMix;
+  /**
+   * Precisely what it is potted in, from the substrate library: a preset, a
+   * custom blend of ingredients, or an explicit "unknown". When set, its
+   * retention curve replaces the four-way `soilMix` class in every calculation,
+   * and `soilMix` is kept in step as the nearest class for the older tables.
+   */
+  substrate?: import('./substrate/catalog').SubstrateSpec | null;
   /**
    * Measured-by-feel water retention of this pot's actual compost. Scales the
    * retention curve's air-entry parameter, so predictions match the substrate in
@@ -222,6 +247,15 @@ export interface Plant {
   waterLog?: WaterEvent[];
   /** growth journal — dated photos + height/leaf measurements over time */
   growth?: GrowthEntry[];
+  /** what the owner has reported seeing, newest first */
+  observations?: PlantObservation[];
+  /**
+   * How the species was established. A photo identification is only ever a
+   * suggestion until the owner confirms it; this records which it was.
+   */
+  identifiedBy?: 'owner' | 'photo' | 'photo-corrected';
+  /** earlier identifications, so re-identifying never erases what it was thought to be */
+  speciesHistory?: { species: string; latin: string; until: string }[];
   score: number;
   estimate: boolean; // true = manual model (dashed ring, ± band)
   estimateBand: number; // the ± value when estimate

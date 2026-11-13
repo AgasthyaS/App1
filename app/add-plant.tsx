@@ -24,7 +24,7 @@ export default function AddPlantModal() {
         </Text>
         <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, lineHeight: 22 }]}>
           Free accounts can track up to {FREE_PLANT_LIMIT} plants. Upgrade to Greenr+ to grow your
-          garden without limits — plus photo diagnosis and more.
+          garden without limits — plus longer forecasts and full history.
         </Text>
         <GButton title="See Greenr+" onPress={() => toTabsThen('/plus')} style={{ marginTop: 24 }} />
         <GButton title="Not now" kind="secondary" onPress={closeModal} style={{ marginTop: 10 }} />

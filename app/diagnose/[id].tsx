@@ -1,229 +1,133 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Platform, Pressable, Text, View } from 'react-native';
+import React, { useMemo } from 'react';
+import { Pressable, Text, View } from 'react-native';
 
-import { Card, GButton, Hairline, Screen } from '@/components/greenr/UI';
-import VitalityRing from '@/components/greenr/VitalityRing';
+import ObservationCard from '@/components/greenr/ObservationCard';
+import { Card, GButton, Screen, SectionHeader } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
+import { applyCalibration, calibrationFor } from '@/lib/calibration';
+import { checkup, unexplainedText } from '@/lib/checkup';
+import { storedLightAvg } from '@/lib/insights';
+import { OBSERVATION_LABEL } from '@/lib/observations';
 import { useGreenr } from '@/lib/store';
-import { Plant, Spot } from '@/lib/types';
+import { useLiveReading } from '@/lib/useLiveReading';
 
 /**
- * Diagnose (§9.1, Plus): photo → ~4 s analysis → ranked differential with
- * evidence for AND against each finding, then a plan with one-tap add to
- * the next Care Mode. Analysis is simulated; the evidence is real plant data.
+ * Check-up: what the sensors show, what you see, and where the two meet.
+ *
+ * No photo analysis and no percentages — see lib/checkup.ts for why, and for the
+ * (short, published) list of symptom-and-condition pairings it draws on.
  */
-
-type Step = 'camera' | 'analyzing' | 'findings';
-
-interface Finding {
-  name: string;
-  prob: number;
-  evidenceFor: string;
-  evidenceAgainst: string;
-}
-
-function buildDifferential(plant: Plant, spot?: Spot): Finding[] {
-  const findings: Finding[] = [];
-  const rhLow = (spot?.rh ?? 55) < 50;
-  const lightLow = (spot?.dli ?? 3) < 2;
-  const overWet = plant.timeInRangePct < 70;
-
-  findings.push({
-    name: 'Humidity stress',
-    prob: rhLow ? 78 : 12,
-    evidenceFor: rhLow
-      ? `RH averaged ${spot?.rh}% vs 55% floor; leaf-edge browning pattern.`
-      : 'Leaf-edge browning pattern only.',
-    evidenceAgainst: rhLow ? '—' : `RH averaged ${spot?.rh}% — inside the comfort band.`,
-  });
-  findings.push({
-    name: 'Overwatering',
-    prob: overWet ? 61 : 9,
-    evidenceFor: overWet ? `Time in range only ${plant.timeInRangePct}% over 14 d.` : '—',
-    evidenceAgainst: overWet ? '—' : `Moisture in range ${plant.timeInRangePct}% of the last 14 d.`,
-  });
-  findings.push({
-    name: 'Light debt',
-    prob: lightLow ? 54 : 8,
-    evidenceFor: lightLow
-      ? `${spot?.dli.toFixed(1)} DLI vs the species target — sustained deficit.`
-      : '—',
-    evidenceAgainst: lightLow ? '—' : `${spot?.dli.toFixed(1)} DLI meets the species target.`,
-  });
-  return findings.sort((a, b) => b.prob - a.prob);
-}
-
-export default function Diagnose() {
+export default function Checkup() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { plants, spots, settings, addDiagnosis, addTasks } = useGreenr();
+  const { plants, calibrations, lightDaily, settings, addDiagnosis } = useGreenr();
   const plant = plants.find((p) => p.id === id);
-  const spot = spots.find((s) => s.id === plant?.spotId);
-  const [step, setStep] = useState<Step>('camera');
-  const [planAdded, setPlanAdded] = useState(false);
+  const { reading, deviceId } = useLiveReading(plant?.id);
 
-  useEffect(() => {
-    if (step !== 'analyzing') return;
-    const t = setTimeout(() => setStep('findings'), 4000);
-    return () => clearTimeout(t);
-  }, [step]);
+  const result = useMemo(() => {
+    if (!plant) return null;
+    const cal = calibrationFor(calibrations, deviceId, plant.sensorId);
+    return checkup({
+      plant,
+      reading: reading && cal ? applyCalibration(reading, cal) : reading,
+      lightAvg: storedLightAvg(lightDaily[plant.id])?.avg ?? null,
+      unitsF: settings.unitsF,
+    });
+  }, [plant, reading, deviceId, calibrations, lightDaily, settings.unitsF]);
 
-  // Photo diagnosis is a Greenr+ feature — everyone else sees the upgrade path.
-  if (!settings.plus) {
+  if (!plant || !result) {
     return (
       <Screen scroll={false} style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ fontSize: 40 }}>🔍</Text>
-        <Text style={[type.ritualTitle, { color: dark.ink, marginTop: 12, textAlign: 'center' }]}>
-          Photo diagnosis is a Greenr+ feature
-        </Text>
-        <Text style={[type.body, { color: dark.inkMuted, marginTop: 10, textAlign: 'center', lineHeight: 22 }]}>
-          Point the camera at a struggling plant and get a ranked differential — with the
-          evidence for and against each finding — plus a care plan.
-        </Text>
-        <GButton title="See Greenr+" onPress={() => router.push('/plus')} style={{ marginTop: 20, alignSelf: 'stretch' }} />
-        <Pressable onPress={() => router.back()} style={{ minHeight: 44, justifyContent: 'center', marginTop: 6 }}>
-          <Text style={[type.body, { color: dark.inkMuted }]}>Not now</Text>
-        </Pressable>
+        <Text style={[type.body, { color: dark.inkMuted }]}>That plant is no longer in your garden.</Text>
+        <GButton title="Go back" kind="secondary" onPress={() => router.back()} style={{ marginTop: 16 }} />
       </Screen>
     );
   }
 
-  if (!plant) {
-    return (
-      <Screen scroll={false} style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={[type.body, { color: dark.inkMuted }]}>Plant not found.</Text>
-      </Screen>
-    );
-  }
-
-  const findings = buildDifferential(plant, spot);
-  const top = findings[0];
-
-  if (step === 'camera') {
-    return (
-      <Screen scroll={false} style={{ justifyContent: 'center' }}>
-        <View
-          style={{
-            aspectRatio: 3 / 4,
-            borderRadius: 24,
-            backgroundColor: dark.surface2,
-            alignItems: 'center',
-            justifyContent: 'center',
-            // web: cap the 3:4 frame so the shutter stays on screen
-            ...(Platform.OS === 'web' ? { width: '100%', maxWidth: 300, alignSelf: 'center' } : null),
-          }}
-        >
-          <Text style={{ fontSize: 84 }}>{plant.emoji}</Text>
-          <Text style={[type.caption, { color: dark.inkMuted, marginTop: 10, textAlign: 'center', paddingHorizontal: 24 }]}>
-            Photograph the worst leaf, then the whole plant.
-          </Text>
-        </View>
-        <Pressable
-          onPress={() => setStep('analyzing')}
-          accessibilityLabel="Shutter"
-          style={{
-            alignSelf: 'center',
-            marginTop: 24,
-            width: 68,
-            height: 68,
-            borderRadius: 34,
-            borderWidth: 4,
-            borderColor: dark.ink,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: dark.ink }} />
-        </Pressable>
-        <Pressable onPress={() => router.back()} style={{ alignSelf: 'center', marginTop: 12, minHeight: 44, justifyContent: 'center' }}>
-          <Text style={[type.body, { color: dark.inkMuted }]}>Cancel</Text>
-        </Pressable>
-      </Screen>
-    );
-  }
-
-  if (step === 'analyzing') {
-    return (
-      <Screen scroll={false} style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <VitalityRing score={62} size={72} showLabel={false} />
-        <Text style={[type.body, { color: dark.inkMuted, marginTop: 20 }]}>
-          Reading the leaf against 30 days of data…
-        </Text>
-      </Screen>
-    );
-  }
+  const toneColor = (t: string) => (t === 'good' ? accent.sage : t === 'warn' ? accent.sunbeam : t === 'bad' ? accent.clay : dark.inkMuted);
+  const toneIcon = (t: string) => (t === 'good' ? 'checkmark-circle' : t === 'unknown' ? 'help-circle' : 'alert-circle');
+  const offCount = result.measured.filter((m) => m.tone === 'warn' || m.tone === 'bad').length;
 
   return (
     <Screen>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Pressable onPress={() => router.back()} style={{ minWidth: 44, minHeight: 44, justifyContent: 'center' }}>
-          <Ionicons name="chevron-back" size={24} color={dark.ink} />
+        <Pressable onPress={() => router.back()} accessibilityLabel="Close" style={{ minWidth: 44, minHeight: 44, justifyContent: 'center' }}>
+          <Ionicons name="close" size={24} color={dark.ink} />
         </Pressable>
-        <Text style={[type.screenTitle, { color: dark.ink, fontSize: 24 }]}>Findings</Text>
+        <Text style={[type.screenTitle, { color: dark.ink, fontSize: 24, flex: 1 }]} numberOfLines={1}>Check-up · {plant.name}</Text>
       </View>
 
-      <Card style={{ marginTop: 14 }}>
-        {findings.map((f, i) => (
-          <View key={f.name}>
-            {i > 0 && <Hairline style={{ marginVertical: 12 }} />}
-            <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-              <Text style={[type.cardTitle, { color: dark.ink, flex: 1 }]}>{f.name}</Text>
-              <Text style={[type.numBold as any, { fontSize: 17, color: i === 0 ? accent.sunbeam : dark.inkMuted }]}>
-                {f.prob}%
-              </Text>
-            </View>
-            <Text style={[type.caption, { color: dark.inkMuted, marginTop: 6, lineHeight: 18 }]}>
-              For: {f.evidenceFor}
-            </Text>
-            <Text style={[type.caption, { color: dark.inkMuted, marginTop: 2, lineHeight: 18 }]}>
-              Against: {f.evidenceAgainst}
-            </Text>
-          </View>
-        ))}
-      </Card>
-
-      <Card style={{ marginTop: 10 }}>
-        <Text style={[type.micro, { color: dark.inkMuted }]}>THE PLAN</Text>
-        <Text style={[type.body, { color: dark.ink, marginTop: 8, lineHeight: 21 }]}>
-          1. Move a small humidifier within 3 ft — projected RH 55%+, leaf damage stops in ~2 weeks.
-        </Text>
-        <Text style={[type.body, { color: dark.ink, marginTop: 6, lineHeight: 21 }]}>
-          2. Trim the browned edges with clean shears — they won&apos;t recover.
-        </Text>
-        {planAdded ? (
-          <Text style={[type.caption, { color: accent.sage, marginTop: 12 }]}>
-            Added to Sunday&apos;s Care Mode.
+      <SectionHeader>What the sensors show</SectionHeader>
+      {result.noSensor ? (
+        <Card>
+          <Text style={[type.body, { color: dark.ink }]}>No sensor readings for this plant.</Text>
+          <Text style={[type.caption, { color: dark.inkMuted, marginTop: 4, lineHeight: 19 }]}>
+            Without a sensor Greenr cannot check its conditions. You can still note what you see below, and it
+            is kept in the plant’s history.
           </Text>
-        ) : (
-          <GButton
-            title="Add to next Care Mode"
-            onPress={() => {
-              addTasks([
-                {
-                  id: `task-dx-${Date.now()}`,
-                  plantId: plant.id,
-                  title: `Move a humidifier within 3 ft of the ${plant.name}`,
-                  why: `${top.name} at ${top.prob}% — ${top.evidenceFor}`,
-                  minutes: 5,
-                  verifiable: false,
-                },
-              ]);
-              addDiagnosis(plant.id, `Diagnosis: ${top.name} (${top.prob}%). ${top.evidenceFor}`);
-              setPlanAdded(true);
-            }}
-            style={{ marginTop: 12 }}
-          />
-        )}
-      </Card>
+        </Card>
+      ) : (
+        <Card>
+          <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
+            {offCount === 0 ? 'Everything measured is in range' : `${offCount} of ${result.measured.length} measurements out of range`}
+          </Text>
+          {result.measured.map((m) => (
+            <View key={m.key} style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <Ionicons name={toneIcon(m.tone) as any} size={18} color={toneColor(m.tone)} style={{ marginTop: 1 }} />
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+                  <Text style={[type.body, { color: dark.ink }]}>{m.label}</Text>
+                  <Text style={[type.body, { color: dark.inkMuted, fontVariant: ['tabular-nums'] }]}>{m.value}</Text>
+                </View>
+                <Text style={[type.caption, { color: dark.inkMuted, lineHeight: 18 }]}>{m.detail}</Text>
+              </View>
+            </View>
+          ))}
+          <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 16, marginTop: 12 }]}>
+            In-range conditions do not prove a plant is healthy. They rule out the causes a sensor can see.
+          </Text>
+        </Card>
+      )}
 
-      <Text style={[type.micro, { color: dark.inkMuted, marginTop: 12, lineHeight: 16 }]}>
-        This diagnosis lands in the timeline and, with your research toggle on, the anonymized
-        outcome dataset.
-      </Text>
-      <GButton title="Done" kind="secondary" onPress={() => router.back()} style={{ marginTop: 16 }} />
+      <ObservationCard plant={plant} />
+
+      {(result.leads.length > 0 || result.unexplained.length > 0) && (
+        <>
+          <SectionHeader>Worth checking</SectionHeader>
+          {result.leads.map((l) => (
+            <Card key={`${l.symptom}-${l.with}`} style={{ marginBottom: 10 }} accentBorder={accent.sunbeam}>
+              <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>{l.title}</Text>
+              <Text style={[type.micro, { color: dark.inkMuted, marginTop: 4, lineHeight: 16 }]}>
+                You noted {OBSERVATION_LABEL[l.symptom].toLowerCase()} · {l.basis}
+              </Text>
+              <Text style={[type.caption, { color: dark.ink, marginTop: 8, lineHeight: 19 }]}>{l.check}</Text>
+            </Card>
+          ))}
+          {result.unexplained.length > 0 && (
+            <Card>
+              <Text style={[type.caption, { color: dark.ink, lineHeight: 19 }]}>{unexplainedText(result.unexplained)}</Text>
+            </Card>
+          )}
+          <Text style={[type.micro, { color: dark.inkMuted, lineHeight: 16, marginTop: 10, marginHorizontal: 4 }]}>
+            These pair what you reported with a measured condition that commonly causes it. They are leads, not a
+            diagnosis: the same symptom often has more than one cause.
+          </Text>
+          {result.leads.length > 0 && (
+            <GButton
+              title="Save to this plant’s history"
+              kind="secondary"
+              style={{ marginTop: 14 }}
+              track="checkup.save"
+              onPress={() => {
+                addDiagnosis(plant.id, `Check-up: ${result.leads.map((l) => l.title.toLowerCase()).join('; ')}.`);
+                router.back();
+              }}
+            />
+          )}
+        </>
+      )}
     </Screen>
   );
 }
-

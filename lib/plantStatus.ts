@@ -101,11 +101,32 @@ export function humidityStatus(rh: number | null | undefined, floor: number): St
 export function lightStatus(lightIdx: number | null | undefined, dliBand: [number, number]): Status {
   if (lightIdx == null) return NA;
   const raw = `${Math.round(lightIdx)}/100`;
+  // The WORD describes the light; the TONE says whether it suits this species —
+  // and the tone comes from the one definition the spot verdict also uses.
+  const tone = lightTone(lightIdx, dliBand);
+  const label =
+    lightIdx < 10 ? 'Very dark'
+      : lightIdx < 30 ? 'Low light'
+        : lightIdx < 70 ? 'Bright indirect'
+          : lightIdx < 90 ? 'Direct sun'
+            : 'Very bright';
+  return { label, tone, raw };
+}
+
+/**
+ * Does this much light suit a species with this daily-light band? ONE definition,
+ * shared by the per-reading status above and the multi-day spot verdict in
+ * lib/insights — they used to carry separate cut-offs and could disagree about
+ * the same number on the same screen.
+ *
+ * The cut-offs are on the 0–100 light index and are horticultural judgement, not
+ * measurement: the index is an uncalibrated estimate, so these separate "clearly
+ * wrong" from "plausibly fine" and nothing finer.
+ */
+export function lightTone(lightIdx: number, dliBand: [number, number]): 'good' | 'warn' | 'bad' {
   const wantsHigh = dliBand[1] >= 10; // sun-lovers
   const wantsLow = dliBand[1] <= 4; // low-light plants
-  if (lightIdx < 10) return { label: 'Very dark', tone: 'bad', raw };
-  if (lightIdx < 30) return { label: 'Low light', tone: wantsLow ? 'good' : 'warn', raw };
-  if (lightIdx < 70) return { label: 'Bright indirect', tone: 'good', raw };
-  if (lightIdx < 90) return { label: 'Direct sun', tone: wantsHigh ? 'good' : 'warn', raw };
-  return { label: 'Very bright', tone: wantsHigh ? 'good' : 'bad', raw };
+  if (wantsHigh) return lightIdx >= 55 ? 'good' : lightIdx >= 30 ? 'warn' : 'bad';
+  if (wantsLow) return lightIdx < 8 ? 'bad' : lightIdx <= 60 ? 'good' : 'warn';
+  return lightIdx < 15 ? 'bad' : lightIdx < 28 ? 'warn' : lightIdx <= 75 ? 'good' : 'warn';
 }

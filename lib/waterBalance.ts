@@ -135,7 +135,7 @@ export interface ResponsiveVolume {
  * precisely where the old model failed.
  */
 export function responsiveVolume(
-  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'soilMix' | 'soilRetention'>,
+  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'soilMix' | 'substrate' | 'soilRetention'>,
   /**
    * The current reading. Supplying it matters: how deep the pot is dry decides
    * how much of it a pour has to re-wet.
@@ -189,7 +189,7 @@ export function responsiveVolume(
    * drying out throughout, which is the case it exists for.
    */
   const capacityRead = probeReads(
-    { potHeightCm: potH, soilMix: plant.soilMix ?? null, soilRetention: plant.soilRetention ?? null, probeDepthCm: plant.probeDepthCm ?? null },
+    { potHeightCm: potH, soilMix: plant.soilMix ?? null, substrate: plant.substrate ?? null, soilRetention: plant.soilRetention ?? null, probeDepthCm: plant.probeDepthCm ?? null },
     0,
   );
   const dryness =
@@ -548,7 +548,7 @@ const median = (xs: number[]): number => {
  * local slope rather than a single constant.
  */
 export function perPointFor(
-  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog'>
+  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage' | 'waterLog'>
     & Pick<Plant, 'measurementMemory'>
     & { id?: string; species?: string; comfortBand?: [number, number] | null },
   history: Reading[],
@@ -709,7 +709,7 @@ export interface DailyUse {
  * cross-check rather than two dressings of the same assumption.
  */
 export function dailyUseMl(
-  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'waterLog' | 'soilMix' | 'soilRetention'>
+  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'waterLog' | 'soilMix' | 'substrate' | 'soilRetention'>
     & { id?: string; species?: string; comfortBand?: [number, number] | null },
   history: Reading[],
   now = Date.now(),
@@ -776,7 +776,7 @@ export interface Dose {
 }
 
 export function doseFor(
-  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog'>
+  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage' | 'waterLog'>
     & { id?: string; species?: string; comfortBand?: [number, number] | null },
   history: Reading[],
   soilPct: number,
@@ -855,7 +855,7 @@ export interface WateringSchedule {
  * and the app says so instead of inventing a week.
  */
 export function wateringSchedule(
-  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog' | 'species'> & { id?: string },
+  plant: Pick<Plant, 'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial' | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage' | 'waterLog' | 'species'> & { id?: string },
   history: Reading[],
   band: [number, number],
   now = Date.now(),
@@ -867,6 +867,7 @@ export function wateringSchedule(
   const geo = {
     potHeightCm: potH,
     soilMix: measured.soilMix ?? null,
+    substrate: measured.substrate ?? null,
     soilRetention: measured.soilRetention ?? null,
     probeDepthCm: measured.probeDepthCm ?? null,
   };

@@ -95,7 +95,7 @@ const GOOD_ENOUGH = 1.25;
 type AccuracyPlant = Pick<
   Plant,
   'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial'
-  | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog'
+  | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage' | 'waterLog'
 > & { id?: string };
 
 export function doseAccuracy(

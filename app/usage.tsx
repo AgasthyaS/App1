@@ -105,6 +105,16 @@ export default function Usage() {
 
       {global && (
         <>
+          <Card onPress={() => router.push('/explorer' as any)} style={{ marginTop: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Ionicons name="analytics" size={18} color={accent.verdant} />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Data explorer</Text>
+                <Text style={[type.micro, { color: dark.inkMuted }]}>Plants, sensors, reading quality, advice outcomes, AI cost</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
+            </View>
+          </Card>
           <SectionHeader>All users</SectionHeader>
           <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
             {RANGES.map((d) => (

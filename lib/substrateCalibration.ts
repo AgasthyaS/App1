@@ -224,7 +224,7 @@ export interface CalibrationPlan {
 
 type CalPlant = Pick<Plant,
   'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'potMaterial'
-  | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'probeDepthCm' | 'waterLog'
+  | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage' | 'probeDepthCm' | 'waterLog'
 > & { id?: string; species?: string; comfortBand?: [number, number] | null };
 
 /* ───────────────────────── Waller: does it level out? ───────────────────── */
@@ -459,6 +459,7 @@ export function substrateCalibration(
   const geo = {
     potHeightCm: plant.potHeightCm ?? 16,
     soilMix: stated,
+    substrate: plant.substrate ?? null,
     soilRetention: plant.soilRetention ?? null,
     probeDepthCm: plant.probeDepthCm ?? null,
   };
@@ -550,8 +551,8 @@ export function substrateCalibration(
   // In DISPLAY points, because it is multiplied by millilitres per display point.
   const eawPoints = Math.max(
     0,
-    displayFromWaterContent(waterContentAt(TENSION.containerCapacity, stated ?? 'Standard mix', plant.soilRetention ?? null))
-      - displayFromWaterContent(waterContentAt(TENSION.easilyAvailable, stated ?? 'Standard mix', plant.soilRetention ?? null)),
+    displayFromWaterContent(waterContentAt(TENSION.containerCapacity, stated ?? 'Standard mix', plant.soilRetention ?? null, plant.substrate ?? null))
+      - displayFromWaterContent(waterContentAt(TENSION.easilyAvailable, stated ?? 'Standard mix', plant.soilRetention ?? null, plant.substrate ?? null)),
   );
   const easilyAvailableFraction =
     mlPerPoint != null && potMl > 0 ? (mlPerPoint * eawPoints) / potMl : null;
@@ -703,6 +704,7 @@ export function calibrationPlan(
   const geo = {
     potHeightCm: plant.potHeightCm ?? 16,
     soilMix: plant.soilMix ?? null,
+    substrate: plant.substrate ?? null,
     soilRetention: plant.soilRetention ?? null,
     probeDepthCm: plant.probeDepthCm ?? null,
   };

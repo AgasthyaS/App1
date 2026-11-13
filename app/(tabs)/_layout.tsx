@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { accent, currentScheme, dark, type } from '@/constants/theme';
 import { useGreenr } from '@/lib/store';
+import { useRecordsSync } from '@/lib/useRecordsSync';
 import { useResearchSync } from '@/lib/useResearchSync';
 
 /**
@@ -110,6 +111,7 @@ export default function TabsLayout() {
   // live in different places and only meet inside the tab tree. Runs a few times
   // a day, never on a user action, and fails silently by design.
   useResearchSync();
+  useRecordsSync();
   if (hydrated && !profile) return <Redirect href="/signin" />;
   if (hydrated && !onboarded) return <Redirect href="/onboarding" />;
 

@@ -254,6 +254,7 @@ function anchorGeometry(plant: RetentionPlant): PotGeometry {
   return {
     potHeightCm: plant.potHeightCm ?? DEFAULT_DEPTH_CM,
     soilMix: plant.soilMix ?? null,
+    substrate: plant.substrate ?? null,
     probeDepthCm: plant.probeDepthCm ?? null,
     soilRetention: null,
   };
@@ -369,7 +370,7 @@ function splitRuns(pts: Pt[]): Pt[][] {
 
 type RetentionPlant = Pick<
   Plant,
-  'potHeightCm' | 'probeDepthCm' | 'soilMix' | 'soilRetention'
+  'potHeightCm' | 'probeDepthCm' | 'soilMix' | 'substrate' | 'soilRetention'
 > & { id?: string };
 
 /**
@@ -410,7 +411,7 @@ export function dryDownRuns(plant: RetentionPlant, history: Reading[]): Retentio
    * agreeing with theory is not evidence against it.
    */
   // The mix's residual water, converted to the display scale the readings are on.
-  const book = displayFromWaterContent(waterContentAt(1e5, mix));
+  const book = displayFromWaterContent(waterContentAt(1e5, mix, null, plant.substrate ?? null));
   const lowestSeen = Math.min(...pts.map((p) => p.v));
 
   /*

@@ -18,7 +18,7 @@ export default function SubscriptionTerms() {
         {
           heading: 'What’s included',
           body: [
-            'Greenr+ unlocks extra features, such as longer forecasts and crisis prediction, full history, photo diagnosis and autopsies, unlimited plants and spots, the in-store scanner, and accuracy detail with CSV export. The current list is shown on the Greenr+ screen before you buy. Features may improve over time. We will not take away a core advertised feature during a period you have already paid for.',
+            'Greenr+ unlocks extra features, such as longer forecasts and crisis prediction, full history, plant autopsies, unlimited plants and spots, the in-store scanner, and accuracy detail with CSV export. The current list is shown on the Greenr+ screen before you buy. Features may improve over time. We will not take away a core advertised feature during a period you have already paid for.',
           ],
         },
         {

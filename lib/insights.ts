@@ -1,7 +1,7 @@
 import { bridgeGapH, OFFLINE_GAP_H, type Reading } from './devices';
 import { plantLabel } from './format';
-import { setPhotoperiodHours } from './lightModel';
-import { idealsFor } from './plantStatus';
+import { indexToLux, luxToIndex, setPhotoperiodHours } from './lightModel';
+import { idealsFor, lightTone } from './plantStatus';
 
 /**
  * Daylight averaging done properly. Two failure modes of a naive average:
@@ -90,6 +90,11 @@ function litOverlap(a: number, b: number, value: number): number {
   return daytimeOverlap(a, b);
 }
 
+/** Mean illuminance (lux) across a span bounded by two index readings. */
+function trapezoidLux(a: number, b: number): number {
+  return (indexToLux(a) + indexToLux(b)) / 2;
+}
+
 /** True when this span was lit after dark — i.e. artificial light was in use. */
 function isArtificial(a: number, b: number, value: number): boolean {
   return value >= USEFUL_LIGHT_MIN && litOverlap(a, b, value) > daytimeOverlap(a, b);
@@ -136,7 +141,9 @@ export function daytimeLightAvg(history: Reading[], now = Date.now()): DaytimeLi
     const v = (pts[i - 1].v + pts[i].v) / 2;
     const ov = litOverlap(pts[i - 1].t, pts[i].t, v);
     if (ov <= 0) continue;
-    weighted += v * ov;
+    // Trapezoid in LINEAR light, not on the logarithmic index — see
+    // `photonMeanIndex` in lib/lightModel for why that distinction is 2–3×.
+    weighted += trapezoidLux(pts[i - 1].v, pts[i].v) * ov;
     weight += ov;
   }
   // The latest reading stands in for the stretch since it reported (≤ 3.5 h).
@@ -144,7 +151,7 @@ export function daytimeLightAvg(history: Reading[], now = Date.now()): DaytimeLi
   const tailEnd = Math.min(now, last.t + 3.5 * MS_H);
   const tailOv = litOverlap(last.t, tailEnd, last.v);
   if (tailOv > 0) {
-    weighted += last.v * tailOv;
+    weighted += indexToLux(last.v) * tailOv;
     weight += tailOv;
   }
 
@@ -153,7 +160,7 @@ export function daytimeLightAvg(history: Reading[], now = Date.now()): DaytimeLi
   // demanding 5 h meant the very first day produced nothing, which is what left
   // the Light metric reading "Awaiting daytime" indefinitely.
   if (coveredH < 3) return null;
-  return { avg: weighted / weight, coveredH };
+  return { avg: luxToIndex(weighted / weight), coveredH };
 }
 
 /* ───────────────────── Multi-day accumulating light ─────────────────────
@@ -172,6 +179,12 @@ export interface DayLight {
   hours: number;
   /** true when some of that light came from lamps after dark */
   artificial?: boolean;
+  /**
+   * Hours of that light during which the sensor was pinned at its bright limit.
+   * When this is a meaningful share of `hours`, the day's figure is a LOWER
+   * BOUND: the spot was at least this bright.
+   */
+  saturatedHours?: number;
 }
 
 /** Local calendar-day key (YYYY-MM-DD) for a timestamp. */
@@ -203,7 +216,7 @@ export function dayLight(history: Reading[], within = Date.now()): DayLight | nu
   );
   const pts = history
     .filter((r) => r.light_lux != null && Number.isFinite(r.light_lux))
-    .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.light_lux as number }))
+    .map((r) => ({ t: new Date(r.created_at).getTime(), v: r.light_lux as number, sat: r.light_quality === 'saturated-bright' }))
     // include a point just before midnight so the morning span has a left edge
     .filter((p) => p.t >= from - windowGapH * MS_H && p.t < to)
     .sort((x, y) => x.t - y.t);
@@ -212,6 +225,7 @@ export function dayLight(history: Reading[], within = Date.now()): DayLight | nu
   let weighted = 0;
   let weight = 0;
   let artificial = false;
+  let saturated = 0;
   for (let i = 1; i < pts.length; i++) {
     if (pts[i].t - pts[i - 1].t > windowGapH * MS_H) continue; // offline gap — don't bridge
     const a = Math.max(pts[i - 1].t, from);
@@ -220,7 +234,8 @@ export function dayLight(history: Reading[], within = Date.now()): DayLight | nu
     const ov = litOverlap(a, b, v);
     if (ov <= 0) continue;
     if (isArtificial(a, b, v)) artificial = true;
-    weighted += v * ov;
+    if (pts[i - 1].sat || pts[i].sat) saturated += ov;
+    weighted += trapezoidLux(pts[i - 1].v, pts[i].v) * ov;
     weight += ov;
   }
   // Latest reading stands for the stretch after it, bounded to today and to now.
@@ -230,13 +245,20 @@ export function dayLight(history: Reading[], within = Date.now()): DayLight | nu
   const tailOv = litOverlap(tailA, tailEnd, last.v);
   if (tailOv > 0) {
     if (isArtificial(tailA, tailEnd, last.v)) artificial = true;
-    weighted += last.v * tailOv;
+    if (last.sat) saturated += tailOv;
+    weighted += indexToLux(last.v) * tailOv;
     weight += tailOv;
   }
 
   const hours = weight / MS_H;
   if (hours < 2) return null;
-  return { day: localDayKey(from), avg: weighted / weight, hours, artificial };
+  return {
+    day: localDayKey(from),
+    avg: luxToIndex(weighted / weight),
+    hours,
+    artificial,
+    ...(saturated > 0 ? { saturatedHours: saturated / MS_H } : {}),
+  };
 }
 
 export interface LightAverage {
@@ -273,12 +295,13 @@ export function recentLightAvg(
   days.forEach((d, i) => {
     const recency = 0.6 + 0.4 * (n === 1 ? 1 : i / (n - 1)); // 0.6 → 1.0 oldest→newest
     const w = d.hours * recency;
-    weighted += d.avg * w;
+    // Days are blended in linear light for the same reason hours are.
+    weighted += indexToLux(d.avg) * w;
     weight += w;
     hours += d.hours;
   });
   if (weight <= 0) return null;
-  return { avg: weighted / weight, days: n, hours };
+  return { avg: luxToIndex(weighted / weight), days: n, hours };
 }
 
 /**
@@ -328,7 +351,7 @@ export function lightVerdict(
   let needs: string;
   if (wantsHigh) {
     needs = 'strong, direct light';
-    tone = avg >= 55 ? 'good' : avg >= 30 ? 'warn' : 'bad';
+    tone = lightTone(avg, dliBand);
     headline =
       tone === 'good'
         ? 'Right spot — strong light through the day'
@@ -337,7 +360,7 @@ export function lightVerdict(
           : 'Too dim here for a sun-lover';
   } else if (wantsLow) {
     needs = 'low to medium light';
-    tone = avg < 8 ? 'bad' : avg <= 60 ? 'good' : 'warn';
+    tone = lightTone(avg, dliBand);
     headline =
       tone === 'bad'
         ? 'Very dark — even shade plants need some light'
@@ -346,7 +369,7 @@ export function lightVerdict(
           : 'Brighter than it needs — watch for scorch';
   } else {
     needs = 'bright indirect light';
-    tone = avg < 15 ? 'bad' : avg < 28 ? 'warn' : avg <= 75 ? 'good' : 'warn';
+    tone = lightTone(avg, dliBand);
     headline =
       tone === 'bad'
         ? 'Too dim here for this plant'

@@ -44,6 +44,9 @@ import { retentionEstimate, RETENTION_LABEL } from '@/lib/soilRetention';
 import { doseAccuracy } from '@/lib/doseAccuracy';
 import { pendingWateringQuestion } from '@/lib/unloggedWatering';
 import { setupCompleteness } from '@/lib/setupGaps';
+import { resolveSubstrate } from '@/lib/substrate';
+import AdviceCard from '@/components/greenr/AdviceCard';
+import ObservationCard from '@/components/greenr/ObservationCard';
 import { probeInsertion } from '@/lib/probeInsertion';
 import { probeResolution, relativeThreshold, relativeWetness } from '@/lib/probeResolution';
 import { PROBE_CASING_ADVICE, salinityAssessment } from '@/lib/salinity';
@@ -354,13 +357,13 @@ export default function PlantDetail() {
    */
   const soilProfileNote = useMemo(() => {
     if (!plant || !liveDeviceId) return null;
-    const geo = { potHeightCm: plant.potHeightCm ?? 16, soilMix: plant.soilMix, soilRetention: retention };
+    const geo = { potHeightCm: plant.potHeightCm ?? 16, soilMix: plant.soilMix, substrate: plant.substrate ?? null, soilRetention: retention };
     const reading = calReading?.soil_pct;
     if (reading == null) return null;
     // Invert the retention curve: what the probe read → how far the pot has
     // dried → what the roots below it are actually sitting in.
     const { rootZonePct, offset } = rootZoneFromReading(reading, geo);
-    const pwt = perchedWaterTableCm(plant.soilMix ?? 'Standard mix', retention);
+    const pwt = perchedWaterTableCm(plant.soilMix ?? 'Standard mix', retention, plant.substrate ?? null);
     return {
       geo,
       rootZonePct,
@@ -680,6 +683,7 @@ export default function PlantDetail() {
       ? profileCorrection({
           potHeightCm: plant.potHeightCm,
           soilMix: plant.soilMix,
+          substrate: plant.substrate ?? null,
           soilRetention: retention,
         })
       : null;
@@ -1052,11 +1056,10 @@ export default function PlantDetail() {
     if (!Number.isFinite(ml) || ml <= 0) return;
     doLogWater(Math.min(ml, 5000), 'measured');
   };
-  // The diagnose camera is a Greenr+ feature — route non-subscribers to the sheet.
-  const openDiagnose = () =>
-    settings.plus
-      ? router.push({ pathname: '/diagnose/[id]', params: { id: plant.id } })
-      : router.push('/plus');
+  // The check-up reads real sensor evidence and the owner's own observations —
+  // nothing in it is a paid extra, so it is open to everyone. (It replaced a
+  // simulated "photo diagnosis" that used to sit behind Greenr+.)
+  const openDiagnose = () => router.push({ pathname: '/diagnose/[id]', params: { id: plant.id } });
   // Charts plot only real readings — a missing metric is skipped, never drawn as 0.
   const soilBars = calHistory.filter((r) => r.soil_pct != null);
   const lightBars = calHistory.filter((r) => r.light_lux != null);
@@ -1269,6 +1272,19 @@ export default function PlantDetail() {
 
 
         <View style={{ paddingHorizontal: layout.margin }}>
+          {/* ══════════ THE ADVICE, AND WHAT IT RESTS ON ══════════
+              Only with a sensor: without readings the advice is a schedule, and
+              the schedule cards below already explain themselves. */}
+          {sensored && (
+            <AdviceCard
+              plant={plant}
+              reading={calReading}
+              history={calHistory}
+              calibration={cal}
+              sensorKey={liveDeviceId ?? sensor?.id ?? null}
+            />
+          )}
+
           {/* ══════════ OVER-WATERING — the log says it is being watered far too often ══════════ */}
           {overWatering && (
             <Card style={{ marginTop: 18, borderWidth: 1.5, borderColor: accent.sunbeam }}>
@@ -2698,6 +2714,9 @@ export default function PlantDetail() {
           </Card>
           )}
 
+          {/* ── What the owner sees: the outcome labels the sensor history needs ── */}
+          <ObservationCard plant={plant} />
+
           {/* ── Growth journal: the outcome dimension no sensor can read ── */}
           {(
           <Card style={{ marginTop: 10 }} onPress={() => router.push(`/growth/${plant.id}` as any)}>
@@ -2881,7 +2900,7 @@ export default function PlantDetail() {
             </>
           )}
 
-          {/* ── Photo-check: for problems no sensor can see (pests, spots, yellowing) ── */}
+          {/* ── Check-up: note what you see; Greenr sets it against what it measured ── */}
           <Card style={{ marginTop: 10 }} onPress={openDiagnose}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <IconTile icon="medkit" color={accent.clay} />
@@ -2890,10 +2909,10 @@ export default function PlantDetail() {
                   Something look off?
                 </Text>
                 <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
-                  Yellowing leaves, spots, pests — {sensored ? 'sensors can’t see these. ' : ''}Photo-check it.
+                  Yellowing leaves, spots, pests — {sensored ? 'sensors can’t see these. ' : ''}Note what you
+                  see and Greenr checks it against the conditions.
                 </Text>
               </View>
-              {!settings.plus && <Chip label="Greenr+" color={accent.sunbeamText} />}
               <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
             </View>
           </Card>
@@ -2906,6 +2925,27 @@ export default function PlantDetail() {
             open={!!groups.pot}
             onToggle={() => tog('pot')}
           >
+          {/* What it is potted in — its own screen, because the choice moves every threshold. */}
+          <Card
+            style={{ marginBottom: 10 }}
+            onPress={() => router.push({ pathname: '/substrate/[id]', params: { id: plant.id } } as any)}
+            track="plant.substrate"
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Ionicons name="layers-outline" size={18} color={accent.verdant} />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>
+                  {resolveSubstrate(plant.substrate, plant.soilMix).label}
+                </Text>
+                <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
+                  {resolveSubstrate(plant.substrate, plant.soilMix).knowledge === 'unknown'
+                    ? 'Not specified yet — tell Greenr what it is potted in'
+                    : 'What it is potted in · tap to change or mix your own'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />
+            </View>
+          </Card>
           {!potSizePrompt && (
             <Card>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -2916,7 +2956,7 @@ export default function PlantDetail() {
                   </Text>
                   <Text style={[type.micro, { color: dark.inkMuted, marginTop: 2, lineHeight: 15 }]}>
                     {plant.potMaterial.toLowerCase()}
-                    {plant.soilMix ? `, ${plant.soilMix.toLowerCase()}` : ''}
+                    {`, ${resolveSubstrate(plant.substrate, plant.soilMix).label.toLowerCase()}`}
                     {plant.hasDrainage === false ? ', no drainage holes' : ''} — all of it feeds the
                     watering amount.
                   </Text>
@@ -3687,7 +3727,7 @@ export default function PlantDetail() {
               { icon: 'cube', label: 'Log repotting', run: () => logCare(plant.id, 'Repotted (logged)') },
               { icon: 'camera', label: photoAdded ? 'Photo added ✓' : 'Add a photo', run: () => setShowCamera(true) },
               { icon: 'trending-up', label: 'Log growth', run: () => router.push(`/growth/${plant.id}` as any) },
-              { icon: 'medkit', label: settings.plus ? 'Photo check-up' : 'Photo check-up · Greenr+', run: openDiagnose },
+              { icon: 'medkit', label: 'Check-up', run: openDiagnose },
             ]}
           />
         </View>

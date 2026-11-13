@@ -1,3 +1,5 @@
+import { resolveSubstrate, type SubstrateSpec } from './substrate/catalog';
+import { LEGACY_VG, vgTheta, type VanGenuchten } from './substrate/vg';
 import type { SoilMix, SoilRetention } from './types';
 
 /**
@@ -99,18 +101,9 @@ export const PROBE = {
  * made every pot read dry and placed every threshold too low. `formulaCheck`
  * now asserts these published figures so that cannot recur silently.
  */
-interface VanGenuchten { alpha: number; n: number; thetaS: number; thetaR: number }
-
-const VG: Record<SoilMix, VanGenuchten> = {
-  // Grit/pumice/coarse perlite: drains almost immediately, tiny saturated layer.
-  'Gritty / cactus': { alpha: 1.0, n: 1.30, thetaS: 0.65, thetaR: 0.05 },
-  // Bark + perlite aroid mix: large pores, drains fast, holds air.
-  'Chunky / aroid':  { alpha: 0.64, n: 1.27, thetaS: 0.78, thetaR: 0.04 },
-  // Peat-based general potting compost.
-  'Standard mix':    { alpha: 0.143, n: 1.42, thetaS: 0.87, thetaR: 0.10 },
-  // Fine/compacted/old compost: strong capillarity, tall saturated layer.
-  'Dense / heavy':   { alpha: 0.064, n: 1.79, thetaS: 0.82, thetaR: 0.18 },
-};
+// The four fitted sets now live with the rest of the substrate library
+// (lib/substrate/vg.ts), unchanged, so there is one definition of the curve.
+const VG = LEGACY_VG;
 
 const mixOf = (m?: SoilMix | null): SoilMix =>
   m != null && Object.prototype.hasOwnProperty.call(VG, m) ? m : 'Standard mix';
@@ -142,15 +135,33 @@ const potDepth = (h: unknown): number =>
  * readings: display 33 is about 42% water. Anything compared with a reading goes
  * through `displayFromWaterContent` first (see `probeReads`).
  */
-export function waterContentAt(psiCm: number, mix: SoilMix, retention?: SoilRetention | null): number {
+export function waterContentAt(
+  psiCm: number,
+  mix: SoilMix,
+  retention?: SoilRetention | null,
+  substrate?: SubstrateSpec | null,
+): number {
   // Persisted plants can carry a mix string this build no longer knows, so this
   // lookup is validated rather than trusted — an unknown value used to throw.
-  const { alpha, n, thetaS, thetaR } = VG[mixOf(mix)];
-  const a = alpha * (retention != null ? (RETENTION_ALPHA[retention] ?? 1) : 1);
-  const m = 1 - 1 / n;
-  const theta = thetaR + (thetaS - thetaR) / Math.pow(1 + Math.pow(a * Math.max(0, psiCm), n), m);
-  return theta * 100;
+  const base = curveFor(mix, substrate);
+  const alpha = base.alpha * (retention != null ? (RETENTION_ALPHA[retention] ?? 1) : 1);
+  return vgTheta({ ...base, alpha }, psiCm) * 100;
 }
+
+/**
+ * The retention curve for whatever the plant is potted in.
+ *
+ * A plant that has chosen a substrate from the library (a preset, or its own
+ * blend) gets that substrate's curve. One that has not resolves through its
+ * original four-way `soilMix` to exactly the parameters it always had.
+ */
+function curveFor(mix: SoilMix | null | undefined, substrate?: SubstrateSpec | null): VanGenuchten {
+  return substrate ? resolveSubstrate(substrate, mixOf(mix)).vg : VG[mixOf(mix)];
+}
+
+/** Identity of a geometry's substrate, for cache keys. */
+const substrateKey = (substrate?: SubstrateSpec | null): string =>
+  substrate ? resolveSubstrate(substrate).key : '';
 
 /* ───────────── HOW MUCH OF THE WATER IN A POT A PLANT CAN ACTUALLY USE ─────────────
  *
@@ -220,11 +231,15 @@ export interface SubstrateWater {
  * Returned on the probe's own 0–100 scale rather than as volumetric water
  * content, because every threshold in the app is compared against a reading.
  */
-export function substrateWater(mix: SoilMix, retention?: SoilRetention | null): SubstrateWater {
+export function substrateWater(
+  mix: SoilMix,
+  retention?: SoilRetention | null,
+  substrate?: SubstrateSpec | null,
+): SubstrateWater {
   // Partitions are volumes of water (De Boodt's 20–30% is % of volume)…
-  const cc = waterContentAt(TENSION.containerCapacity, mix, retention);
-  const ea = waterContentAt(TENSION.easilyAvailable, mix, retention);
-  const wp = waterContentAt(TENSION.wilting, mix, retention);
+  const cc = waterContentAt(TENSION.containerCapacity, mix, retention, substrate);
+  const ea = waterContentAt(TENSION.easilyAvailable, mix, retention, substrate);
+  const wp = waterContentAt(TENSION.wilting, mix, retention, substrate);
   const easilyAvailable = Math.max(0, cc - ea);
   const buffering = Math.max(0, ea - wp);
   // …while the thresholds are what the SENSOR will show.
@@ -254,6 +269,12 @@ export interface PotGeometry {
   /** depth of soil in the pot, cm (surface → base) */
   potHeightCm: number;
   soilMix?: SoilMix | null;
+  /**
+   * A specific substrate from the library (lib/substrate) — a preset, a custom
+   * blend, or "unknown". When present its retention curve replaces the four-way
+   * `soilMix` class; when absent nothing changes.
+   */
+  substrate?: SubstrateSpec | null;
   /** the owner's own observation of how long this compost stays damp */
   soilRetention?: SoilRetention | null;
   /** how far the probe is buried; defaults to the hardware constant 6.5 cm */
@@ -272,7 +293,7 @@ export function moistureAtHeight(z: number, geo: PotGeometry, waterTableDepthCm 
   if (!Number.isFinite(z)) return 0;
   const mix = mixOf(geo.soilMix);
   // Height above the water surface IS the suction, in cm of water.
-  return waterContentAt(Math.max(0, z) + Math.max(0, waterTableDepthCm), mix, geo.soilRetention);
+  return waterContentAt(Math.max(0, z) + Math.max(0, waterTableDepthCm), mix, geo.soilRetention, geo.substrate);
 }
 
 /**
@@ -281,10 +302,14 @@ export function moistureAtHeight(z: number, geo: PotGeometry, waterTableDepthCm 
  * retention curve rather than being hard-coded, and lands where the horticultural
  * literature puts it (~1 cm for grit, ~3.5 cm for peat-based compost).
  */
-export function perchedWaterTableCm(mix: SoilMix, retention?: SoilRetention | null): number {
-  const sat = waterContentAt(0, mix, retention);
+export function perchedWaterTableCm(
+  mix: SoilMix,
+  retention?: SoilRetention | null,
+  substrate?: SubstrateSpec | null,
+): number {
+  const sat = waterContentAt(0, mix, retention, substrate);
   for (let z = 0; z <= 40; z += 0.1) {
-    if (waterContentAt(z, mix, retention) < sat * 0.9) return z;
+    if (waterContentAt(z, mix, retention, substrate) < sat * 0.9) return z;
   }
   return 40;
 }
@@ -410,7 +435,7 @@ export function profileBands(
   waterTableDepthCm = 0,
 ): { label: string; pct: number }[] {
   const mix = mixOf(geo.soilMix);
-  const pwt = perchedWaterTableCm(mix);
+  const pwt = perchedWaterTableCm(mix, geo.soilRetention, geo.substrate);
   const probeDepth = geo.probeDepthCm ?? PROBE.insertCm;
   return [
     { label: 'Surface', pct: displayFromWaterContent(moistureAtHeight(geo.potHeightCm, geo, waterTableDepthCm)) },
@@ -452,9 +477,9 @@ export interface ContainerThresholds {
 export function containerThresholds(geo: PotGeometry): ContainerThresholds {
   const mix = mixOf(geo.soilMix);
   const targets = [
-    waterContentAt(TENSION.containerCapacity, mix, geo.soilRetention),
-    waterContentAt(TENSION.easilyAvailable, mix, geo.soilRetention),
-    waterContentAt(TENSION.wilting, mix, geo.soilRetention),
+    waterContentAt(TENSION.containerCapacity, mix, geo.soilRetention, geo.substrate),
+    waterContentAt(TENSION.easilyAvailable, mix, geo.soilRetention, geo.substrate),
+    waterContentAt(TENSION.wilting, mix, geo.soilRetention, geo.substrate),
   ];
 
   // Root-zone water content falls monotonically as the water table drops, so a
@@ -721,7 +746,7 @@ const correctionCache = new Map<string, ProfileCorrection>();
 export function profileCorrection(geo: PotGeometry): ProfileCorrection {
   const potH = potDepth(geo.potHeightCm);
   if (potH <= 0) return { factor: 1, raw: 1, probeBlind: false, note: '' };
-  const key = `${potH.toFixed(2)}|${geo.soilMix ?? ''}|${geo.soilRetention ?? ''}|${geo.probeDepthCm ?? ''}`;
+  const key = `${potH.toFixed(2)}|${geo.soilMix ?? ''}|${substrateKey(geo.substrate)}|${geo.soilRetention ?? ''}|${geo.probeDepthCm ?? ''}`;
   const hit = correctionCache.get(key);
   if (hit) return hit;
 
@@ -730,7 +755,7 @@ export function profileCorrection(geo: PotGeometry): ProfileCorrection {
   const raw = ref > 0 ? rawProfileFactor(geo) / ref : 1;
 
   // Is the probe zone pinned at the dry end, where it cannot resolve change?
-  const residual = waterContentAt(1e5, mix, geo.soilRetention);
+  const residual = waterContentAt(1e5, mix, geo.soilRetention, geo.substrate);
   const atProbe = probeBandWater(geo, 2);
   const probeBlind = atProbe - residual < 1.5;
 

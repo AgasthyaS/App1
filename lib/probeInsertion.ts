@@ -98,7 +98,7 @@ export interface ProbeInsertion {
 
 type InsertPlant = Pick<Plant,
   'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'potMaterial'
-  | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'probeDepthCm' | 'waterLog'
+  | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage' | 'probeDepthCm' | 'waterLog'
 > & { id?: string; species?: string; comfortBand?: [number, number] | null };
 
 const median = (xs: number[]): number | null => {

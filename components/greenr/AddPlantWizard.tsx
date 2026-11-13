@@ -1,15 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { Card, GButton, Screen } from '@/components/greenr/UI';
 import { accent, dark, light, type } from '@/constants/theme';
+import { identifyPlant, issueAdvice, recordIdentificationDecision, type IdentifyError, type IdentifyResult } from '@/lib/identify';
 import { genPlantId } from '@/lib/ids';
 import { dliWord } from '@/lib/format';
 import { ALL_SPECIES, PlantSpecies, getSpecies, searchSpecies, topMatches, type CategoryKey } from '@/lib/plants';
 import { useGreenr } from '@/lib/store';
+import { resolveSubstrate, type SubstrateSpec } from '@/lib/substrate';
 import { Plant, PotMaterial, PotShape, PotSize, SoilMix, SoilRetention, Spot } from '@/lib/types';
 import CameraCapture from './CameraCapture';
+import SubstratePicker from './SubstratePicker';
 
 /**
  * Add plant: camera → identify → name & pot → spot → first score. Capture
@@ -122,7 +125,14 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
   // drainage + mix set how fast the soil should drain/dry; ownership age decides
   // whether the plant is still settling in.
   const [hasDrainage, setHasDrainage] = useState<boolean>(true);
-  const [soilMix, setSoilMix] = useState<SoilMix>('Standard mix');
+  const [substrate, setSubstrate] = useState<SubstrateSpec>({ kind: 'preset', id: 'potting-mix' });
+  // The four-way class the older tables key on, kept in step with the choice.
+  const soilMix: SoilMix = resolveSubstrate(substrate).legacyClass;
+  // Photo identification: null until a photo has been taken.
+  const [ident, setIdent] = useState<{ status: 'loading' } | IdentifyResult | IdentifyError | null>(null);
+  // How the species was settled, recorded with the plant and against the suggestion.
+  const decision = useRef<{ via: 'owner' | 'photo' | 'photo-corrected'; action: 'confirmed' | 'chose-alternative' | 'corrected' | null }>({ via: 'owner', action: null });
+  const identSeq = useRef(0);
   const [soilRetention, setSoilRetention] = useState<SoilRetention | null>(null);
   const [ownedDays, setOwnedDays] = useState<number>(0);
 
@@ -134,10 +144,30 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
     return ALL_SPECIES.filter((s) => cats.has(s.category)).sort((a, b) => a.common.localeCompare(b.common));
   }, [browse]);
 
-  const pick = (s: PlantSpecies) => {
+  /**
+   * `from` says where the choice came from, so the record shows whether the
+   * photo suggestion was right: its first answer, one of its alternatives, or
+   * something the owner found themselves after it suggested otherwise.
+   */
+  const pick = (s: PlantSpecies, from: 'top' | 'alternative' | 'search' = 'search') => {
+    const hadSuggestion = !!ident && 'ok' in ident && ident.ok && ident.identification.candidates.length > 0;
+    decision.current =
+      from === 'top' ? { via: 'photo', action: 'confirmed' }
+        : from === 'alternative' ? { via: 'photo', action: 'chose-alternative' }
+          : hadSuggestion ? { via: 'photo-corrected', action: 'corrected' }
+            : { via: 'owner', action: null };
     setSpecies(s);
     setName(s.common);
     setStep('details');
+  };
+
+  const runIdentification = (uri: string) => {
+    const seq = ++identSeq.current;
+    setIdent({ status: 'loading' });
+    identifyPlant(uri).then((r) => {
+      // A retake while this was in flight supersedes it.
+      if (seq === identSeq.current) setIdent(r);
+    });
   };
 
   const createSpot = () => {
@@ -183,6 +213,8 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
       potMaterial,
       hasDrainage,
       soilMix,
+      substrate,
+      identifiedBy: decision.current.via,
       soilRetention: soilRetention ?? undefined,
       potHeightCm: (() => {
         const n = parseFloat(potHeightText);
@@ -210,6 +242,9 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
       timeInRangePct: 100,
       addedDaysAgo: 0,
     };
+    if (ident && 'ok' in ident && ident.ok && decision.current.action) {
+      void recordIdentificationDecision(ident.id, decision.current.action, species.common, plant.id);
+    }
     onDone(plant);
   };
 
@@ -221,6 +256,7 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
         onCapture={(uri) => {
           setPhotoUri(uri);
           setStep('identify');
+          runIdentification(uri);
         }}
         onCancel={() => setStep('identify')}
       />
@@ -231,14 +267,126 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
   if (step === 'identify') {
     const showResults = query.trim().length > 0;
     const showBrowse = !showResults && browse != null;
-    const confidences = [96, 88, 81];
     return (
       <Screen mode="light">
         <Text style={[type.ritualTitle, { color: light.ink, marginTop: 8 }]}>Which is it?</Text>
-        <Text style={[type.body, { color: light.inkMuted, marginTop: 6 }]}>
+
+        {/* ── What the photo suggests. A suggestion, never a decision: the owner picks. ── */}
+        {photoUri && ident && (
+          <View style={{ marginTop: 14, borderRadius: 18, borderWidth: 1, borderColor: light.hairline, backgroundColor: light.surface1, padding: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Image source={{ uri: photoUri }} style={{ width: 56, height: 56, borderRadius: 12, backgroundColor: light.hairline }} />
+              <View style={{ flex: 1 }}>
+                {'status' in ident ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color={accent.verdant} />
+                    <Text style={[type.body, { color: light.ink }]}>Looking at your photo…</Text>
+                  </View>
+                ) : !ident.ok ? (
+                  <>
+                    <Text style={[type.body, { color: light.ink, fontWeight: '600' }]}>
+                      {ident.reason === 'daily-limit' ? 'Photo limit reached for today' : 'Couldn’t identify from the photo'}
+                    </Text>
+                    <Text style={[type.caption, { color: light.inkMuted, marginTop: 2, lineHeight: 18 }]}>{ident.message}</Text>
+                  </>
+                ) : !ident.identification.is_plant ? (
+                  <>
+                    <Text style={[type.body, { color: light.ink, fontWeight: '600' }]}>That doesn’t look like a plant</Text>
+                    <Text style={[type.caption, { color: light.inkMuted, marginTop: 2 }]}>Retake the photo, or search by name below.</Text>
+                  </>
+                ) : ident.identification.candidates.length === 0 ? (
+                  <>
+                    <Text style={[type.body, { color: light.ink, fontWeight: '600' }]}>Not sure what this is</Text>
+                    <Text style={[type.caption, { color: light.inkMuted, marginTop: 2 }]}>
+                      {issueAdvice(ident.identification.image_issue) ?? 'Try another angle, or search by name below.'}
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={[type.body, { color: light.ink, fontWeight: '600' }]}>From your photo</Text>
+                    <Text style={[type.caption, { color: light.inkMuted, marginTop: 2 }]}>
+                      A suggestion — tap the one that’s right, or search below.
+                    </Text>
+                  </>
+                )}
+              </View>
+            </View>
+
+            {'ok' in ident && ident.ok && ident.identification.is_plant && ident.matches.map((m, i) => {
+              const c = m.candidate;
+              const word = c.confidence === 'high' ? 'Likely' : c.confidence === 'medium' ? 'Possible' : 'Unsure';
+              const tint = c.confidence === 'high' ? accent.verdant : c.confidence === 'medium' ? accent.sunbeamText : light.inkMuted;
+              return (
+                <View key={c.latin} style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: light.hairline }}>
+                  <Pressable
+                    disabled={!m.species}
+                    onPress={() => m.species && pick(m.species, i === 0 ? 'top' : 'alternative')}
+                    style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, opacity: pressed ? 0.7 : 1 })}
+                  >
+                    <Text style={{ fontSize: 28 }}>{m.species?.emoji ?? '🌿'}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[type.cardTitle, { color: light.ink, fontSize: 16 }]}>{m.species?.common ?? c.common}</Text>
+                      <Text style={[type.caption, { color: light.inkMuted, fontStyle: 'italic' }]}>
+                        {c.latin}{c.rank === 'genus' ? ' (genus)' : c.rank === 'family' ? ' (family)' : ''}
+                      </Text>
+                      {c.features ? <Text style={[type.micro, { color: light.inkMuted, marginTop: 2, lineHeight: 15 }]}>{c.features}</Text> : null}
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                      <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, borderWidth: 1, borderColor: tint }}>
+                        <Text style={[type.micro, { color: tint }]}>{word}</Text>
+                      </View>
+                      {m.species ? <Ionicons name="chevron-forward" size={16} color={light.inkMuted} /> : null}
+                    </View>
+                  </Pressable>
+                  {!m.species && (
+                    <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
+                      {m.sameGenus.length
+                        ? `Greenr has care records for these ${c.latin.split(' ')[0]} — pick yours:`
+                        : 'Greenr has no care record for this one yet. Search below for the closest match.'}
+                    </Text>
+                  )}
+                  {!m.species && m.sameGenus.length > 0 && (
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                      {m.sameGenus.map((s) => (
+                        <Pressable
+                          key={s.common}
+                          onPress={() => pick(s, 'alternative')}
+                          style={{ minHeight: 36, paddingHorizontal: 10, borderRadius: 18, borderWidth: 1, borderColor: light.hairline, justifyContent: 'center' }}
+                        >
+                          <Text style={[type.caption, { color: light.ink }]}>{s.common}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+
+            {'ok' in ident && ident.ok && ident.identification.is_plant && ident.identification.candidates.length > 0
+              && issueAdvice(ident.identification.image_issue) && (
+              <Text style={[type.micro, { color: accent.sunbeamText, marginTop: 10, lineHeight: 15 }]}>
+                {issueAdvice(ident.identification.image_issue)}
+              </Text>
+            )}
+
+            {!('status' in ident) && (
+              <View style={{ marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: light.hairline }}>
+                {'ok' in ident && ident.ok && (
+                  <Text style={[type.micro, { color: light.inkMuted, lineHeight: 15 }]}>
+                    Suggested by AI from the photo. It can be wrong, especially between similar species.
+                  </Text>
+                )}
+                <Pressable onPress={() => { setIdent(null); setStep('camera'); }} hitSlop={8} style={{ minHeight: 40, justifyContent: 'center', alignSelf: 'flex-start' }}>
+                  <Text style={[type.caption, { color: accent.verdant }]}>Retake photo</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        )}
+
+        <Text style={[type.body, { color: light.inkMuted, marginTop: 14 }]}>
           Search {ALL_SPECIES.length.toLocaleString()} plants, or browse by type.
         </Text>
-
         {/* search */}
         <View
           style={{
@@ -294,8 +442,11 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
         </ScrollView>
 
         <ScrollView style={{ marginTop: 12 }} keyboardShouldPersistTaps="handled">
+          {!showResults && !showBrowse && (
+            <Text style={[type.micro, { color: light.inkMuted, marginBottom: 8, letterSpacing: 0.4 }]}>POPULAR</Text>
+          )}
           {!showResults && !showBrowse &&
-            matches.map((s, i) => (
+            matches.map((s) => (
               <Card
                 key={s.common}
                 mode="light"
@@ -307,9 +458,7 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
                   <Text style={[type.cardTitle, { color: light.ink }]}>{s.common}</Text>
                   <Text style={[type.caption, { color: light.inkMuted, fontStyle: 'italic' }]}>{s.latin}</Text>
                 </View>
-                <Text style={[type.numBold as any, { fontSize: 15, color: accent.verdant }]}>
-                  {confidences[i] ?? 70}%
-                </Text>
+                <Ionicons name="chevron-forward" size={16} color={light.inkMuted} />
               </Card>
             ))}
 
@@ -577,30 +726,11 @@ export default function AddPlantWizard({ onDone, initialSpeciesName, initialOutd
         <Text style={[type.micro, { color: light.inkMuted, marginTop: 22, letterSpacing: 0.4 }]}>
           WHAT’S IT POTTED IN?
         </Text>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-          {(['Standard mix', 'Gritty / cactus', 'Chunky / aroid', 'Dense / heavy'] as SoilMix[]).map((m) => (
-            <Pressable
-              key={m}
-              onPress={() => setSoilMix(m)}
-              style={{
-                minHeight: 44,
-                paddingHorizontal: 14,
-                borderRadius: 12,
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderWidth: 2,
-                borderColor: soilMix === m ? accent.verdant : light.hairline,
-                backgroundColor: light.surface1,
-              }}
-            >
-              <Text style={[type.caption, { color: light.ink }]}>{m}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <Text style={[type.micro, { color: light.inkMuted, marginTop: 6, lineHeight: 15 }]}>
-          Grit sheds water in hours; dense soil holds it for a day or more. This sets how fast Greenr
-          expects the soil to dry, and so when watering is really due.
+        <Text style={[type.caption, { color: light.inkMuted, marginTop: 4, marginBottom: 10, lineHeight: 18 }]}>
+          The same sensor reading means different things in different mixes: bark is nearly empty at a
+          reading that is still wet in coir. Telling Greenr sets where "full" and "needs water" sit.
         </Text>
+        <SubstratePicker value={substrate} onChange={setSubstrate} mode="light" />
 
         {/* How long they've owned it — a plant still settling into a new home gets
             gentler advice and lower growth expectations. */}

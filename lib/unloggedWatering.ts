@@ -64,7 +64,7 @@ export interface UnloggedWatering {
 type JumpPlant = Pick<
   Plant,
   'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'probeDepthCm' | 'potMaterial'
-  | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'waterLog' | 'ignoredJumps'
+  | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage' | 'waterLog' | 'ignoredJumps'
 > & { id?: string; species?: string; comfortBand?: [number, number] | null };
 
 /**

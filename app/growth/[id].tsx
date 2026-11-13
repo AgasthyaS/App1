@@ -32,7 +32,7 @@ export default function GrowthJournal() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { plants, logGrowth, settings } = useGreenr();
+  const { plants, logGrowth } = useGreenr();
   const plant = plants.find((p) => p.id === id);
 
   const [capturing, setCapturing] = useState(false);
@@ -160,17 +160,13 @@ export default function GrowthJournal() {
         {summary.photos.length > 0 && (
           <Card
             style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 12 }}
-            onPress={() =>
-              settings.plus
-                ? router.push({ pathname: '/diagnose/[id]', params: { id: plant.id } })
-                : router.push('/plus')
-            }
+            onPress={() => router.push({ pathname: '/diagnose/[id]', params: { id: plant.id } })}
           >
             <Ionicons name="medkit" size={20} color={accent.clay} />
             <View style={{ flex: 1 }}>
-              <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Something look off in a photo?</Text>
+              <Text style={[type.cardTitle, { color: dark.ink, fontSize: 15 }]}>Something look off?</Text>
               <Text style={[type.caption, { color: dark.inkMuted, marginTop: 2 }]}>
-                Run a photo check-up for spots, yellowing or pests{settings.plus ? '' : ' · Greenr+'}
+                Note what you see and check it against the plant’s conditions
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color={dark.inkMuted} />

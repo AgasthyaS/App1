@@ -10,7 +10,10 @@ import React, {
 } from 'react';
 import { clearLocalUsage, track } from './analytics';
 import { useAuth } from './auth';
-import { type CalMetricKey, type SensorCalibration, emptyCalibration, withCalibration } from './calibration';
+import { type CalMetricKey, type SensorCalibration, emptyCalibration, withCalibration, withSoilEndpoint } from './calibration';
+import { OBSERVATION_LABEL } from './observations';
+import { getSpecies } from './plants';
+import { PRESET_FOR_LEGACY, resolveSubstrate, type SubstrateSpec } from './substrate/catalog';
 import { pullGarden, pushGarden } from './cloud';
 import { mergeDayRecords, sameDayRecords, type DayRecord } from './climateLog';
 import type { DayLight } from './insights';
@@ -18,7 +21,9 @@ import { SEED_ACCURACY, SEED_PLANTS, SEED_SENSORS, SEED_SPOTS, SEED_TASKS } from
 import {
   AccuracyEntry,
   CareTask,
+  ObservationKind,
   Plant,
+  PlantObservation,
   PotShape,
   Profile,
   Sensor,
@@ -217,6 +222,14 @@ interface GreenrApi extends GreenrState {
    * `settlingState`'s 21-day window, which softens the advice and suppresses
    * feeding while the roots re-establish.
    */
+  /** choose what a plant is potted in — a preset, a custom blend, or "unknown" */
+  setSubstrate: (plantId: string, substrate: SubstrateSpec, reason?: 'owner-edit' | 'repot') => void;
+  /** capture one end of a sensor's own range: its raw count in air ('dry') or water ('wet') */
+  setSoilEndpoint: (sensorKey: string, end: 'dry' | 'wet', rawAdc: number) => void;
+  /** record something the owner saw on the plant */
+  logObservation: (plantId: string, obs: { kind: ObservationKind; severity?: 1 | 2 | 3; note?: string }) => void;
+  /** change what species a plant is recorded as, keeping what it was before */
+  setSpecies: (plantId: string, speciesCommon: string, via: 'owner' | 'photo' | 'photo-corrected') => void;
   repotPlant: (plantId: string, change: { soilMix?: SoilMix; hasDrainage?: boolean; potCm?: number | null; potHeightCm?: number | null }) => void;
   /** Record that a detected soil jump was NOT a watering, so it stops being asked about. */
   dismissSoilJump: (plantId: string, at: string) => void;
@@ -691,6 +704,124 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setSubstrate = useCallback(
+    (plantId: string, substrate: SubstrateSpec, reason: 'owner-edit' | 'repot' = 'owner-edit') => {
+      track('action:substrate_set', { kind: substrate.kind });
+      setState((s) => ({
+        ...s,
+        plants: s.plants.map((p) => {
+          if (p.id !== plantId) return p;
+          const before = resolveSubstrate(p.substrate, p.soilMix);
+          const after = resolveSubstrate(substrate, p.soilMix);
+          if (before.key === after.key && p.substrate) return p;
+          // The four original classes and their presets share one curve object,
+          // so "Standard mix" → "General potting mix" is the same medium named
+          // more precisely, not a change of medium.
+          const sameMedium = before.key === after.key || before.vg === after.vg;
+          const now = new Date().toISOString();
+          return {
+            ...p,
+            substrate,
+            // The four-way class stays in step, for the tables still keyed on it.
+            soilMix: after.legacyClass,
+            // A different medium dries differently: the old pot's learned
+            // behaviour must not be carried over to it.
+            ...(!sameMedium || reason === 'repot' ? { soilRetention: undefined, measurementMemory: undefined } : {}),
+            ...(reason === 'repot' ? { lastRepottedAt: now } : {}),
+            timeline: [
+              {
+                id: `tl-${Date.now()}`,
+                at: now,
+                daysAgo: 0,
+                kind: 'care' as const,
+                text: reason === 'repot'
+                  ? `Repotted into ${after.label.toLowerCase()}`
+                  : `Substrate set to ${after.label.toLowerCase()}`,
+              },
+              ...p.timeline,
+            ],
+          };
+        }),
+      }));
+    },
+    [],
+  );
+
+  const setSoilEndpoint = useCallback((sensorKey: string, end: 'dry' | 'wet', rawAdc: number) => {
+    track('action:soil_endpoint_set', { end });
+    setState((s) => {
+      const current = s.calibrations[sensorKey] ?? emptyCalibration();
+      const next = withSoilEndpoint(current, end, rawAdc);
+      return next === current ? s : { ...s, calibrations: { ...s.calibrations, [sensorKey]: next } };
+    });
+  }, []);
+
+  const logObservation = useCallback(
+    (plantId: string, obs: { kind: ObservationKind; severity?: 1 | 2 | 3; note?: string }) => {
+      track('action:observation_logged', { kind: obs.kind });
+      const now = new Date().toISOString();
+      const entry: PlantObservation = {
+        id: `ob-${Date.now().toString(36)}`,
+        at: now,
+        kind: obs.kind,
+        ...(obs.severity ? { severity: obs.severity } : {}),
+        ...(obs.note?.trim() ? { note: obs.note.trim().slice(0, 500) } : {}),
+      };
+      setState((s) => ({
+        ...s,
+        plants: s.plants.map((p) =>
+          p.id !== plantId
+            ? p
+            : {
+                ...p,
+                observations: [entry, ...(p.observations ?? [])].slice(0, 200),
+                timeline: [
+                  { id: `tl-${Date.now()}`, at: now, daysAgo: 0, kind: 'insight' as const, text: `You noted: ${OBSERVATION_LABEL[obs.kind].toLowerCase()}${entry.note ? ` — ${entry.note}` : ''}` },
+                  ...p.timeline,
+                ],
+              },
+        ),
+      }));
+    },
+    [],
+  );
+
+  const setSpecies = useCallback(
+    (plantId: string, speciesCommon: string, via: 'owner' | 'photo' | 'photo-corrected') => {
+      const next = getSpecies(speciesCommon);
+      if (!next) return;
+      track('action:species_set', { via });
+      setState((s) => ({
+        ...s,
+        plants: s.plants.map((p) => {
+          if (p.id !== plantId) return p;
+          if (p.species === next.common) return { ...p, identifiedBy: via };
+          const now = new Date().toISOString();
+          const old = getSpecies(p.species);
+          // The comfort band follows the species ONLY if the owner never changed
+          // it; a band they set on purpose is theirs and stays.
+          const bandWasDefault = !old || (p.comfortBand[0] === old.band[0] && p.comfortBand[1] === old.band[1]);
+          return {
+            ...p,
+            species: next.common,
+            latin: next.latin,
+            // Keep a name the owner chose; replace one that was just the old species.
+            name: p.name === p.species ? next.common : p.name,
+            emoji: next.emoji,
+            comfortBand: bandWasDefault ? next.band : p.comfortBand,
+            identifiedBy: via,
+            speciesHistory: [{ species: p.species, latin: p.latin, until: now }, ...(p.speciesHistory ?? [])].slice(0, 10),
+            timeline: [
+              { id: `tl-${Date.now()}`, at: now, daysAgo: 0, kind: 'band-change' as const, text: `Identified as ${next.common} (was ${p.species}). Its history is unchanged; advice now uses ${next.common}'s needs.` },
+              ...p.timeline,
+            ],
+          };
+        }),
+      }));
+    },
+    [],
+  );
+
   const repotPlant = useCallback(
     (plantId: string, change: { soilMix?: SoilMix; hasDrainage?: boolean; potCm?: number | null; potHeightCm?: number | null }) => {
       track('action:plant_repotted');
@@ -706,6 +837,9 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
           return {
             ...p,
             ...(change.soilMix ? { soilMix: change.soilMix } : {}),
+            // A plant with a library substrate must not be left pointing at its
+            // old one after being repotted into a different class.
+            ...(change.soilMix && p.substrate ? { substrate: { kind: 'preset' as const, id: PRESET_FOR_LEGACY[change.soilMix] } } : {}),
             ...(change.hasDrainage != null ? { hasDrainage: change.hasDrainage } : {}),
             ...(change.potCm != null ? { potCm: change.potCm } : {}),
             ...(change.potHeightCm != null ? { potHeightCm: change.potHeightCm } : {}),
@@ -965,6 +1099,10 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       setPlantNotes,
       setSpotNote,
       setPotDimensions,
+      setSubstrate,
+      setSoilEndpoint,
+      logObservation,
+      setSpecies,
       repotPlant,
       dismissSoilJump,
       rememberMeasurements,

@@ -99,7 +99,7 @@ export interface SalinityAssessment {
 
 type SaltPlant = Pick<Plant,
   'potSize' | 'potCm' | 'potHeightCm' | 'potShape' | 'potMaterial'
-  | 'soilMix' | 'soilRetention' | 'hasDrainage' | 'probeDepthCm' | 'waterLog'
+  | 'soilMix' | 'substrate' | 'soilRetention' | 'hasDrainage' | 'probeDepthCm' | 'waterLog'
 > & { id?: string; species?: string; comfortBand?: [number, number] | null };
 
 /** Least-squares slope of y against x. Null when the inputs cannot support one. */
@@ -266,6 +266,7 @@ export function salinityAssessment(
   const geo = {
     potHeightCm: plant.potHeightCm ?? 16,
     soilMix: plant.soilMix ?? null,
+    substrate: plant.substrate ?? null,
     soilRetention: plant.soilRetention ?? null,
     probeDepthCm: plant.probeDepthCm ?? null,
   };

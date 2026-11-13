@@ -19,7 +19,7 @@ export const LEGAL = {
   /** raw usage events are purged after this (see analytics_purge in supabase-analytics.sql) */
   analyticsRetentionMonths: 13,
   minimumAge: 13,
-  effective: 'October 27, 2026',
+  effective: 'November 12, 2026',
 } as const;
 
 export const LEGAL_PLACEHOLDERS_REMAIN = Object.values(LEGAL).some(

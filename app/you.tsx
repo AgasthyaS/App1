@@ -298,7 +298,7 @@ export default function AccountScreen() {
             iconColor={accent.warm}
             title={settings.plus ? 'Greenr+ is active' : 'Greenr+'}
             track="you.plus"
-            subtitle={settings.plus ? undefined : '10-day forecasts, full history, photo diagnosis'}
+            subtitle={settings.plus ? undefined : '10-day forecasts, full history, unlimited plants'}
             onPress={() => router.push('/plus')}
           />
         </ListGroup>

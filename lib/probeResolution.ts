@@ -89,7 +89,7 @@ function median(xs: number[]): number {
 }
 
 type ResolutionPlant = Pick<Plant,
-  'potHeightCm' | 'soilMix' | 'soilRetention' | 'probeDepthCm' | 'potCm' | 'potShape' | 'waterLog'>;
+  'potHeightCm' | 'soilMix' | 'substrate' | 'soilRetention' | 'probeDepthCm' | 'potCm' | 'potShape' | 'waterLog'>;
 
 /**
  * How much this probe can actually tell us about this pot.
@@ -132,6 +132,7 @@ export function probeResolution(
   const th = containerThresholds({
     potHeightCm: plant.potHeightCm ?? 16,
     soilMix: plant.soilMix ?? null,
+    substrate: plant.substrate ?? null,
     soilRetention: plant.soilRetention ?? null,
     probeDepthCm: plant.probeDepthCm ?? null,
   });

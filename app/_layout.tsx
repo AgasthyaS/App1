@@ -83,6 +83,8 @@ export default function RootLayout() {
               <Stack.Screen name="data-deletion" options={{ presentation: 'modal' }} />
               <Stack.Screen name="hardware-warranty" options={{ presentation: 'modal' }} />
               <Stack.Screen name="usage" />
+              <Stack.Screen name="explorer" />
+              <Stack.Screen name="substrate/[id]" />
               <Stack.Screen name="notifications" />
               <Stack.Screen name="device-health" />
               <Stack.Screen name="report" />

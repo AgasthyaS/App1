@@ -6,7 +6,8 @@
       "@/*": [
         "./*"
       ]
-    }
+    },
+    "allowImportingTsExtensions": true
   },
   "include": [
     "**/*.ts",
@@ -20,6 +21,7 @@
     "EastbayVentures2",
     "Chicken-Jocey",
     "bob-workspace",
-    "dist"
+    "dist",
+    "supabase/functions/identify-plant"
   ]
 }

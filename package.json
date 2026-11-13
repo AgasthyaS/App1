@@ -10,7 +10,11 @@
     "web": "expo start --web",
     "deploy:web": "node ./scripts/deploy-web.mjs",
     "provision": "node ./scripts/provision-device.mjs",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "gen:substrates": "vite-node scripts/gen-substrate-seed.ts"
   },
   "dependencies": {
     "@expo-google-fonts/figtree": "^0.4.1",
@@ -35,6 +39,7 @@
     "expo-linear-gradient": "~14.1.5",
     "expo-linking": "~7.1.5",
     "expo-location": "~18.1.6",
+    "expo-notifications": "~0.31.5",
     "expo-router": "~5.1.0",
     "expo-splash-screen": "~0.30.9",
     "expo-status-bar": "~2.2.3",
@@ -52,18 +57,19 @@
     "react-native-screens": "~4.11.1",
     "react-native-svg": "15.11.2",
     "react-native-url-polyfill": "^3.0.0",
-    "react-native-web": "~0.20.0",
-    "expo-notifications": "~0.31.5"
+    "react-native-web": "~0.20.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@electric-sql/pglite": "^0.5.16",
     "@types/react": "~19.0.10",
     "dotenv": "^17.4.2",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~9.2.0",
     "playwright": "^1.61.1",
     "qrcode": "^1.5.4",
-    "typescript": "~5.8.3"
+    "typescript": "~5.8.3",
+    "vitest": "^2.1.9"
   },
   "private": true
 }

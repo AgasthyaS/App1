@@ -19,7 +19,7 @@ export default function PlusSheet() {
   const features = [
     'Forecasts beyond 48 h and crisis prediction',
     'Full history + ribbons beyond 7 days',
-    'Diagnostics and autopsies',
+    'Autopsies when a plant is lost',
     'Unlimited plants and spots',
     'Placement deltas + store scanner',
     'Accuracy ledger detail · CSV export',

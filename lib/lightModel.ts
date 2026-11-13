@@ -48,6 +48,42 @@ export function indexToLux(index: number): number {
   return LUX_MIN * Math.pow(LUX_MAX / LUX_MIN, i / 100);
 }
 
+/** The inverse of {@link indexToLux}: illuminance → light index, clamped to 0–100. */
+export function luxToIndex(lux: number): number {
+  if (!Number.isFinite(lux) || lux <= LUX_MIN) return 0;
+  return Math.min(100, (100 * Math.log(lux / LUX_MIN)) / Math.log(LUX_MAX / LUX_MIN));
+}
+
+/**
+ * AVERAGING LIGHT CORRECTLY.
+ *
+ * The index is logarithmic in illuminance, so the arithmetic mean of index
+ * values is the GEOMETRIC mean of the light — and the geometric mean of anything
+ * that varies is below its true average. A sill that sits at index 20 all
+ * morning and 70 for the afternoon averages 45 on the index, which maps to about
+ * 1 600 lux; the light that actually fell on the leaf averaged about 4 500. The
+ * daily light integral is a sum of photons, so it needs the second number.
+ *
+ * Every light average in the app is therefore taken in LINEAR units and mapped
+ * back to the index only for display and for comparison with the species
+ * thresholds:
+ *
+ *     Ē = Σ wᵢ·lux(iᵢ) / Σ wᵢ          then        ī = index(Ē)
+ *
+ * ī is the constant index that would have delivered the same light, which is
+ * also exactly the quantity the thresholds were always meant to be compared with.
+ */
+export function photonMeanIndex(samples: { index: number; weight: number }[]): number | null {
+  let sum = 0;
+  let w = 0;
+  for (const s of samples) {
+    if (!Number.isFinite(s.index) || !Number.isFinite(s.weight) || s.weight <= 0) continue;
+    sum += indexToLux(s.index) * s.weight;
+    w += s.weight;
+  }
+  return w > 0 ? luxToIndex(sum / w) : null;
+}
+
 /** Illuminance (lux) → photosynthetic photon flux density (µmol/m²/s). */
 export function luxToPpfd(lux: number): number {
   return lux * LUX_TO_PPFD;
