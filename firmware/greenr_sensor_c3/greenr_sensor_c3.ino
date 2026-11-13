@@ -4,6 +4,9 @@
  *    "===== greenr sensor c3-1.0 =====". If it says anything else, the IDE is
  *    compiling a different copy of this file.
  *
+ *  ★ FOR EACH NEW DEVICE you change only DEVICE_ID and DEVICE_KEY.
+ *    Search this file for "CHANGE THESE 2 LINES".
+ *
  *  ───────────────────────────────── HARDWARE ─────────────────────────────────
  *    ESP32-C3 Super Mini · AHT10 (temperature + humidity) · BH1750 (light, lux)
  *    capacitive soil moisture sensor · one lithium cell (3.7 V) + 2-resistor divider
@@ -81,10 +84,18 @@
                                    // transmission, and a lithium cell should not be run flat
 #define BAT_LOW_SLEEP_S   43200    // when too low, check again after 12 h
 
-// ─────────── THIS DEVICE ───────────
-// Must match the QR sticker for THIS unit (scripts/provision-device.mjs makes new ones).
+// =============================================================================
+// >>>>>>>>>>>>>>>>>>  CHANGE THESE 2 LINES FOR EACH DEVICE  <<<<<<<<<<<<<<<<<<<
+//   1. In the project folder run:   npm run provision -- "Sensor name"
+//   2. It prints two #define lines. Paste them over the two lines below.
+//   3. It also saves a QR picture (provisioned/<id>.png). Stick that QR on the
+//      SAME board you upload this sketch to. One run = one board.
+// =============================================================================
 #define DEVICE_ID   "ae2da43d-781a-40f7-a3ca-45e5570f5d81"
 #define DEVICE_KEY  "b7b1da534f47fef89ebd1f182fef646c"
+// =============================================================================
+// >>>>>>>>>>  END OF PER-DEVICE LINES: nothing else needs changing  <<<<<<<<<<<
+// =============================================================================
 
 const char* SUPABASE_URL =
   "https://knyymwvrqitptfzckyvf.supabase.co/rest/v1/rpc/ingest_v2";
