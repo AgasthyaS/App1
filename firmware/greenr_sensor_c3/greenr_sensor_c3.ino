@@ -18,7 +18,8 @@
  *      AHT10        SDA  → GPIO6   SCL → GPIO7    VIN/VCC → 3V3    GND → GND
  *      BH1750       SDA  → GPIO6   SCL → GPIO7    VCC → 3V3        GND → GND    ADDR → not connected
  *      Battery      +    → 5V pin  (through a charger/protection board if you have one)   − → GND
- *      Divider      battery + ─ 100 kΩ ─┬─ 100 kΩ ─ GND
+ *      Divider      OPTIONAL, only for the battery % in the app. If you fit it, set HAS_BATTERY 1:
+ *                   battery + ─ 100 kΩ ─┬─ 100 kΩ ─ GND
  *                                       └→ GPIO1
  *      BOOT button  GPIO9 (on the board)
  *
@@ -62,7 +63,9 @@
 #define FW_VERSION        "c3-1.0"
 #define USE_DEEP_SLEEP    1        // 1 = battery: sleep between readings · 0 = USB power, stay awake
 #define USE_BLE_SETUP     0        // 1 = also offer the app's Bluetooth setup (needs "Huge APP" partition)
-#define HAS_BATTERY       1        // 0 if no divider is wired to GPIO1 (USB power only)
+#define HAS_BATTERY       0        // 1 ONLY if the two-resistor divider is wired to GPIO1 (shows battery %
+                                   // in the app). Leave 0 without it: an unconnected GPIO1 reads a random
+                                   // voltage that can look like a flat battery and stop the uploads.
 #define VERIFY_TLS        1        // check the server's certificate; 0 only to diagnose (see ROOT_CAS)
 #define IDLE_SECONDS      10800    // 3 h between readings. The server can change it (devices.wake_seconds).
 #define RETRY_SECONDS     300      // first retry after a failed upload; doubles per failure, capped at IDLE

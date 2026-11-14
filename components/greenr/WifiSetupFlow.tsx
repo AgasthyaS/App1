@@ -49,7 +49,7 @@ const GUIDE: GuideStep[] = [
     Art: HotspotOnArt,
     title: 'Power on the sensor',
     body: 'Connect its battery, or plug it into a wall USB adapter, and keep it within a few metres of you. Within about 10 seconds it starts its own setup Wi-Fi network called “greenr-setup”.',
-    tip: 'On USB power it waits as long as you need. On battery it closes after 20 minutes to save power: press the sensor’s RST button to open it again.',
+    tip: 'If “greenr-setup” disappears before you finish, press the sensor’s RST button to open it again.',
   },
   {
     Art: JoinHotspotArt,

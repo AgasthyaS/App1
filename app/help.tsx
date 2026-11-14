@@ -17,7 +17,7 @@ const TOPICS: { group: string; items: Topic[] }[] = [
         q: "I can't find the “greenr-setup” network",
         a: [
           'The sensor only offers “greenr-setup” while it has no saved Wi-Fi. Press its RST button (or unplug and replug it), wait about 10 seconds, and refresh your phone’s Wi-Fi list.',
-          'On battery the setup network closes after 20 minutes to save power. Press RST to open it again.',
+          'Sensors that measure their battery close the setup network after 20 minutes to save power. Press RST to open it again.',
           'If it was set up before, it is still trying its old network. Tap RST, then within 2 seconds press and hold BOOT for 3 seconds. It forgets that network and reopens setup.',
           'When your phone warns the network has no internet, choose to stay connected — the setup page is served by the sensor itself.',
         ],

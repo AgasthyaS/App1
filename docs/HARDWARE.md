@@ -25,7 +25,7 @@ version `c3-1.0`. It uploads through `ingest_v2`, so run SQL file 14 (see
 | BH1750 module (GY-302) | light, in lux |
 | AHT10 module | air temperature and humidity |
 | One lithium cell, 3.7 V nominal | power |
-| Two equal resistors, 100 kΩ each | battery voltage divider |
+| Two equal resistors, 100 kΩ each (**optional**) | battery voltage divider, only for the battery % in the app. Fitted: set `HAS_BATTERY 1`. Not fitted: leave `HAS_BATTERY 0` (the default) |
 
 The LDR from the previous build is gone: the BH1750 replaces it.
 
@@ -48,7 +48,7 @@ the GPIO numbers **printed on the board**, not positions.
 | | VCC | 3V3 | 3.3 V | |
 | | GND | GND | | |
 | | ADDR | not connected | | the module pulls it low → 0x23 |
-| Battery divider | top resistor, 100 kΩ | battery + | up to 4.2 V | |
+| Battery divider (optional) | top resistor, 100 kΩ | battery + | up to 4.2 V | needs `HAS_BATTERY 1` |
 | | midpoint | GPIO1 (ADC1_CH1) | up to 2.1 V | battery measurement |
 | | bottom resistor, 100 kΩ | GND | | |
 | Battery | + | 5V pin (through a charger/protection board if used) | 3.0–4.2 V | feeds the board's 3.3 V regulator |
@@ -92,9 +92,15 @@ Why these pins:
 - **Unplug the battery before plugging in USB** to upload, unless your board or
   charger module keeps the two apart. On many Super Mini boards the 5V pin is
   joined to USB power, which would push 5 V into the cell.
-- A cell without a protection circuit should not be run flat. The firmware stops
-  using Wi-Fi below 3.40 V, but a protected cell or a charger board with
-  protection (TP4056 + DW01 type) is the safe choice.
+- A cell without a protection circuit should not be run flat. With the divider
+  fitted (`HAS_BATTERY 1`) the firmware stops using Wi-Fi below 3.40 V; without it
+  the firmware cannot see the battery at all, so the app shows no battery level
+  and nothing stops the cell running down. Either way a protected cell or a
+  charger board with protection (TP4056 + DW01 type) is the safe choice, and
+  without the divider it is required.
+- Without the divider the firmware also cannot tell battery from USB, so the
+  "greenr-setup" network stays open until setup is finished instead of closing
+  after 20 minutes. Finish setup when you first power the sensor.
 - If your battery is not a single lithium cell (for example 3 × AA), change
   `BAT_DIVIDER`, `BAT_CUTOFF_MV` and the percentage curve in SQL file 14.
 
@@ -135,7 +141,8 @@ on `USE_BLE_SETUP` needs the "Huge APP" partition (1.49 MB).
 1. Powers the soil probe, reads the battery (before Wi-Fi, so unloaded), the
    AHT10, and the BH1750 (once, then the sensor powers itself down), then the probe
    after 600 ms of warm-up; switches the probe off.
-2. Below 3.40 V on battery: no Wi-Fi, keep the reading, sleep 12 h.
+2. Below 3.40 V on battery (only with the divider fitted): no Wi-Fi, keep the
+   reading, sleep 12 h.
 3. Joins Wi-Fi, reusing the last channel and router to save a scan; transmit power
    8.5 dBm (`WIFI_TX_POWER`).
 4. Uploads the new reading plus any not delivered before, in one HTTPS request,
@@ -209,7 +216,7 @@ and does not check the server's certificate.
 - **Now read before Wi-Fi starts**, so radio self-heating does not bias it. Mount it
   away from the board and the battery.
 
-### Battery divider
+### Battery divider (optional)
 
 - **Measures:** the cell's voltage, through `analogReadMilliVolts()` (factory ADC
   calibration) × 2.
