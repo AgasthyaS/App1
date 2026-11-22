@@ -210,6 +210,8 @@ Ordered by dependency. Each phase ends with type-check and tests green.
 | 9 | Visual refinement of Home, plant list, plant page | 7, 8 | **not done** beyond the new surfaces; see DESIGN.md |
 | 10 | Docs, hardware table, review passes, report | all | done |
 | 11 | ESP32-C3 build: BH1750, battery, firmware `c3-1.0`, `ingest_v2` (SQL file 14), app lux/battery path | 2, 3, 5 | done; compiled, not run on hardware |
+| 12 | Automatic endpoints, multi-reading soil level, amount uncertainty, cautious dose; firmware `c3-1.1` setup burst + learning week (SQL file 15: model versions) | 2, 4, 11 | done; compiled, not run on hardware |
+| 13 | Readings accuracy: every raw count stored, disconnected probes never shown as moisture, no advice from a faulty probe, battery follows the newest reading (SQL file 16); read-only live health check; firmware `c3-1.2` USB power (awake on a computer, deep sleep otherwise, `POWER_SOURCE`), non-finite values sent as null; catalog to 1 666 species | 2, 5, 11, 12 | done; tested in Postgres and against the live server read-only; firmware compiled, not run on hardware |
 
 Findings from section A and where they stand:
 
@@ -220,7 +222,7 @@ Findings from section A and where they stand:
 | 3 | Daily light from mean of log index | fixed |
 | 4 | Firmware is not for the ESP32-C3 | C3 firmware added (`firmware/greenr_sensor_c3`); dev-kit firmware kept as legacy |
 | 5 | Four substrate classes | fixed: 23 ingredients, 26 presets, custom blends, unknown |
-| 6 | Global soil endpoints | fixed in software; each sensor must be captured |
+| 6 | Global soil endpoints | fixed: per-sensor endpoints, worked out automatically (air measured at setup, water estimated); capturing by hand makes them exact |
 | 7 | Raw values in misnamed columns | explicit raw columns added; legacy kept |
 | 8 | Ingest not idempotent or validated; history relabelled on move | fixed in the migration |
 | 9 | Charts aggregate raw rows in the client | summary table built; client not switched |
@@ -231,7 +233,7 @@ Findings from section A and where they stand:
 | 14 | Conditions score worded as health | Home fixed; score words remain |
 | 15 | Two-state decision, no stated basis | nine states and an evidence grade |
 | 16 | Firmware credentials and TLS | TLS verified in the C3 firmware; per-unit credentials still compile-time |
-| 17 | No tests | 274 |
+| 17 | No tests | 358 |
 | 18 | Loose SQL files, order undocumented | order documented and tested |
 
 Risks: (a) changing light averaging shifts stored 14-day averages, mitigated by

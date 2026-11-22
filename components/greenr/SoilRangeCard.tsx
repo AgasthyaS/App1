@@ -6,6 +6,7 @@ import { Card, GButton } from '@/components/greenr/UI';
 import { accent, dark, type } from '@/constants/theme';
 import type { SensorCalibration } from '@/lib/calibration';
 import { getLatestReading, type Reading } from '@/lib/devices';
+import { effectiveSoilEndpoints } from '@/lib/sensing/autoCalibration';
 import { ADC_MAX, FACTORY_SOIL_ENDPOINTS, endpointsValid, soilIndex } from '@/lib/sensing/moisture';
 import { useGreenr } from '@/lib/store';
 
@@ -19,6 +20,11 @@ import { useGreenr } from '@/lib/store';
  * from THIS probe on THIS board: what it reads in open air (index 0) and standing
  * in water (index 100). Until both are captured it borrows a pair measured on a
  * different unit, and every reading carries that unit's error.
+ *
+ * Most sensors never need this screen: the air end is measured automatically
+ * during setup and the water end estimated from it (lib/sensing/autoCalibration).
+ * Capturing here replaces the automatic values with measured ones — the water
+ * end above all, which is the one the automatic scale can only estimate.
  *
  * The capture uses the sensor's newest RAW reading, fetched directly from the
  * database (so it works before the sensor is assigned to a plant) and refreshed
@@ -59,6 +65,17 @@ export default function SoilRangeCard({ sensorKey, calibration }: {
 
   const e = calibration.soilEndpoints ?? {};
   const done = endpointsValid(e);
+  const auto = calibration.soilEndpointsAuto ?? null;
+  // What readings are actually converted with right now, and where each end came from.
+  const scale = effectiveSoilEndpoints(calibration.soilEndpoints, auto);
+  const usingOwn = scale.source !== 'factory';
+  const endHint = (end: 'dry' | 'wet'): string => {
+    const own = end === 'dry' ? e.dryAdc : e.wetAdc;
+    if (own != null && (done || scale.source === 'mixed')) return 'captured by you';
+    if (!usingOwn) return end === 'dry' ? '0 on the scale' : '100 on the scale';
+    if (end === 'dry' && auto?.method === 'air') return 'measured at setup';
+    return 'estimated';
+  };
   const raw = latest?.soil_raw ?? null;
   const ageMin = latest ? (now - new Date(latest.created_at).getTime()) / 60000 : null;
   const fresh = raw != null && ageMin != null && ageMin <= AGE_OK_MIN;
@@ -85,20 +102,38 @@ export default function SoilRangeCard({ sensorKey, calibration }: {
   return (
     <Card>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <Ionicons name={done ? 'checkmark-circle' : 'options-outline'} size={18} color={done ? accent.sage : accent.sunbeam} />
+        <Ionicons
+          name={done || scale.source === 'auto-air' ? 'checkmark-circle' : 'options-outline'}
+          size={18}
+          color={done ? accent.sage : scale.source === 'auto-air' ? accent.verdant : accent.sunbeam}
+        />
         <Text style={[type.cardTitle, { color: dark.ink, fontSize: 16, flex: 1 }]}>
-          {done ? 'This sensor has its own scale' : 'Using the factory scale'}
+          {done
+            ? 'This sensor has its own scale'
+            : scale.source === 'auto-air'
+              ? 'Calibrated automatically'
+              : scale.source === 'auto-data'
+                ? 'Scale estimated from its readings'
+                : scale.source === 'mixed'
+                  ? 'Partly captured'
+                  : 'Using the factory scale'}
         </Text>
       </View>
       <Text style={[type.caption, { color: dark.inkMuted, lineHeight: 19, marginTop: 6 }]}>
         {done
           ? `In air it reads ${e.dryAdc}, in water ${e.wetAdc}. Every moisture figure for this sensor is worked out between those two.`
-          : `Readings are scaled between ${FACTORY_SOIL_ENDPOINTS.dryAdc} (air) and ${FACTORY_SOIL_ENDPOINTS.wetAdc} (water), numbers measured on a different sensor and board. Capturing this sensor’s own two readings removes that error. It takes five minutes, once.`}
+          : scale.source === 'auto-air'
+            ? `Its in-air reading, ${scale.endpoints.dryAdc}, was measured during setup. Its in-water reading, about ${scale.endpoints.wetAdc}, is estimated from that. Capturing the water reading below makes the scale exact.`
+            : scale.source === 'auto-data'
+              ? `There was no in-air reading at setup, so the scale (${scale.endpoints.dryAdc} to ${scale.endpoints.wetAdc}) is estimated from the range this sensor has reported. Capturing both readings below makes it exact.`
+              : scale.source === 'mixed'
+                ? `Scaled between ${scale.endpoints.dryAdc} (air) and ${scale.endpoints.wetAdc} (water); one end is yours, the other ${auto ? 'worked out automatically' : 'estimated'}. Capture the other end to finish.`
+                : `Readings are scaled between ${FACTORY_SOIL_ENDPOINTS.dryAdc} (air) and ${FACTORY_SOIL_ENDPOINTS.wetAdc} (water), numbers measured on a different sensor and board. Capturing this sensor’s own two readings removes that error. It takes five minutes, once.`}
       </Text>
 
       <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-        <End label="In open air" value={e.dryAdc} hint="0 on the scale" />
-        <End label="In water, to the line" value={e.wetAdc} hint="100 on the scale" />
+        <End label="In open air" value={usingOwn ? scale.endpoints.dryAdc : e.dryAdc} hint={endHint('dry')} />
+        <End label="In water, to the line" value={usingOwn ? scale.endpoints.wetAdc : e.wetAdc} hint={endHint('wet')} />
       </View>
 
       <Text style={[type.micro, { color: dark.inkMuted, letterSpacing: 0.4, marginTop: 14 }]}>HOW</Text>
@@ -134,7 +169,7 @@ export default function SoilRangeCard({ sensorKey, calibration }: {
               ? 'The newest reading has no raw count (older firmware). Type the count from the sensor’s Serial Monitor below.'
               : 'No reading from this sensor yet. Press its RST button; this checks again every few seconds.'
             : fresh
-              ? `Taken ${ageWords(ageMin!)}, recent enough to capture.${done ? ` Reads ${Math.round(soilIndex(raw, e as { dryAdc: number; wetAdc: number }))} on this sensor’s scale.` : ''}`
+              ? `Taken ${ageWords(ageMin!)}, recent enough to capture.${usingOwn ? ` Reads ${Math.round(soilIndex(raw, scale.endpoints))} on this sensor’s scale.` : ''}`
               : `Taken ${ageWords(ageMin!)}. Press the sensor’s RST button for a fresh one; this checks every few seconds.`}
         </Text>
         {clipped && (
@@ -160,8 +195,9 @@ export default function SoilRangeCard({ sensorKey, calibration }: {
       {note && <Text style={[type.caption, { color: accent.sage, marginTop: 10, lineHeight: 18 }]}>{note}</Text>}
       {!done && (e.dryAdc != null || e.wetAdc != null) && (
         <Text style={[type.micro, { color: accent.sunbeam, marginTop: 8, lineHeight: 16 }]}>
-          One end captured. The sensor keeps the factory scale until both are in, and the in-air count must be at
-          least 400 above the in-water one.
+          {scale.source === 'mixed'
+            ? 'One end captured. The other end is worked out automatically until you capture it too. The in-air count must be at least 400 above the in-water one.'
+            : 'One end captured. Until the other end can be worked out, the factory scale is used. The in-air count must be at least 400 above the in-water one.'}
         </Text>
       )}
     </Card>

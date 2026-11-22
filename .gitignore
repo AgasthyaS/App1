@@ -51,3 +51,6 @@ provisioned/
 Eastbay-Venture/
 EastbayVentures2/
 Chicken-Jocey/
+
+# Wokwi simulation build output (firmware/simulation/build.sh)
+firmware/simulation/build/

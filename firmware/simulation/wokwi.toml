@@ -1,0 +1,4 @@
+[wokwi]
+version = 1
+firmware = 'build/greenr_sensor_c3.ino.merged.bin'
+elf = 'build/greenr_sensor_c3.ino.elf'

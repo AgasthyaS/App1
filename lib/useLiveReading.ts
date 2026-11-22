@@ -218,3 +218,14 @@ export function useLiveReading(plantKey?: string): {
     deviceId: entry?.deviceId ?? null,
   };
 }
+
+/**
+ * Reading history per DEVICE (not per plant), for work that belongs to the
+ * sensor itself — such as its automatic soil endpoints.
+ */
+export function useDeviceHistories(): Map<string, Reading[]> {
+  const snap = useSnapshot();
+  const out = new Map<string, Reading[]>();
+  snap.byPlant.forEach((v) => { if (v.history.length) out.set(v.deviceId, v.history); });
+  return out;
+}

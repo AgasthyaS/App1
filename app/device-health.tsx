@@ -26,7 +26,9 @@ interface Issue { tone: Health; text: string; fix?: string }
  */
 function assess(d: EnrichedDevice, up: UploadHealth | undefined): { health: Health; issues: Issue[]; battery: number | null } {
   const issues: Issue[] = [];
-  const battery = d.latest?.battery_pct ?? d.device.battery_pct ?? null;
+  // The newest reading decides: no battery value there means USB power (or no
+  // divider), and an older stored figure must not stand in for it.
+  const battery = (d.latest ? d.latest.battery_pct : d.device.battery_pct) ?? null;
 
   if (up && up.state !== 'steady') {
     issues.push({
@@ -120,7 +122,7 @@ export default function DeviceHealth() {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 10 }}>
               <Field label="Plant" value={plant ?? 'Unassigned'} />
               <Field label="Status" value={d.connection.status} tone={toneColor(health)} />
-              <Field label="Battery" value={battery == null || battery < 0 ? 'Not reported' : `${Math.round(battery)}%`} tone={battery != null && battery >= 0 && battery < 20 ? accent.clay : undefined} />
+              <Field label="Battery" value={battery == null || battery < 0 ? 'Not measured' : `${Math.round(battery)}%`} tone={battery != null && battery >= 0 && battery < 20 ? accent.clay : undefined} />
               <Field label="Last seen" value={d.connection.sinceLabel} />
               <Field label="Reporting" value={cadence} />
               {/* Delivery is the number the old screen had no way to show: not
@@ -175,7 +177,7 @@ export default function DeviceHealth() {
           {helpOpen && (
             <View style={{ marginTop: 8, gap: 8 }}>
               {[
-                'Confirm it has power: a charged battery, or a wall charger. Not a PC USB port (those cut power when the PC sleeps).',
+                'Confirm it has power: a wall USB adapter or a charged battery. A computer’s USB port works only while the computer is awake, because a sleeping computer cuts the power.',
                 'Your Wi-Fi must be 2.4 GHz — the sensor can’t see 5 GHz networks.',
                 'If your Wi-Fi name or password changed, re-run setup: Devices → the sensor → Set up Wi-Fi.',
                 'Move it closer to the router to rule out range, then move it back once it reports.',

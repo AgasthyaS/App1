@@ -15,7 +15,8 @@ listed under "Needs physical verification".
 ## Current build: ESP32-C3 Super Mini
 
 Firmware: [`firmware/greenr_sensor_c3/greenr_sensor_c3.ino`](../firmware/greenr_sensor_c3/greenr_sensor_c3.ino),
-version `c3-1.0`. It uploads through `ingest_v2`, so run SQL file 14 (see
+version `c3-1.2` (quick start: [firmware/greenr_sensor_c3/README.md](../firmware/greenr_sensor_c3/README.md)).
+It uploads through `ingest_v2`, so run SQL file 14 (see
 [DATABASE.md](DATABASE.md)) **before** flashing it.
 
 | Part | Role |
@@ -85,7 +86,32 @@ Why these pins:
   shared bus; if the Serial Monitor says AHT10 or BH1750 "NOT FOUND" with the
   wiring correct, try the AHT10 alone to find out.
 
+**Test the wiring before the real firmware:**
+[firmware/greenr_sensor_test/greenr_sensor_test.ino](../firmware/greenr_sensor_test/greenr_sensor_test.ino)
+uses the same pins. It checks the board, the USB power, the I²C lines (including
+swapped SDA/SCL and wrong sensor addresses), the AHT10, the BH1750, the soil probe
+(including whether GPIO10 really switches it) and the Wi-Fi radio. Then it runs four
+hands-on checks and prints PASS/WARN/FAIL with a fix for each problem. It needs no
+battery (`HAS_BATTERY 0`) and uploads nothing.
+
 ### Power
+
+**USB alone is enough.** A USB-C cable to a wall adapter (5 V, 1 A) runs the sensor
+indefinitely; no battery or divider is needed. What it does between readings
+(`c3-1.2`, `POWER_SOURCE PWR_AUTO`):
+
+| Powered by | Between readings | Why |
+|---|---|---|
+| wall adapter or power bank | deep sleep | a sleeping board stays at room temperature, so the AHT10 beside it reads the room |
+| a computer, seen at power-up or RST (it sends USB frames) | awake, radio off | Serial Monitor stays connected; re-uploading needs no BOOT + RST |
+| battery with the divider | deep sleep; no Wi-Fi below 3.40 V | protects the cell |
+
+The board has no USB-power sense pin, so a wall adapter and a battery without the
+divider look the same: both deep-sleep, which is safe for either. `PWR_USB` forces
+"always awake"; `PWR_BATTERY` (a battery without the divider) makes the setup
+hotspot close after 20 minutes instead of waiting for ever. If an awake board's
+computer disappears and the board keeps running — so something else powers it — it
+returns to deep sleep after 30 s.
 
 - The battery goes to the **5V pin**, which feeds the on-board 3.3 V regulator.
   **Never to the 3V3 pin**: a full cell is 4.2 V and the chip's limit is 3.6 V.
@@ -119,7 +145,7 @@ it. Removing the LED (or its resistor) is the single biggest battery saving.
 
 ### Arduino IDE
 
-1. Boards Manager: install **esp32** by Espressif (version 3.x).
+1. Boards Manager: install **esp32** by Espressif (3.x or 4.x; last compiled on 4.0.0).
 2. Tools → Board → **ESP32C3 Dev Module**.
 3. Tools → **USB CDC On Boot: Enabled** (otherwise the Serial Monitor shows nothing),
    **Flash Mode: DIO**, Partition Scheme: **Default 4MB with spiffs**.
@@ -131,10 +157,13 @@ it. Removing the LED (or its resistor) is the single biggest battery saving.
    again. Because the sensor spends almost all its time asleep, this is the normal
    way to reach it once the firmware is running.
 7. Serial Monitor at 115200 baud, then tap RST: the first line should read
-   `===== greenr sensor c3-1.0 =====`.
+   `===== greenr sensor c3-1.2 =====`.
 
-Compiled size with these settings: 1.21 MB of the 1.31 MB app partition. Turning
-on `USE_BLE_SETUP` needs the "Huge APP" partition (1.49 MB).
+Compiled size with these settings: 1.26 MB of the 1.31 MB app partition on core
+4.0.0 (1.21 MB on 3.3.x; the difference is the core, not the sketch). If a later
+core no longer fits, choose Partition Scheme **Huge APP**. Turning
+on `USE_BLE_SETUP` needs the "Huge APP" partition (1.49 MB) and core 3.x: core 4 replaced
+the BLE library, and the sketch stops with a message saying so.
 
 ### What the firmware does on each wake
 
@@ -151,9 +180,23 @@ on `USE_BLE_SETUP` needs the "Huge APP" partition (1.49 MB).
    readings (up to 24) in RTC memory and retries after 5, 10, 20, 40, 80 minutes…
    never longer than the interval.
 
+**Setup burst (since c3-1.1).** Right after a successful Wi-Fi setup it takes two more
+readings ~90 s apart (`SETUP_BURST`, `SETUP_BURST_GAP_S`). With the reading taken at
+power-up, while the probe is still in the owner's hand, they become the sensor's
+automatic in-air reference in the app (FORMULAS.md §1.7). The pairing screen asks
+for the probe to stay out of the soil until they have arrived.
+
+**Learning week (since c3-1.1).** The first 168 readings after setup are taken hourly
+(`LEARN_READINGS`, `LEARN_SECONDS`), then the server's interval resumes. The count
+is kept in flash (survives resets and power loss) and restarts when the Wi-Fi is
+forgotten. A board updated from `c3-1.0` has no count yet, so it also starts a
+learning week. Battery cost that week: the uploads use 3× their usual charge (≈ 4.8
+instead of 1.6 mAh a day), roughly double the total daily use (without a power LED).
+
 After RST or power-up there is a 2-second window to hold BOOT and forget the
 Wi-Fi. With no saved Wi-Fi it opens the "greenr-setup" hotspot: indefinitely on
-USB power, for 20 minutes on battery, then sleeps until RST.
+USB power, for 20 minutes on battery, then sleeps until RST. Without the battery
+divider (`HAS_BATTERY 0`) it cannot tell the two apart and waits until setup is done.
 
 ---
 
@@ -263,6 +306,7 @@ when it is present. That is exactly how lux and battery were added.
 | Temperature read after the radio was on | **fixed** |
 | Readings lost when an upload fails | **fixed**: up to 24 kept in RTC memory (lost on RST or power loss) |
 | `read_now` ignored | open; a sleeping sensor cannot hear it until its next wake |
+| A non-finite value (`inf`) made the whole upload invalid JSON | **fixed in c3-1.2.** The live server answers `PGRST102 Empty or invalid json` to such a body, and the backlog would have been retried and refused for ever; NaN and ±inf are now sent as `null` |
 
 ---
 

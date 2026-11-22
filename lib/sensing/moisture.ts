@@ -107,10 +107,20 @@ export interface ValidatedSoil {
  * Judged against the factory pair, a correctly buried probe on a C3 could be
  * reported as "not in the soil" on every reading.
  */
-export function validateSoil(value: number | null | undefined, endpoints?: Partial<SoilEndpoints> | null): ValidatedSoil {
+export function validateSoil(
+  value: number | null | undefined,
+  endpoints?: Partial<SoilEndpoints> | null,
+  /**
+   * The value came from the explicit `soil_raw` column, so it IS a raw count —
+   * never an old on-device percentage — however small. A count of 0–100 is then
+   * a disconnected or unpowered probe, not "0–100 % moisture". Without this, a
+   * loose VCC wire reading 0 was shown as bone dry and the app asked for water.
+   */
+  fromRawColumn = false,
+): ValidatedSoil {
   if (typeof value !== 'number' || !Number.isFinite(value)) return { raw: null, quality: 'invalid' };
   if (value < 0 || value > ADC_MAX) return { raw: null, quality: 'invalid' };
-  if (value <= 100) return { raw: null, quality: 'legacy-index' };
+  if (value <= 100 && !fromRawColumn) return { raw: null, quality: 'legacy-index' };
   if (value < DISCONNECTED_BELOW) return { raw: value, quality: 'disconnected' };
   if (!endpointsValid(endpoints)) return { raw: value, quality: 'ok' };
   if (value >= endpoints.dryAdc + NOT_INSERTED_MARGIN) return { raw: value, quality: 'not-inserted' };

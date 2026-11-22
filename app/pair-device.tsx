@@ -14,18 +14,21 @@ import {
   assignDeviceToPlant,
   deviceSeenSince,
   getLatestReading,
+  getReadingsSince,
   parsePairing,
   registerDevice,
   type Reading,
 } from '@/lib/devices';
+import { AIR_STEADY_SPREAD, latestBurst } from '@/lib/sensing/autoCalibration';
 import { useGreenr } from '@/lib/store';
 import { isWifiSetupSupported } from '@/lib/wifiSetup';
 
 const PREP: { icon: string; text: string }[] = [
   { icon: 'hardware-chip-outline', text: 'Your Greenr sensor — its QR code is on the back and on the box' },
-  { icon: 'flash-outline', text: 'Power: a charged battery, or a wall USB adapter. Not a laptop port: laptops sleep and cut power' },
+  { icon: 'flash-outline', text: 'Power: a USB-C cable to a wall USB adapter (no battery needed), or a charged battery. Not a laptop port for everyday use: laptops sleep and cut power' },
   { icon: 'wifi-outline', text: 'Your home Wi-Fi name and password (a 2.4 GHz network)' },
   { icon: 'time-outline', text: 'About 3 minutes, close to the sensor' },
+  { icon: 'hand-left-outline', text: 'Leave the probe OUT of the soil, clean and dry, until the last step: its first readings become its in-air reference' },
 ];
 
 /**
@@ -50,6 +53,8 @@ export default function PairDevice() {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [plantId, setPlantId] = useState<string | null>(null);
   const [reading, setReading] = useState<Reading | null>(null);
+  // Readings since setup began, for the automatic in-air reference (setup burst).
+  const [setupReadings, setSetupReadings] = useState<Reading[]>([]);
   const [scanning, setScanning] = useState(false);
   // When the Wi-Fi step began — anything the device reports after this proves
   // the new credentials took (rather than an older, pre-setup report).
@@ -82,11 +87,15 @@ export default function PairDevice() {
     const tick = async () => {
       const r = await getLatestReading(deviceId);
       if (alive && r) setReading(r);
+      // The first reading is taken at power-up, before Wi-Fi exists, so look back
+      // past the moment the Wi-Fi step began.
+      const recent = await getReadingsSince(deviceId, wifiStartedAt - 30 * 60 * 1000);
+      if (alive) setSetupReadings(recent);
     };
     tick();
     const iv = setInterval(tick, 5000);
     return () => { alive = false; clearInterval(iv); };
-  }, [step, deviceId]);
+  }, [step, deviceId, wifiStartedAt]);
 
   // A sensor is claimed BY an account, so a real signed-in user is required —
   // not merely a configured backend. (Checking `enabled` alone let signed-out
@@ -332,6 +341,7 @@ export default function PairDevice() {
             Soil at 0% means the probe is reading dry (e.g. in the air). Put it in
             moist soil or water and it climbs.
           </Text>
+          <AirReferenceCard readings={setupReadings} latestAt={readingMs} />
         </>
       ) : (
         <>
@@ -387,5 +397,36 @@ export default function PairDevice() {
         style={{ marginTop: 24 }}
       />
     </Screen>
+  );
+}
+
+/**
+ * The automatic in-air reference, as it happens. The firmware takes its first
+ * reading at power-up and two more about 90 s apart; while the probe is still in
+ * the air those become this sensor's "0" (lib/sensing/autoCalibration). This only
+ * reports progress — the reference is confirmed later, automatically, when the
+ * readings drop as the probe goes into the soil.
+ */
+function AirReferenceCard({ readings, latestAt }: { readings: Reading[]; latestAt: number }) {
+  const burst = latestBurst(readings);
+  const n = burst?.n ?? 0;
+  const steady = burst != null && n >= 2 && burst.spread <= AIR_STEADY_SPREAD;
+  const minutesSinceLast = latestAt ? (Date.now() - latestAt) / 60000 : 0;
+  // The burst is over (no reading for 6 min) without two steady ones.
+  const missed = !steady && minutesSinceLast > 6;
+
+  const [icon, color, text] = steady
+    ? ['checkmark-circle', accent.sage, `In-air readings taken (${burst!.raw}). Now push the probe into the soil. Greenr confirms this as the sensor’s “0” automatically when it sees the reading drop as the probe goes in.`] as const
+    : missed
+      ? ['information-circle-outline', accent.sunbeamText, 'No steady in-air readings arrived (older firmware, or the probe was moved). Push it into the soil now; its scale can be set later on the Calibrate screen.'] as const
+      : n >= 2
+        ? ['hand-left-outline', accent.sunbeamText, 'The readings are moving, so the probe was probably touched. Hold it still in open air; the next reading comes in about 90 seconds.'] as const
+        : ['hourglass-outline', accent.verdant, `Measuring its in-air reference: keep the probe out of the soil, dry and not touching anything, for about 3 minutes. ${n} of 3 readings so far.`] as const;
+
+  return (
+    <Card mode="light" style={{ marginTop: 16, flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
+      <Ionicons name={icon as any} size={20} color={color} style={{ marginTop: 1 }} />
+      <Text style={[type.caption, { color: light.ink, flex: 1, lineHeight: 19 }]}>{text}</Text>
+    </Card>
   );
 }

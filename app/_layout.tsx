@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { applyAppearance, currentScheme, dark } from '@/constants/theme';
 import { AuthProvider } from '@/lib/auth';
 import { AnalyticsSync } from '@/lib/useAnalytics';
+import { AutoCalibration } from '@/lib/useAutoCalibration';
 import { GreenrProvider } from '@/lib/store';
 import { BleGatewaySync } from '@/lib/useBleGateway';
 import { ReminderSync } from '@/lib/useReminders';
@@ -44,6 +45,7 @@ export default function RootLayout() {
             <ReminderSync />
             <BleGatewaySync />
             <AnalyticsSync />
+            <AutoCalibration />
             <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
             <Stack
               key={scheme}

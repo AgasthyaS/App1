@@ -4,6 +4,7 @@ import { idealsFor } from './plantStatus';
 import { soilDynamics, wateredSinceLastReading, wateringDidNotRegister } from './soilDynamics';
 import { withMeasuredRetention } from './soilRetention';
 import { insertionBlocksLearning, probeInsertion } from './probeInsertion';
+import { currentSoilLevel } from './sensing/level';
 import { perPointFor, poursAndCeiling, wateringSchedule } from './waterBalance';
 import type { Plant } from './types';
 import { pourStep, type PourStep } from './watering';
@@ -87,10 +88,52 @@ export function waterAction(opts: {
     kind, ml: 0, predictedRisePts: null, line, detail, urgent, step: null,
   });
 
+  /*
+   * A READING THAT CANNOT BE TRUSTED IS NOT A REASON TO WATER — OR NOT TO.
+   *
+   * Every surface that quotes an amount (the Water button, Today, the plant list,
+   * care tasks) comes through here, and none of them looked at the probe's
+   * verdict. A probe left out of the soil reads like bone-dry soil and asked for a
+   * watering; an unplugged one had no number at all and said "awaiting first
+   * reading", which hid the fault. Say what is wrong instead.
+   */
+  const probeFault = reading?.soil_quality;
+  if (reading && (probeFault === 'disconnected' || probeFault === 'invalid')) {
+    return none(
+      'hold',
+      'Check the probe — no soil signal',
+      'The probe is sending a count no connected probe produces: unplugged, a loose power wire, or a short. Check its three wires (signal, power, ground). No watering advice until it reads soil again.',
+      true,
+    );
+  }
+  if (reading && probeFault === 'not-inserted') {
+    return none(
+      'hold',
+      'Probe out of the soil?',
+      'The probe reads as if it is in open air. Push it into the soil up to its line. No watering advice until it reads soil again.',
+      true,
+    );
+  }
+  if (reading && probeFault === 'beyond-wet') {
+    return none(
+      'hold',
+      'Check the probe — wetter than water',
+      'The probe reads wetter than it does standing in water, which usually means water on its electronics or a wiring fault. Dry the top of the probe and check its wires.',
+      true,
+    );
+  }
   if (!reading || reading.soil_pct == null || !Number.isFinite(reading.soil_pct)) {
     return none('ok', 'Awaiting first reading', 'No soil reading yet.');
   }
-  const soil = reading.soil_pct;
+  // The level from the last few readings (median), not the newest one alone —
+  // one noisy reading must not decide a watering (lib/sensing/level).
+  const level = currentSoilLevel(reading, history);
+  const soil = level?.pct ?? reading.soil_pct;
+  // Said out loud when it differs from the newest reading, so the two numbers on
+  // the plant screen never look like a contradiction.
+  const levelNote = level && level.n > 1 && Math.round(level.pct) !== Math.round(reading.soil_pct)
+    ? ` (${Math.round(soil)}% is the median of the last ${level.n} readings; the newest says ${Math.round(reading.soil_pct)}%.)`
+    : '';
 
   /*
    * AIM AT WHAT THE POT CAN ACTUALLY HOLD, not at the middle of the book band.
@@ -184,6 +227,7 @@ export function waterAction(opts: {
     targetPct: target,
     tempC: reading.temp_c,
     humidityPct: reading.humidity_pct,
+    soilSdPts: level?.sd ?? null,
   }, calibration, balance);
 
   // 1. A pour that never reached the soil — but ONLY while the plant still needs
@@ -223,8 +267,8 @@ export function waterAction(opts: {
       predictedRisePts: step.predictedRisePts,
       line: `Water now — soil ${Math.round(soil)}% · add ~${step.ml} ml`,
       detail: step.isTrial
-        ? `Soil is ${Math.round(soil)}%, below ${speciesName}'s ${lo}% floor. ${step.note}${ceilingNote}${probeNote}`
-        : `Soil is ${Math.round(soil)}%, below ${speciesName}'s ${lo}% floor.${ceilingNote}${probeNote}`,
+        ? `Soil is ${Math.round(soil)}%, below ${speciesName}'s ${lo}% floor.${levelNote} ${step.note}${ceilingNote}${probeNote}`
+        : `Soil is ${Math.round(soil)}%, below ${speciesName}'s ${lo}% floor.${levelNote}${step.note ? ` ${step.note}` : ''}${ceilingNote}${probeNote}`,
       urgent: true,
       step,
     };
@@ -233,7 +277,7 @@ export function waterAction(opts: {
     return none('hold', `Not draining — soil ${Math.round(soil)}%`, dyn.detail, true);
   }
   if (soil > hi && !dyn?.draining) {
-    return none('hold', `Let it dry — soil ${Math.round(soil)}%`, `Soil is ${Math.round(soil)}%, above the ${hi}% ceiling.`);
+    return none('hold', `Let it dry — soil ${Math.round(soil)}%`, `Soil is ${Math.round(soil)}%, above the ${hi}% ceiling.${levelNote}`);
   }
   return none('ok', '', '');
 }

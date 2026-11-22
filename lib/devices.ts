@@ -1,6 +1,7 @@
 import { relTime } from './format';
 import { luxToIndex } from './lightModel';
 import { luxQuality, validateLight, type LightQuality } from './sensing/light';
+import type { SoilScaleSource } from './sensing/autoCalibration';
 import { FACTORY_SOIL_ENDPOINTS, validateSoil, type SoilQuality } from './sensing/moisture';
 import { supabase } from './supabase';
 
@@ -31,6 +32,10 @@ export interface Reading {
   rssi_dbm?: number | null;
   /** whether each raw value can be used, and if not, why (lib/sensing) */
   soil_quality?: SoilQuality;
+  /** which scale soil_pct was worked out on (set by applyCalibration; absent = factory) */
+  soil_scale?: SoilScaleSource;
+  /** SD of soil_pct from that scale, index points */
+  soil_sd?: number;
   light_quality?: LightQuality;
   light_lux: number | null;
   dli: number | null;
@@ -205,8 +210,12 @@ const finite = (v: number | null | undefined): number | null =>
 export function normalizeReading(r: Reading): Reading {
   // The database is gaining explicit raw columns (see docs/DATABASE.md); until
   // every row has them, the legacy columns hold the same counts.
+  const fromRawColumn = finite(r.soil_raw) != null;
   const soil = finite(r.soil_raw) ?? finite(r.soil_pct);
-  const vSoil = soil == null ? null : validateSoil(soil);
+  const vSoil = soil == null ? null : validateSoil(soil, null, fromRawColumn);
+  // A disconnected or impossible count has no moisture value at all. Converting it
+  // anyway produced numbers that looked real: 150 counts → "100 %", 0 → "0 %".
+  const soilUnusable = vSoil?.quality === 'disconnected' || vSoil?.quality === 'invalid';
   /*
    * LIGHT: a measured lux value outranks a photoresistor count. A BH1750 row is
    * mapped onto the same 0–100 index every light calculation reads, through the
@@ -227,7 +236,7 @@ export function normalizeReading(r: Reading): Reading {
     rssi_dbm: finite(r.rssi_dbm),
     soil_quality: vSoil?.quality,
     light_quality: usableLux != null ? luxQuality(usableLux) : vLight?.quality,
-    soil_pct: soil == null ? null : maybeRawToPct(soil, SOIL_DRY_ADC, SOIL_WET_ADC),
+    soil_pct: soil == null || soilUnusable ? null : maybeRawToPct(soil, SOIL_DRY_ADC, SOIL_WET_ADC),
     light_lux: usableLux != null ? luxToIndex(usableLux) : light == null ? null : rawToPct(light, LIGHT_DARK_ADC, LIGHT_BRIGHT_ADC),
     temp_c: finite(r.temp_c),
     humidity_pct: finite(r.humidity_pct),

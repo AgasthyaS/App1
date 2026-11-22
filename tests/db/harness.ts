@@ -31,6 +31,8 @@ export const SQL_FILES = [
   'supabase/migrations/20261112000000_platform.sql',
   'supabase/seed/substrates.sql',
   'supabase/migrations/20261112120000_c3_sensors.sql',
+  'supabase/migrations/20261118000000_auto_calibration.sql',
+  'supabase/migrations/20261118120000_readings_accuracy.sql',
 ];
 
 const BOOTSTRAP = `

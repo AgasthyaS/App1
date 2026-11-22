@@ -1,3 +1,4 @@
+import { currentSoilLevel } from './sensing/level';
 import { endpointsValid, traceConsistency } from './sensing/moisture';
 import { MODEL_VERSION } from './modelVersion';
 import { getSpecies, waterProfileFor } from './plants';
@@ -159,7 +160,9 @@ export function recommendationFor(opts: {
   const substrate = resolveSubstrate(plant.substrate, plant.soilMix);
   const style = waterProfileFor(plant.species).style;
 
-  const soil = reading?.soil_pct != null && Number.isFinite(reading.soil_pct) ? reading.soil_pct : null;
+  // Median of the last few readings, not the newest alone (lib/sensing/level).
+  const level = reading?.soil_pct != null && Number.isFinite(reading.soil_pct) ? currentSoilLevel(reading, history) : null;
+  const soil = level?.pct ?? null;
   const ageH = reading ? (now - new Date(reading.created_at).getTime()) / HOUR : null;
   const cadence = cadenceHours(history) ?? 3;
   // Two and a half reporting cycles, never less than eight hours: one missed
@@ -208,7 +211,8 @@ export function recommendationFor(opts: {
   })();
 
   /* ───────────── evidence ───────────── */
-  const ownRange = endpointsValid(calibration?.soilEndpoints);
+  // Its own scale: captured by hand, or measured automatically at setup.
+  const ownRange = endpointsValid(calibration?.soilEndpoints) || calibration?.soilEndpointsAuto?.method === 'air';
   const evidence: EvidenceItem[] = [
     {
       key: 'fresh', required: true, met: fresh, label: 'Recent reading',
@@ -242,9 +246,11 @@ export function recommendationFor(opts: {
     },
     {
       key: 'own-range', required: false, met: ownRange, label: 'Sensor calibrated',
-      detail: ownRange
+      detail: endpointsValid(calibration?.soilEndpoints)
         ? 'This sensor’s own air and water readings set its scale.'
-        : 'Using the factory scale shared by every sensor. Capture this one’s air and water readings to remove unit-to-unit error.',
+        : ownRange
+          ? 'Set automatically: the in-air reading was measured during setup and the in-water reading is estimated from it. Capturing the water reading on the Calibrate screen makes it exact.'
+          : 'Using the factory scale shared by every sensor. Capture this one’s air and water readings to remove unit-to-unit error.',
     },
     {
       key: 'substrate', required: false, met: substrate.knowledge !== 'unknown', label: 'Substrate known',
@@ -313,6 +319,15 @@ export function recommendationFor(opts: {
     ml_per_point: round(perPoint?.mlPerPoint),
     ml_basis: perPoint?.basis ?? null,
     own_endpoints: ownRange,
+    // how the soil figure and the amount were arrived at, and how uncertain they are
+    soil_latest: round(reading?.soil_pct),
+    soil_readings_used: level?.n ?? null,
+    soil_sd: round(level?.sd),
+    soil_slope_per_h: level?.slopePerHour ?? null,
+    soil_scale: reading?.soil_scale ?? 'factory',
+    ml_per_point_sd_log: perPoint?.sdLog ?? null,
+    ml_estimated_pours: perPoint?.estimatedPours ?? null,
+    ml_outlier_pours: perPoint?.outlierPours ?? null,
   };
 
   /* ───────────── the explanation's fixed parts ───────────── */
@@ -339,7 +354,9 @@ export function recommendationFor(opts: {
   }`;
   const measuredLine = soil == null
     ? 'No soil reading yet.'
-    : `Soil moisture index ${Math.round(soil)} (0 = this probe in air, 100 = in water)${
+    : `Soil moisture index ${Math.round(soil)} (0 = this probe in air, 100 = in water${
+        level && level.n > 1 ? `; the median of the last ${level.n} readings, each carried forward to now along the measured drying rate` : ''
+      })${
         reading?.temp_c != null ? `, ${Math.round(reading.temp_c)} °C` : ''
       }${reading?.humidity_pct != null ? `, ${Math.round(reading.humidity_pct)}% humidity` : ''}.`;
 
@@ -368,6 +385,16 @@ export function recommendationFor(opts: {
   });
 
   /* ───────────── the decision ───────────── */
+  // A fresh reading the probe cannot stand behind comes first. A disconnected probe
+  // has no soil value at all (normalizeReading), so testing "no value" first
+  // reported a wiring fault as "waiting for a first reading".
+  if (reading && fresh && badSignal) {
+    return build('inconsistent',
+      quality === 'not-inserted' ? 'The probe is not in the soil' : 'The soil signal looks faulty',
+      quality === 'not-inserted' ? 'Push the probe in to its white line.' : 'Check the probe’s cable and that its electronics are dry.',
+      evidence.find((e) => e.key === 'seated')!.detail,
+      'A reading taken in air or from a faulty connection says nothing about the plant.');
+  }
   if (soil == null) {
     return build('insufficient-data', 'Waiting for a first reading', null,
       'Nothing to calculate yet.', 'Greenr will not guess at soil it has not measured.');

@@ -16,7 +16,7 @@ computes what its definition says; "reference" means it reproduces a published
 number; "simulated" means it behaves coherently on generated traces. None of
 those is evidence of real-world accuracy.
 
-Run everything: `npm test` (308 tests).
+Run everything: `npm test` (358 tests).
 
 ---
 
@@ -30,6 +30,8 @@ Run everything: `npm test` (308 tests).
 | 1.4 | Weighed calibration curve | `lib/sensing/moisture.ts` | new |
 | 1.5 | Trace consistency | `lib/sensing/moisture.ts` | new |
 | 1.6 | Index → water content (Topp) | `lib/soilProfile.ts` | kept, unverified |
+| 1.7 | Automatic endpoints | `lib/sensing/autoCalibration.ts` | new (sensing `s4`) |
+| 1.8 | Soil level now | `lib/sensing/level.ts` | new (sensing `s4`) |
 
 ### 1.1 Raw validation
 
@@ -38,14 +40,23 @@ Classifies a stored count without changing it.
 | Count | Verdict |
 |---|---|
 | not finite, < 0, > 4095 | `invalid` |
-| 0–100 | `legacy-index` (row from firmware that converted on-device) |
-| 101–199 | `disconnected` |
+| 0–100, no `soil_raw` | `legacy-index` (row from firmware that converted on-device) |
+| 0–199 from `soil_raw` | `disconnected` — no moisture value (`soil_pct` null) |
 | ≥ dry endpoint + 100 | `not-inserted` — **only with this sensor's own endpoints** |
 | < wet endpoint − 250 | `beyond-wet` — **only with this sensor's own endpoints** |
 | otherwise | `ok` |
 
 Assumes a connected probe never reads below 200. That is the same assumption the
 app already made; it is now stated and tested.
+
+**Changed (sensing `s5`).** A count that came from the `soil_raw` column is always
+a raw count, however small. Before, 0–100 was read as an old on-device percentage
+whichever column it came from, so a C3 probe with a loose power wire (count ≈ 0)
+showed as "0 % moisture" and asked for water, and a count of 150 was converted on
+the factory scale to "100 %". Now both are `disconnected`, with no moisture value,
+and `waterAction` says to check the probe (decision `d4`: also for `not-inserted`
+and `beyond-wet`, which used to fall through to "water now" / "let it dry").
+SQL file 16 stores every C3 count in `soil_raw` so the distinction holds in the data.
 
 **Changed (sensing `s3`).** The two positional checks used to run against the
 factory pair (3020 / 1400), measured on an ESP32 dev kit. An ESP32-C3 turns the
@@ -123,6 +134,79 @@ characterisations of this class of sensor show the opposite curvature at the
 dry end. It is used only as a prior for millilitres per point and is replaced by
 the pot's own measured figure after two logged pours. Checking it needs the
 weighed calibration in 1.4.
+
+### 1.7 Automatic endpoints
+
+Each sensor's own air and water counts (1.2), worked out without the owner.
+
+```
+air   = median of the setup burst            (measured)
+water = min( air · 1400/3020 ,  p2(soil) − 50 )   (estimated, bounded by data)
+```
+
+**Air.** Firmware `c3-1.1` takes a reading at power-up and two more ~90 s after
+setup, while the probe is still in the air. A run of readings is accepted as air
+only if all four hold: (1) at least two readings, each within 15 min of the
+next; (2) they agree within 80 counts; (3) the next two readings are both at
+least 300 counts lower (the probe went in); (4) it sits at least 100 counts above
+the 98th percentile of everything read afterwards (soil, however dry, reads
+below air). Test 4 is re-run on every refresh, so a dry pot that was pressed with
+RST before a watering is demoted as soon as the soil dries back to that level
+(tested). A measured air end is kept after the setup readings leave the 30-day
+window, unless later readings come within 50 counts of it. Leaving the probe out
+of the soil for a few hours (repotting, say) does the same, so the scale then
+falls back to the data estimate below until the next setup burst; capturing the
+air reading by hand avoids that.
+
+**Water.** Inferred: the two boards differ mainly in converter gain, which scales
+both counts by the same factor, so the factory ratio is kept. Soil after a
+watering never reads wetter than water, so the estimate is lowered to 50 counts
+below the 2nd percentile of the soil readings when those are wetter.
+
+**Without an air reading** (older firmware, probe already buried), the readings
+alone may move the scale once there are 24: air = max(3020, p98 + 150).
+
+**Precedence.** An end captured by hand always wins; one captured end plus the
+automatic other is used together; then automatic; then the factory pair. Only a
+MEASURED air end may judge "not in the soil" (1.1).
+
+**Uncertainty** of a mid-range index value, used by 3.11. Judgement figures from
+the error sources above, not measurements:
+
+| Scale | SD (points) |
+|---|---|
+| both ends captured | 3 |
+| one captured | 5 |
+| automatic, air measured | 7 (10 if the air count was clipped at 4095) |
+| automatic, data only | 12 |
+| factory pair | 15 |
+
+**Validation:** unit and simulated only. The ratio assumption for the water end
+is the weakest part; capturing the water reading by hand replaces it.
+
+### 1.8 Soil level now
+
+Decisions use the soil level from several readings, not the newest alone.
+
+```
+segment = readings since the last watering (sustained rise ≥ 6 points:
+          median of the next 3 − median of the previous 3; the watering is the
+          biggest single jump where that holds)
+rate    = Theil–Sen slope over ≤ 24 h of the segment (≥ 4 readings over ≥ 6 h),
+          clamped to −1.5 … +0.5 points/h; 0 otherwise
+level   = median over the last ≤ 4 readings within 6 h of
+          ( reading + rate · hours until the newest reading )
+SD      = √( (2.5 · 1.25 / √n)² + SD_scale² )        (n = 1: 2.5 instead)
+```
+
+- **Why carried forward:** a plain median of the last hours lags a dry-down by
+  half the window's fall. A slope fitted to those same 3–4 readings would be
+  mostly noise; the rate is measured over the longer segment instead (tested:
+  a steady 0.2 points/h dry-down gives exactly the newest value).
+- **Why "sustained":** two readings ±2.5 apart differ by 6 or more about 4 % of
+  the time; a single-reading test would call noise a watering about once a day.
+- **Not smoothed:** a newest reading marked unusable (probe out, unplugged) is
+  reported as it is.
 
 ---
 
@@ -260,6 +344,8 @@ pot depths).
 | 3.7 | Days to the floor | `lib/recommendation.ts` | new |
 | 3.8 | Evidence grade | `lib/recommendation.ts` | new |
 | 3.9 | Sensorless interval | `lib/estimate.ts` | kept, unverified |
+| 3.10 | Amount uncertainty and outlier pours | `lib/waterBalance.ts` | new (decision `d3`) |
+| 3.11 | Cautious dose | `lib/watering.ts` | new (decision `d3`) |
 
 ### 3.1 Pot volume
 
@@ -332,6 +418,41 @@ does not say the answer is right.
 Species base interval × pot size (0.8 or 1.25) × material (0.85 terracotta, 1.1
 plastic) × season. The multipliers are rules of thumb with no measurements
 behind them. They apply only to plants without a sensor.
+
+### 3.10 Amount uncertainty and outlier pours
+
+Each clean pour's ml-per-point (3.3) carries two errors, combined in log space:
+
+```
+SD_pour = √( max(0.15, 2.5 / rise)² + SD_amount² )
+SD_amount = 0.08  amount typed in (measured)
+            0.35  preset tapped, or older log without a source
+```
+
+A "cup" from a watering can is anything from about 150 to 350 ml, which is
+roughly a factor of 1.4 either way. Pours are combined by inverse variance (in
+log space); the combined term then joins the geometric prior and the
+water-balance cross-check as before (3.3). With three or more pours, one whose
+log ml-per-point is more than max(ln 2, 3 · 1.4826 · MAD) from the median is set
+aside — a mis-logged amount, a pour onto the probe, water run down the pot
+wall — and the note says so. `sdLog` (the combined SD) is reported with the
+estimate. Assumed amounts are still never learned from.
+
+### 3.11 Cautious dose
+
+```
+σ      = √( sdLog² + (SD_level / deficit)² )      (SD_level from 1.8)
+factor = max(0.6, e^(−0.5 · σ))
+dose   = deficit · ml_per_point · factor          (then the usual caps)
+```
+
+The two errors are not equal in cost. Too little water is corrected by the next
+reading: the plant is still below its floor, the app asks for a top-up, and the
+short pour is itself a measurement. Too much cannot be taken back. So an
+uncertain answer leans low by half a standard deviation, never below 60 % of the
+central estimate so it still moves the reading enough to learn from. The note
+says when this happens (≥ 10 % reduction). Applies to measured doses; the trial
+dose for an unmeasured pot (3.5) is already deliberately small.
 
 ---
 

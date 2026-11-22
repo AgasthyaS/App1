@@ -1,7 +1,7 @@
 import type { Reading } from './devices';
 import { MAX_SINGLE_POUR_FRACTION, PROBE, containerThresholds, probeReads, waterFractionBetween } from './soilProfile';
 import { retentionEstimate, withMeasuredRetention } from './soilRetention';
-import type { Plant, PotShape } from './types';
+import type { Plant, PotShape, WaterAmountSource } from './types';
 import { getSpecies, waterProfileFor } from './plants';
 import { ABSOLUTE_MAX_POUR_ML, potVolume, wettingFor } from './watering';
 
@@ -337,6 +337,8 @@ export interface ObservedPour {
   saturated: boolean;
   /** ml per point implied — a measurement when not saturated, a ceiling when it is */
   mlPerPoint: number;
+  /** how the amount was known: typed/measured, a tapped preset, or unknown (older logs) */
+  source: WaterAmountSource | 'unknown';
 }
 
 /**
@@ -467,6 +469,7 @@ export function observedPours(
       fallbackPts: settledPct != null ? Math.round((peakPct - settledPct) * 10) / 10 : null,
       saturated: ceiling != null && peakPct >= ceiling.pct - CEILING_TOLERANCE_PTS,
       mlPerPoint: w.ml / risePts,
+      source: w.source ?? 'unknown',
     });
   }
   return out.sort((a, b) => a.at - b.at);
@@ -511,6 +514,51 @@ const SD_POUR_FLOOR = 0.15;
 const SENSOR_NOISE_PTS = 2.5;
 /** The water-balance cross-check inherits the spread of the daily-use band. */
 const SD_BALANCE = 0.8;
+/**
+ * How well the AMOUNT of a logged pour is known, as a log-SD. A volume typed in
+ * after using a measuring jug is good to about ±8 %. A tapped preset ("Cup") is a
+ * guess at what was poured — a "cup" from a watering can is anything from 150 to
+ * 350 ml — so it is worth roughly a factor of 1.4 either way. Older logs did not
+ * record which it was and are treated as guesses.
+ */
+export const SD_AMOUNT: Record<WaterAmountSource | 'unknown', number> = {
+  measured: 0.08,
+  preset: 0.35,
+  unknown: 0.35,
+  // never learned from (see observedPours); listed for completeness
+  assumed: 1,
+};
+/**
+ * A pour whose ml-per-point is this many robust SDs from the others is set aside
+ * as a mistake — a mis-logged amount, a pour onto the probe, water run down the
+ * pot wall — rather than allowed to drag the estimate. Needs three pours to judge.
+ */
+const OUTLIER_MADS = 3;
+/** never call a pour an outlier for being within a factor of two of the rest */
+const OUTLIER_MIN_LOG = Math.log(2);
+
+/** Log-SD of one pour's ml-per-point: sensor noise on the rise, plus the amount. */
+export function pourLogSd(p: Pick<ObservedPour, 'risePts' | 'source'>): number {
+  const sensor = Math.max(SD_POUR_FLOOR, SENSOR_NOISE_PTS / Math.max(1, p.risePts));
+  return Math.hypot(sensor, SD_AMOUNT[p.source] ?? SD_AMOUNT.unknown);
+}
+
+/**
+ * Clean pours with the outliers removed, judged in log space against the median
+ * with the median absolute deviation (robust: one wild pour cannot hide itself
+ * by inflating the spread, as it would with a standard deviation).
+ */
+export function withoutOutlierPours<T extends Pick<ObservedPour, 'mlPerPoint'>>(pours: T[]): { kept: T[]; dropped: T[] } {
+  if (pours.length < 3) return { kept: pours, dropped: [] };
+  const logs = pours.map((p) => Math.log(p.mlPerPoint));
+  const m = median(logs);
+  const mad = 1.4826 * median(logs.map((x) => Math.abs(x - m)));
+  const limit = Math.max(OUTLIER_MIN_LOG, OUTLIER_MADS * mad);
+  const kept: T[] = [];
+  const dropped: T[] = [];
+  pours.forEach((p, i) => (Math.abs(logs[i] - m) > limit ? dropped : kept).push(p));
+  return { kept, dropped };
+}
 
 export type PerPointBasis = 'measured' | 'blended' | 'bounded' | 'modelled';
 
@@ -530,6 +578,12 @@ export interface PerPointEstimate {
   fromBalance: number | null;
   cleanPours: number;
   saturatedPours: number;
+  /** clean pours set aside as outliers */
+  outlierPours: number;
+  /** clean pours whose amount was a preset or unknown, not measured */
+  estimatedPours: number;
+  /** uncertainty of mlPerPoint as a log-SD (0.1 ≈ ±10 %) */
+  sdLog: number;
   note: string;
 }
 
@@ -604,7 +658,22 @@ export function perPointFor(
       ? remembered.mlPerPoint
       : null;
   const saturated = pours.filter((p) => p.saturated);
-  const fromPours = clean.length ? median(clean.map((p) => p.mlPerPoint)) : null;
+  // Each pour weighted by how well it is known — its rise against sensor noise,
+  // and whether the amount was measured or guessed — after removing outliers.
+  const { kept: usable, dropped: outliers } = withoutOutlierPours(clean);
+  const pourTerm = (() => {
+    if (!usable.length) return null;
+    let w = 0;
+    let v = 0;
+    for (const p of usable) {
+      const sd = pourLogSd(p);
+      w += 1 / (sd * sd);
+      v += Math.log(p.mlPerPoint) / (sd * sd);
+    }
+    return { value: Math.exp(v / w), sd: 1 / Math.sqrt(w) };
+  })();
+  const fromPours = pourTerm ? pourTerm.value : null;
+  const estimatedPours = usable.filter((p) => p.source !== 'measured').length;
   // The smallest saturating pour proves the most: the pot topped out at or below
   // that many millilitres, so it cannot possibly need more per point than this.
   const upperBound = saturated.length ? Math.min(...saturated.map((p) => p.mlPerPoint)) : null;
@@ -626,13 +695,7 @@ export function perPointFor(
     // Held at the confidence it had when measured, minus a step for age.
     terms.push({ value: rememberedPerPoint, sd: SD_POUR_FLOOR * 2.5 });
   }
-  if (fromPours != null) {
-    // Bigger rises are measured more precisely; sensor noise sets the floor.
-    const rises = clean.map((p) => p.risePts);
-    const typicalRise = median(rises);
-    const sdOne = Math.max(SD_POUR_FLOOR, SENSOR_NOISE_PTS / Math.max(1, typicalRise));
-    terms.push({ value: fromPours, sd: sdOne / Math.sqrt(clean.length) });
-  }
+  if (pourTerm) terms.push(pourTerm);
   if (fromBalance != null) terms.push({ value: fromBalance, sd: SD_BALANCE });
 
   let wsum = 0;
@@ -643,6 +706,7 @@ export function perPointFor(
     vsum += w * Math.log(Math.max(0.5, t.value));
   }
   let combined = Math.exp(vsum / wsum);
+  const sdLog = Math.sqrt(1 / wsum);
 
   // A proven ceiling outranks everything. If the pot demonstrably topped out on
   // 400 ml, no combination of priors gets to ask for more per point than that —
@@ -654,23 +718,29 @@ export function perPointFor(
   }
 
   const basis: PerPointBasis =
-    clean.length >= 2 ? 'measured'
+    usable.length >= 2 ? 'measured'
       : rememberedPerPoint != null ? 'measured'
       : bounded ? 'bounded'
-        : clean.length === 1 || fromBalance != null ? 'blended'
+        : usable.length === 1 || fromBalance != null ? 'blended'
           : 'modelled';
 
   const confidence = Math.max(0, Math.min(1,
-    (clean.length ? 0.45 + 0.2 * Math.min(clean.length, 3) : 0.2) +
+    (usable.length ? 0.45 + 0.2 * Math.min(usable.length, 3) - 0.1 * Math.min(estimatedPours, 2) : 0.2) +
     (fromBalance != null ? 0.1 : 0) +
     (bounded ? 0.1 : 0) +
     (rv.depthCm > 0 ? 0.1 : 0),
   ));
 
+  const caveat = (() => {
+    const bits: string[] = [];
+    if (outliers.length) bits.push(`${outliers.length} watering${outliers.length === 1 ? '' : 's'} that disagreed sharply with the rest ${outliers.length === 1 ? 'was' : 'were'} left out`);
+    if (estimatedPours) bits.push(`${estimatedPours === usable.length ? 'the amounts were' : `${estimatedPours} of the amounts were`} estimated, so this is treated as approximate`);
+    return bits.length ? ` (${bits.join('; ')})` : '';
+  })();
   const note = (() => {
-    if (clean.length >= 2) return `Measured on this pot: about ${Math.round(combined)} ml moves it one point, from ${clean.length} waterings that did not overflow it.`;
+    if (usable.length >= 2) return `Measured on this pot: about ${Math.round(combined)} ml moves it one point, from ${usable.length} waterings that did not overflow it${caveat}.`;
     if (bounded) return `This pot topped out on a ${Math.round(Math.min(...saturated.map((p) => p.ml)))} ml watering, so it needs at most about ${Math.round(combined)} ml per point — the amounts below are capped by what it actually holds, not by the estimate.`;
-    if (clean.length === 1) return `One measured watering says about ${Math.round(combined)} ml per point. One more and this becomes exact.`;
+    if (usable.length === 1) return `One measured watering says about ${Math.round(combined)} ml per point${caveat}. One more and this becomes exact.`;
     return `Estimated from the pot: ${rv.note}`;
   })();
 
@@ -682,8 +752,11 @@ export function perPointFor(
     fromPours: fromPours != null ? Math.round(fromPours * 10) / 10 : null,
     upperBound: upperBound != null ? Math.round(upperBound * 10) / 10 : null,
     fromBalance: fromBalance != null ? Math.round(fromBalance * 10) / 10 : null,
-    cleanPours: clean.length,
+    cleanPours: usable.length,
     saturatedPours: saturated.length,
+    outlierPours: outliers.length,
+    estimatedPours,
+    sdLog: Math.round(sdLog * 1000) / 1000,
     note,
   };
 }

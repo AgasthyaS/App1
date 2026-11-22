@@ -48,7 +48,7 @@ const GUIDE: GuideStep[] = [
   {
     Art: HotspotOnArt,
     title: 'Power on the sensor',
-    body: 'Connect its battery, or plug it into a wall USB adapter, and keep it within a few metres of you. Within about 10 seconds it starts its own setup Wi-Fi network called “greenr-setup”.',
+    body: 'Keep the probe out of the soil, clean and dry: its first readings become its in-air reference. Connect its battery, or plug it into a wall USB adapter, and keep it within a few metres of you. Within about 10 seconds it starts its own setup Wi-Fi network called “greenr-setup”.',
     tip: 'If “greenr-setup” disappears before you finish, press the sensor’s RST button to open it again.',
   },
   {

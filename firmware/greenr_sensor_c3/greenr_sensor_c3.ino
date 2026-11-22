@@ -1,7 +1,7 @@
-/*  greenr sensor — ESP32-C3 Super Mini — firmware c3-1.0
+/*  greenr sensor — ESP32-C3 Super Mini — firmware c3-1.2
  *
  *  ⚠ CHECK YOU HAVE THIS VERSION: on boot the Serial Monitor prints
- *    "===== greenr sensor c3-1.0 =====". If it says anything else, the IDE is
+ *    "===== greenr sensor c3-1.2 =====". If it says anything else, the IDE is
  *    compiling a different copy of this file.
  *
  *  ★ FOR EACH NEW DEVICE you change only DEVICE_ID and DEVICE_KEY.
@@ -26,6 +26,15 @@
  *    Never connect the battery to the 3V3 pin: a full cell is 4.2 V and the chip's
  *    limit is 3.6 V. Unplug the battery before plugging in USB to upload.
  *
+ *  ──────────────────────────────── USB POWER ─────────────────────────────────
+ *    No battery needed: a USB-C cable to a wall adapter (5 V, 1 A is plenty) runs it
+ *    indefinitely. On a wall adapter it deep-sleeps between readings, like on a
+ *    battery, so the board stays cool and the AHT10 reads the room. Plugged into a
+ *    COMPUTER (seen at power-up or RST) it stays awake instead: the Serial Monitor
+ *    keeps running and uploads need no BOOT + RST. The setup hotspot waits as long
+ *    as you need. A laptop that sleeps cuts the power — use a wall adapter for
+ *    real use. See POWER_SOURCE to override any of this.
+ *
  *  ──────────────────────────────── ARDUINO IDE ───────────────────────────────
  *    Boards Manager:  "esp32" by Espressif (3.x)
  *    Tools → Board:   "ESP32C3 Dev Module"
@@ -38,6 +47,12 @@
  *    time — that BOOT + RST step is how you reach it.
  *
  *  ──────────────────────────────── FIRST SETUP ───────────────────────────────
+ *    Keep the probe OUT of the soil, clean and dry, while you set it up: the
+ *    reading taken at power-up and two more ~90 s after setup (the "setup burst")
+ *    become its automatic in-air reference. Then push it into the soil. For its
+ *    first week it reads every hour (the "learning week") so the app measures the
+ *    pot quickly; after that, every 3 hours.
+ *
  *    Join the open Wi-Fi "greenr-setup" with your phone, pick your home network on
  *    the page that opens, done. On battery the setup network stays open for
  *    SETUP_TIMEOUT_MIN minutes; press RST to open it again.
@@ -60,16 +75,31 @@
 #endif
 
 // ─────────────────────────── settings you may change ───────────────────────────
-#define FW_VERSION        "c3-1.0"
-#define USE_DEEP_SLEEP    1        // 1 = battery: sleep between readings · 0 = USB power, stay awake
-#define USE_BLE_SETUP     0        // 1 = also offer the app's Bluetooth setup (needs "Huge APP" partition)
+#define FW_VERSION        "c3-1.2"
+#define USE_DEEP_SLEEP    1        // 1 = deep sleep between readings when unattended · 0 = never sleep
+#define USE_BLE_SETUP     0        // 1 = also offer the app's Bluetooth setup (needs "Huge APP" partition
+                                   //   and esp32 core 3.x; core 4 replaced the BLE library)
 #define HAS_BATTERY       0        // 1 ONLY if the two-resistor divider is wired to GPIO1 (shows battery %
                                    // in the app). Leave 0 without it: an unconnected GPIO1 reads a random
                                    // voltage that can look like a flat battery and stop the uploads.
+#define PWR_AUTO          0
+#define PWR_USB           1
+#define PWR_BATTERY       2
+#define POWER_SOURCE      PWR_AUTO // AUTO: a battery if the divider sees one, otherwise USB. Plugged
+                                   //   into a COMPUTER it stays awake (Serial Monitor, easy uploads);
+                                   //   on a wall adapter it deep-sleeps between readings (cool board,
+                                   //   true room temperature from the AHT10).
+                                   // PWR_USB: always a wall adapter — stays awake, never sleeps.
+                                   // PWR_BATTERY: a battery WITHOUT the divider — the setup hotspot
+                                   //   still closes after SETUP_TIMEOUT_MIN to save the battery.
 #define VERIFY_TLS        1        // check the server's certificate; 0 only to diagnose (see ROOT_CAS)
 #define IDLE_SECONDS      10800    // 3 h between readings. The server can change it (devices.wake_seconds).
 #define RETRY_SECONDS     300      // first retry after a failed upload; doubles per failure, capped at IDLE
-#define SETUP_TIMEOUT_MIN 20       // on battery, close the setup hotspot after this long
+#define LEARN_READINGS    168      // "learning week": the first 168 readings after setup are taken hourly
+#define LEARN_SECONDS     3600     //   (7 days × 24), so the app measures this pot's drying fast; then IDLE
+#define SETUP_BURST       2        // extra readings right after setup, SETUP_BURST_GAP_S apart: with the
+#define SETUP_BURST_GAP_S 90       //   power-up reading they are the app's automatic in-air reference
+#define SETUP_TIMEOUT_MIN 20       // on battery, close the setup hotspot after this long (USB: never)
 #define WIFI_TX_POWER     WIFI_POWER_8_5dBm
                                    // Many Super Mini boards cannot join Wi-Fi at full power (a known
                                    // antenna/regulator weakness). 8.5 dBm fixes it for most. If your
@@ -139,6 +169,9 @@ const char* SUPABASE_ANON =
 #include <esp_sleep.h>
 #include <sys/time.h>
 #if USE_BLE_SETUP
+  #if ESP_ARDUINO_VERSION_MAJOR >= 4
+    #error "Bluetooth setup (USE_BLE_SETUP 1) uses the BLE library of esp32 core 3.x; core 4 replaced it. Set USE_BLE_SETUP 0 (the Wi-Fi setup page, the normal path) or install esp32 3.3.x in Boards Manager."
+  #endif
   #include <BLEDevice.h>
   #include <BLEServer.h>
   #include <BLEUtils.h>
@@ -266,6 +299,7 @@ RTC_DATA_ATTR int      sleepSeconds = IDLE_SECONDS;
 RTC_DATA_ATTR uint8_t  failCount = 0;
 RTC_DATA_ATTR int32_t  apChannel = 0;          // last router's channel + BSSID: rejoining with them
 RTC_DATA_ATTR uint8_t  apBssid[6] = {0};       // skips the scan and saves 1–2 s of radio per wake
+RTC_DATA_ATTR uint8_t  burstLeft = 0;           // setup-burst readings still to take
 
 Preferences prefs;
 String savedSsid, savedPass;
@@ -273,6 +307,9 @@ Adafruit_AHTX0 aht;
 BH1750 lightMeter(BH1750_ADDR);
 bool ahtOk = false, bhOk = false;
 uint32_t nextReadingAt = 0;                    // awake mode only
+bool onBattery = false;                        // what powers it (POWER_SOURCE, or measured)
+bool awakeForComputer = false;                 // a computer was on the USB port at power-up/RST
+bool stayAwake = false;                        // awake between readings instead of deep sleep
 
 // Credentials handed over by EITHER setup path (Bluetooth or the setup page).
 #if USE_BLE_SETUP
@@ -315,6 +352,7 @@ void clearWifi(const char* why){
   prefs.begin("greenr", false);
   prefs.remove("ssid");
   prefs.remove("pass");
+  prefs.remove("learnN");                        // a new setup is usually a new pot or place: learn again
   prefs.end();
   savedSsid = ""; savedPass = "";
   apChannel = 0;
@@ -511,7 +549,9 @@ bool wifiJoin(const String& ssid, const String& pass){
 }
 
 // ─────────── upload ───────────
-String jsonNum(float v, int dp){ return isnan(v) ? String("null") : String(v, dp); }
+// NaN and ±inf are not JSON: one would make the server reject the whole upload, and the
+// backlog would be retried — and rejected — forever. Both mean "no value".
+String jsonNum(float v, int dp){ return (isnan(v) || isinf(v)) ? String("null") : String(v, dp); }
 
 String rowJson(const Sample& s, int64_t now){
   int64_t ago = now - s.at;
@@ -810,6 +850,60 @@ const char* resetName(esp_reset_reason_t r){
   }
 }
 
+// ─────────── learning week (NVS: survives sleep, resets and power loss) ───────────
+// Counts readings uploaded since setup. One flash write per reading for the first
+// LEARN_READINGS only; after that it is read, never written.
+uint16_t learnCount(){
+  prefs.begin("greenr", true);
+  uint16_t n = prefs.getUShort("learnN", 0);
+  prefs.end();
+  return n;
+}
+void setLearnCount(uint16_t n){
+  prefs.begin("greenr", false);
+  prefs.putUShort("learnN", n);
+  prefs.end();
+}
+
+// How long to sleep after a successful upload: the setup burst first, then the
+// learning week, then the server's interval (devices.wake_seconds).
+uint32_t nextWait(){
+  uint32_t wait = (uint32_t)sleepSeconds;
+  if (burstLeft > 0){
+    burstLeft--;
+    Serial.printf("Setup burst: next reading in %d s — keep the probe in the air until the app says it has it.\n", SETUP_BURST_GAP_S);
+    return SETUP_BURST_GAP_S;
+  }
+  uint16_t n = learnCount();
+  if (n < LEARN_READINGS){
+    setLearnCount(n + 1);
+    if (wait > LEARN_SECONDS) wait = LEARN_SECONDS;
+    Serial.printf("Learning week: reading %u of %d, every %u s.\n", (unsigned)(n + 1), LEARN_READINGS, (unsigned)wait);
+  }
+  return wait;
+}
+
+// ─────────── power ───────────
+// A COMPUTER on the USB port sends USB frames; a wall adapter or a battery does not.
+// That is the only difference the board can see (it has no USB-power sense pin).
+bool computerAttached(uint32_t waitMs){
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+  uint32_t t0 = millis();
+  do {
+    if (HWCDC::isPlugged()) return true;
+    delay(20);
+  } while (millis() - t0 < waitMs);
+#endif
+  return false;
+}
+
+// Radio off between readings while awake: a running radio warms the board, and the
+// AHT10 beside it would report the board's warmth as the room's.
+void radioOff(){
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_OFF);
+}
+
 // Send what we have and decide how long to wait before the next reading.
 uint32_t deliver(const Sample& s){
   pushBacklog(s);
@@ -817,7 +911,7 @@ uint32_t deliver(const Sample& s){
   if (ok){
     backlogCount = 0;
     failCount = 0;
-    return (uint32_t)sleepSeconds;
+    return nextWait();
   }
   uint32_t wait = retryDelay();
   Serial.printf("%d reading%s kept for the next upload. Retrying in %u s.\n",
@@ -833,7 +927,7 @@ void setup(){
 
   if (rtcMagic != RTC_MAGIC){                    // power-up: RTC memory is not ours yet
     rtcMagic = RTC_MAGIC;
-    backlogCount = 0; failCount = 0; apChannel = 0; sleepSeconds = IDLE_SECONDS;
+    backlogCount = 0; failCount = 0; apChannel = 0; sleepSeconds = IDLE_SECONDS; burstLeft = 0;
   }
 
   Serial.printf("\n===== greenr sensor %s =====\n[boot: %s]  device: %s  backlog: %d\n",
@@ -884,17 +978,29 @@ void setup(){
       if (digitalRead(BOOT_BTN) == LOW && bootButtonHeld()){ clearWifi("BOOT button held"); break; }
       delay(20);
     }
+    // 3.5 s after power-up USB has long since enumerated, so one short look is enough.
+    awakeForComputer = computerAttached(300);
   }
 
   Sample s = takeSample();
-  bool onBattery = s.batMv > 0;
 
-  if (onBattery && s.batMv < BAT_CUTOFF_MV){
+  // ── what powers it, and whether to sleep between readings ──
+#if POWER_SOURCE == PWR_BATTERY
+  onBattery = true;
+#elif POWER_SOURCE == PWR_USB
+  onBattery = false;
+#else
+  onBattery = s.batMv > 0;                       // without the divider this is always USB
+#endif
+  stayAwake = !USE_DEEP_SLEEP || POWER_SOURCE == PWR_USB || awakeForComputer;
+  Serial.printf("Power: %s%s — %s between readings.\n",
+                onBattery ? "battery" : "USB", awakeForComputer ? ", computer attached" : "",
+                stayAwake ? "staying awake" : "deep sleep");
+
+  if (!stayAwake && s.batMv > 0 && s.batMv < BAT_CUTOFF_MV){
     Serial.printf("Battery at %d mV, below %d mV: not starting Wi-Fi. Charge it.\n", s.batMv, BAT_CUTOFF_MV);
     pushBacklog(s);                              // kept: uploads after a recharge without a reset
-#if USE_DEEP_SLEEP
     sleepFor(BAT_LOW_SLEEP_S);
-#endif
   }
 
   if (strlen(WIFI_SSID) > 0){
@@ -909,6 +1015,8 @@ void setup(){
       sleepFor(0);                               // wakes only on RST: an idle hotspot would empty the battery
     }
     Serial.println("\n===== SET UP — uploading to your app now. =====");
+    burstLeft = SETUP_BURST;                     // two more air readings, ~90 s apart
+    setLearnCount(0);                            // and a fresh learning week
   } else {
     Serial.printf("Saved Wi-Fi found (\"%s\").\n", savedSsid.c_str());
     wifiJoin(savedSsid, savedPass);
@@ -916,36 +1024,42 @@ void setup(){
 
   uint32_t wait = deliver(s);
 
-#if USE_DEEP_SLEEP
-  sleepFor(wait);
-#else
+  if (!stayAwake) sleepFor(wait);                // does not return
+  radioOff();
   nextReadingAt = millis() + wait * 1000UL;
-  Serial.printf("Next reading in %u s.\n", (unsigned)wait);
-#endif
+  Serial.printf("Next reading in %u s — staying awake%s.\n", (unsigned)wait,
+                awakeForComputer ? " while the computer is attached" : "");
 }
 
 void loop(){
-#if !USE_DEEP_SLEEP
+  if (!stayAwake) return;                        // sleep mode never gets here: setup() sleeps
   esp_task_wdt_reset();
   watchResetButton();
 
-  // Keep Wi-Fi alive between readings, so the radio is up when one is due.
-  static uint32_t lastWifiCheck = 0;
-  if (millis() - lastWifiCheck >= 30000){
-    lastWifiCheck = millis();
-    if (WiFi.status() != WL_CONNECTED && !savedSsid.isEmpty()){
-      Serial.println("Wi-Fi dropped — reconnecting.");
-      wifiJoin(savedSsid, savedPass);
+  // Awake only because a computer was attached? If it goes away and the board is
+  // still running — so something else powers it, a battery — go back to the
+  // battery-friendly cycle. Checked every 10 s; three misses in a row, so a
+  // laptop's brief USB suspend does not count.
+  static uint32_t lastHostCheck = 0;
+  static uint8_t hostMissing = 0;
+  if (awakeForComputer && POWER_SOURCE != PWR_USB && USE_DEEP_SLEEP && millis() - lastHostCheck >= 10000){
+    lastHostCheck = millis();
+    hostMissing = computerAttached(0) ? 0 : hostMissing + 1;
+    if (hostMissing >= 3){
+      int32_t left = (int32_t)(nextReadingAt - millis());
+      Serial.println("Computer gone — back to deep sleep between readings.");
+      sleepFor(left > 1000 ? (uint32_t)(left / 1000) : 1);
     }
   }
 
   // Fire on a deadline, not by counting delays. The signed compare is rollover-safe.
   if ((int32_t)(millis() - nextReadingAt) >= 0){
-    Sample s = takeSample();
-    if (WiFi.status() != WL_CONNECTED) wifiJoin(savedSsid, savedPass);
+    Sample s = takeSample();                     // radio still off: the AHT10 reads the room
+    wifiJoin(savedSsid, savedPass);
     uint32_t wait = deliver(s);
+    radioOff();
     nextReadingAt = millis() + wait * 1000UL;
+    Serial.printf("Next reading in %u s.\n", (unsigned)wait);
   }
   delay(200);
-#endif
 }

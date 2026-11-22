@@ -10,13 +10,13 @@
  */
 export const MODEL_VERSIONS = {
   /** raw counts → index, validation, per-sensor endpoints (lib/sensing) */
-  sensing: 's3',
+  sensing: 's5',
   /** substrate library, blend model, container physics (lib/substrate, lib/soilProfile) */
   substrate: 'b2',
   /** light averaging and daily-light estimate (lib/lightModel, lib/insights) */
   light: 'l3',
   /** the water decision and its evidence grade (lib/waterAction, lib/recommendation) */
-  decision: 'd2',
+  decision: 'd4',
 } as const;
 
 /** One string for a row: e.g. "s2.b2.l2.d2". */

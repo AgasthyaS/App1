@@ -10,7 +10,8 @@ import React, {
 } from 'react';
 import { clearLocalUsage, track } from './analytics';
 import { useAuth } from './auth';
-import { type CalMetricKey, type SensorCalibration, emptyCalibration, withCalibration, withSoilEndpoint } from './calibration';
+import { type CalMetricKey, type SensorCalibration, emptyCalibration, withAutoSoilEndpoints, withCalibration, withSoilEndpoint } from './calibration';
+import { autoEndpointsChanged, type AutoSoilEndpoints } from './sensing/autoCalibration';
 import { OBSERVATION_LABEL } from './observations';
 import { getSpecies } from './plants';
 import { PRESET_FOR_LEGACY, resolveSubstrate, type SubstrateSpec } from './substrate/catalog';
@@ -226,6 +227,8 @@ interface GreenrApi extends GreenrState {
   setSubstrate: (plantId: string, substrate: SubstrateSpec, reason?: 'owner-edit' | 'repot') => void;
   /** capture one end of a sensor's own range: its raw count in air ('dry') or water ('wet') */
   setSoilEndpoint: (sensorKey: string, end: 'dry' | 'wet', rawAdc: number) => void;
+  /** store the automatically worked-out soil endpoints for one sensor */
+  setAutoSoilEndpoints: (sensorKey: string, auto: AutoSoilEndpoints | null) => void;
   /** record something the owner saw on the plant */
   logObservation: (plantId: string, obs: { kind: ObservationKind; severity?: 1 | 2 | 3; note?: string }) => void;
   /** change what species a plant is recorded as, keeping what it was before */
@@ -756,6 +759,15 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const setAutoSoilEndpoints = useCallback((sensorKey: string, auto: AutoSoilEndpoints | null) => {
+    setState((s) => {
+      const current = s.calibrations[sensorKey] ?? emptyCalibration();
+      if (!autoEndpointsChanged(current.soilEndpointsAuto, auto)) return s;
+      track('action:soil_endpoints_auto', { method: auto?.method ?? 'none' });
+      return { ...s, calibrations: { ...s.calibrations, [sensorKey]: withAutoSoilEndpoints(current, auto) } };
+    });
+  }, []);
+
   const logObservation = useCallback(
     (plantId: string, obs: { kind: ObservationKind; severity?: 1 | 2 | 3; note?: string }) => {
       track('action:observation_logged', { kind: obs.kind });
@@ -1101,6 +1113,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       setPotDimensions,
       setSubstrate,
       setSoilEndpoint,
+      setAutoSoilEndpoints,
       logObservation,
       setSpecies,
       repotPlant,
@@ -1117,7 +1130,7 @@ export function GreenrProvider({ children }: { children: React.ReactNode }) {
       loadDemoGarden,
       resetApp,
     }),
-    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPlantNotes, setSpotNote, setPotDimensions, repotPlant, dismissSoilJump, rememberMeasurements, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, recordLightDay, recordClimateDays, installFirmware, forgetSensor, loadDemoGarden, resetApp],
+    [state, hydrated, setProfile, signOut, completeOnboarding, addPlant, addSpot, logWater, logWaterAmount, logCare, completeTask, skipTask, resetCareSession, markBriefingOpened, setSettings, setPlus, movePlant, archivePlant, addDiagnosis, addTasks, setPlantPhoto, logGrowth, renamePlant, setPlantNotes, setSpotNote, setPotDimensions, repotPlant, dismissSoilJump, rememberMeasurements, reassignSensor, recalibrateSensor, calibrateMetric, setLightInverted, setSoilEndpoint, setAutoSoilEndpoints, recordLightDay, recordClimateDays, installFirmware, forgetSensor, loadDemoGarden, resetApp],
   );
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

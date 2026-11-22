@@ -1,4 +1,5 @@
 import type { Reading } from './devices';
+import { SOIL_SCALE_SD, effectiveSoilEndpoints, type AutoSoilEndpoints } from './sensing/autoCalibration';
 import { endpointsValid, soilIndex, validateSoil, type MoisturePoint, type SoilEndpoints } from './sensing/moisture';
 
 /**
@@ -48,6 +49,12 @@ export interface SensorCalibration {
    * applies on top, for a later one-point touch-up.
    */
   soilEndpoints?: (Partial<SoilEndpoints> & { at?: string }) | null;
+  /**
+   * The same pair worked out AUTOMATICALLY from the sensor's readings — air
+   * measured during setup, water estimated (lib/sensing/autoCalibration). Used
+   * wherever the owner has not captured an end by hand; never overrides one.
+   */
+  soilEndpointsAuto?: AutoSoilEndpoints | null;
   /**
    * Weighed reference points for the pot this sensor lives in — index against
    * measured water content. Present only if the owner has done a gravimetric
@@ -112,14 +119,21 @@ export function applyCalibration(reading: Reading, cal?: SensorCalibration | nul
     reading.light_lux == null
       ? reading.light_lux
       : clampPct((cal.lightInverted && !fromLux ? 100 - reading.light_lux : reading.light_lux) + cal.light.offset);
-  // Per-sensor endpoints re-derive the index from the raw count — and re-judge it,
-  // since "not in the soil" can only be decided against this probe's own air
-  // reading. Rows without a raw count (older firmware) keep what they arrived with.
-  const own = reading.soil_raw != null && endpointsValid(cal.soilEndpoints) ? cal.soilEndpoints : null;
-  const base = own ? soilIndex(reading.soil_raw as number, own) : reading.soil_pct;
+  // Per-sensor endpoints re-derive the index from the raw count: the owner's own
+  // captures where there are any, otherwise the automatic pair. "Not in the soil"
+  // is re-judged only against a MEASURED air end. Rows without a raw count (older
+  // firmware) keep what they arrived with.
+  const scale = effectiveSoilEndpoints(cal.soilEndpoints, cal.soilEndpointsAuto);
+  const own = reading.soil_raw != null && scale.source !== 'factory' ? scale.endpoints : null;
+  const quality = own && scale.judgesInsertion ? validateSoil(reading.soil_raw, own, true).quality : reading.soil_quality;
+  // No moisture figure from a probe that is unplugged or sent an impossible count.
+  const unusable = quality === 'disconnected' || quality === 'invalid';
+  const base = unusable ? null : own ? soilIndex(reading.soil_raw as number, own) : reading.soil_pct;
   return {
     ...reading,
-    soil_quality: own ? validateSoil(reading.soil_raw, own).quality : reading.soil_quality,
+    soil_quality: quality,
+    soil_scale: reading.soil_raw != null ? scale.source : reading.soil_scale,
+    soil_sd: reading.soil_raw != null ? scale.sd : reading.soil_sd ?? SOIL_SCALE_SD.factory,
     soil_pct: base == null ? base : clampPct(base + cal.moisture.offset),
     temp_c: reading.temp_c == null ? reading.temp_c : Math.round((reading.temp_c + cal.temperature.offset) * 10) / 10,
     humidity_pct:
@@ -168,6 +182,7 @@ export function isCalibrated(cal?: SensorCalibration | null): boolean {
   if (!cal) return false;
   if (cal.lightInverted) return true;
   if (endpointsValid(cal.soilEndpoints)) return true;
+  if (cal.soilEndpointsAuto?.method === 'air') return true;
   return (['moisture', 'temperature', 'humidity', 'light'] as CalMetricKey[]).some(
     (k) => cal[k].calibratedAt != null,
   );
@@ -193,4 +208,9 @@ export function withSoilEndpoint(
     return { ...cal, soilEndpoints: end === 'dry' ? { dryAdc: next.dryAdc, at } : { wetAdc: next.wetAdc, at } };
   }
   return { ...cal, soilEndpoints: next };
+}
+
+/** Store an automatically worked-out pair (lib/sensing/autoCalibration). */
+export function withAutoSoilEndpoints(cal: SensorCalibration, auto: AutoSoilEndpoints | null): SensorCalibration {
+  return { ...cal, soilEndpointsAuto: auto };
 }

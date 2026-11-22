@@ -29,6 +29,8 @@ test suite runs the whole list twice on a populated database to prove it.
 | 12 | `supabase/migrations/20261112000000_platform.sql` | everything marked **new** below |
 | 13 | `supabase/seed/substrates.sql` | fills the substrate reference tables |
 | 14 | `supabase/migrations/20261112120000_c3_sensors.sql` | ESP32-C3 support: `lux`, `battery_mv`, `rssi_dbm`; `ingest_v2`; battery percentage; lux in daily summaries; `v_reading_daily_v2` |
+| 15 | `supabase/migrations/20261118000000_auto_calibration.sql` | model versions `s4` and `d3` (automatic endpoints, multi-reading soil level, cautious dose); no table changes |
+| 16 | `supabase/migrations/20261118120000_readings_accuracy.sql` | `ingest_v2` corrected: every raw count kept (a disconnected probe is no longer mistaken for a percentage), battery follows the newest reading; model versions `s5`, `d4` |
 
 `supabase-sensors.sql`, `supabase-sensors-v2.sql` and `supabase-idle-3h.sql` are
 superseded by file 2 and need not be run on a new project.
@@ -279,6 +281,22 @@ is skipped without losing the others. It stamps `plant_key`, computes
 `battery_pct` with `battery_pct_from_mv()`, records `firmware_version`,
 `battery_mv` and `rssi_dbm` on the device, and returns
 `{read_now, wake_seconds, inserted, skipped}`.
+
+**Since file 16:** `soil_raw` holds every count `ingest_v2` receives, 0–4095,
+including 0–199 (quality bit 2: disconnected or unpowered probe) — the C3 firmware
+only ever sends raw counts, so a small count is a fault, not a percentage. The
+device's `battery_mv` / `battery_pct` follow the newest reading in each upload: a
+newest reading with no battery value (USB power, or no divider) clears them, so a
+sensor moved to USB does not keep showing its last battery figure. An empty upload
+leaves them alone. The firmware's exact body is tested end to end in
+`tests/db/readings.test.ts`.
+
+**Checking the live data:** paste
+[`supabase/checks/readings_health.sql`](../supabase/checks/readings_health.sql) into
+the SQL editor. It is read-only and returns 15 checks (PASS / INFO / WARN / FAIL):
+the ingest version, model versions, row-level security, future timestamps,
+impossible counts, disconnected probes, sensor faults, duplicates, daily summaries
+against the readings, and the last reading per device.
 
 `battery_pct_from_mv()` maps a resting single-cell lithium voltage to percent of
 usable charge: 4.20 V = 100, 3.80 V = 50, 3.40 V = 0 (below that the board's

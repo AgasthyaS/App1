@@ -150,14 +150,19 @@ function Pot({ x, y, w = 90, h = 70 }: { x: number; y: number; w?: number; h?: n
 
 // ───────────────────────────────── Scenes ─────────────────────────────────
 
-/** Step 0 — what you need: power from a wall adapter or a battery, not a laptop port. */
+/**
+ * Step 0 — what you need: power from a wall adapter or a battery, not a laptop
+ * port. The probe is drawn beside the pot, not in it: its first readings, taken
+ * during setup, are its in-air reference (lib/sensing/autoCalibration).
+ */
 export function PowerArt() {
   return (
     <Frame>
-      <Pot x={30} y={95} />
-      <Sensor x={75} y={22} />
+      <Pot x={8} y={118} w={56} h={44} />
+      <Sensor x={118} y={18} />
+      <Label x={118} y={126} size={8}>probe out of the soil</Label>
       {/* cable from the sensor head to the wall adapter */}
-      <Path d="M95 40 C 140 40, 150 80, 196 80" stroke={light.ink} strokeWidth={3} fill="none" strokeLinecap="round" />
+      <Path d="M138 36 C 165 36, 170 80, 196 80" stroke={light.ink} strokeWidth={3} fill="none" strokeLinecap="round" />
       <Rect x={196} y={66} width={34} height={28} rx={5} fill="#FFFFFF" stroke={light.ink} strokeWidth={2} />
       <Rect x={230} y={73} width={8} height={4} fill={light.ink} />
       <Rect x={230} y={83} width={8} height={4} fill={light.ink} />
@@ -196,15 +201,19 @@ export function ScanArt() {
   );
 }
 
-/** Wi-Fi step 1 — power on; it opens its own setup network. */
+/**
+ * Wi-Fi step 1 — power on; it opens its own setup network. The probe stays out
+ * of the pot until setup is done (its in-air reference), so it is drawn beside it.
+ */
 export function HotspotOnArt() {
   return (
     <Frame>
-      <Pot x={40} y={100} />
-      <Sensor x={85} y={44} />
+      <Pot x={10} y={112} w={58} h={46} />
+      <Sensor x={120} y={44} />
       {[12, 22, 32].map((r, i) => (
-        <Path key={r} d={`M${85 - r} ${38 - i * 2} A${r} ${r} 0 0 1 ${85 + r} ${38 - i * 2}`} stroke={accent.verdant} strokeWidth={2.5} fill="none" strokeLinecap="round" opacity={1 - i * 0.25} />
+        <Path key={r} d={`M${120 - r} ${38 - i * 2} A${r} ${r} 0 0 1 ${120 + r} ${38 - i * 2}`} stroke={accent.verdant} strokeWidth={2.5} fill="none" strokeLinecap="round" opacity={1 - i * 0.25} />
       ))}
+      <Label x={120} y={150} size={8}>probe out of the soil</Label>
       <Rect x={160} y={60} width={118} height={40} rx={10} fill="#FFFFFF" stroke={accent.verdant} strokeWidth={1.5} />
       <WifiGlyph x={180} y={80} color={accent.verdant} />
       <Label x={196} y={78} anchor="start" color={light.ink} weight="700" size={11}>greenr-setup</Label>

@@ -725,6 +725,40 @@ const TRIAL_MAX_POT_FRACTION = 0.07;
 const trialCeilingMl = (liters: number): number =>
   Math.min(1500, Math.max(250, TRIAL_MAX_POT_FRACTION * liters * 1000));
 
+/**
+ * HOW CAUTIOUS TO BE, from how uncertain the answer is.
+ *
+ * A dose is (points to add) × (ml per point), and both factors are uncertain:
+ * the ml per point by `sdLog` (guessed pour amounts, few pours), the points to
+ * add by the SD of the soil level (reading noise, and an uncalibrated or
+ * auto-calibrated scale). Together, in log terms:
+ *
+ *     σ = √( sdLog² + (soilSd / deficit)² )
+ *     factor = max(0.6, e^(−0.5·σ))
+ *
+ * The errors are not symmetric in cost. Too little water is fixed by the next
+ * reading — the plant is still below its floor, the app asks for a top-up, and
+ * the pour that fell short is itself a measurement. Too much cannot be taken
+ * back and is what rots roots. So when the answer is uncertain the dose leans
+ * low, by half a standard deviation, and never below 60 % of the central
+ * estimate so it still moves the reading enough to learn from.
+ */
+export const CAUTION_K = 0.5;
+export const CAUTION_FLOOR = 0.6;
+export function uncertaintyCaution(sdLog: number, soilSdPts: number | null | undefined, deficitPts: number): { factor: number; sigma: number; note: string } {
+  const rel = soilSdPts != null && Number.isFinite(soilSdPts) && deficitPts > 0 ? soilSdPts / Math.max(1, deficitPts) : 0;
+  const sigma = Math.hypot(Number.isFinite(sdLog) ? sdLog : 0, rel);
+  const factor = Math.max(CAUTION_FLOOR, Math.exp(-CAUTION_K * sigma));
+  const cut = Math.round((1 - factor) * 100);
+  return {
+    factor,
+    sigma,
+    note: cut >= 10
+      ? ` Pouring about ${cut}% less than the central estimate, because ${rel > (sdLog || 0) ? 'the soil reading is not yet certain' : 'the amount per point is not yet certain'}; if the next reading is still low, Greenr will ask for a top-up.`
+      : '',
+  };
+}
+
 export interface PourStep {
   /** ml to pour right now */
   ml: number;
@@ -758,7 +792,15 @@ export function pourStep(
     soilRetention?: SoilRetention | null;
     hasDrainage?: boolean;
   },
-  env: { soilPct?: number | null; targetPct?: number | null; tempC?: number | null; humidityPct?: number | null; lightAvg?: number | null },
+  env: {
+    soilPct?: number | null;
+    targetPct?: number | null;
+    tempC?: number | null;
+    humidityPct?: number | null;
+    lightAvg?: number | null;
+    /** SD of soilPct, index points: reading noise plus the sensor's scale (lib/sensing/level) */
+    soilSdPts?: number | null;
+  },
   calibration?: { mlPerPoint: number; pairs: number; r2: number } | null,
   /**
    * The reconciled millilitres-per-point for THIS pot (lib/waterBalance). Passed
@@ -767,7 +809,7 @@ export function pourStep(
    * logged-pour calibration and the geometric chain below — it already contains
    * both, weighted by how much each is worth.
    */
-  balance?: { mlPerPoint: number; basis: string; note: string } | null,
+  balance?: { mlPerPoint: number; basis: string; note: string; sdLog?: number } | null,
 ): PourStep {
   const fullMl = recommendedPourMl(plant, env);
   const soil = env.soilPct;
@@ -815,11 +857,12 @@ export function pourStep(
    * real measurement.
    */
   if (balance && balance.basis !== 'modelled' && balance.basis !== 'bounded') {
+    const caution = uncertaintyCaution(balance.sdLog ?? 0, env.soilSdPts, deficitPts);
     // Every branch of this min() must be a whole number of millilitres — the
     // pot-volume cap is a raw float, and when it won it surfaced in the UI as
     // "~43.67721905116241 ml".
     const ml = Math.round(Math.min(
-      Math.max(25, Math.round((deficitPts * balance.mlPerPoint) / 25) * 25),
+      Math.max(25, Math.round((deficitPts * balance.mlPerPoint * caution.factor) / 25) * 25),
       MAX_SINGLE_POUR_FRACTION * potVolume(plant).liters * 1000,
       ABSOLUTE_MAX_POUR_ML,
     ));
@@ -829,7 +872,7 @@ export function pourStep(
       predictedRisePts: Math.round((ml / balance.mlPerPoint) * 10) / 10,
       isTrial: false,
       fullMl,
-      note: balance.note,
+      note: balance.note + caution.note,
     };
   }
 
@@ -856,7 +899,10 @@ export function pourStep(
     calibration.r2 >= 0.6 &&
     calibration.pairs >= (extreme ? 3 : 2);
   if (trusted) {
-    const measured = Math.max(25, Math.round((deficitPts * calibration.mlPerPoint) / 25) * 25);
+    // Two agreeing pours still carry their own spread; ~0.3 in log terms for a
+    // pair, shrinking as more pours agree.
+    const caution = uncertaintyCaution(0.3 / Math.sqrt(calibration.pairs), env.soilSdPts, deficitPts);
+    const measured = Math.max(25, Math.round((deficitPts * calibration.mlPerPoint * caution.factor) / 25) * 25);
     // The measured path may legitimately differ from the model — that is the
     // point of it — but it does NOT get to escape the physical ceiling. This
     // previously allowed `fullMl × 2`, i.e. half the pot's volume in one go, and
@@ -874,7 +920,7 @@ export function pourStep(
       predictedRisePts: Math.round((capped / calibration.mlPerPoint) * 10) / 10,
       isTrial: false,
       fullMl,
-      note: `Measured on this pot: about ${Math.round(calibration.mlPerPoint)} ml lifts it one point, from ${calibration.pairs} logged waterings.`,
+      note: `Measured on this pot: about ${Math.round(calibration.mlPerPoint)} ml lifts it one point, from ${calibration.pairs} logged waterings.${caution.note}`,
     };
   }
 

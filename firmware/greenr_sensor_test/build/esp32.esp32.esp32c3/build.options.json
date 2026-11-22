@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "../..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32c3:CDCOnBoot=cdc,FlashMode=dio",
+  "hardwareFolders": "/private/tmp/claude-501/-Users-agasthyashukla-Documents-GitHub-App1/1e272f9a-4613-44d9-a914-ac77598211f8/scratchpad/arduino2/data/packages/esp32/hardware/esp32/4.0.0,/private/tmp/claude-501/-Users-agasthyashukla-Documents-GitHub-App1/1e272f9a-4613-44d9-a914-ac77598211f8/scratchpad/arduino2/data/packages/esp32/hardware/esp32/4.0.0",
+  "otherLibrariesFolders": "/private/tmp/claude-501/-Users-agasthyashukla-Documents-GitHub-App1/1e272f9a-4613-44d9-a914-ac77598211f8/scratchpad/arduino2/user/libraries",
+  "sketchLocation": "/Users/agasthyashukla/Documents/GitHub/App1/firmware/greenr_sensor_test"
+}

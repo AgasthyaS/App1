@@ -109,8 +109,11 @@ export default function Devices() {
     const name = device.label?.trim() || 'Greenr sensor';
     const plant = plants.find((p) => p.id === device.plant_key);
     const spot = spots.find((s) => s.id === plant?.spotId);
-    const batt = latest?.battery_pct ?? device.battery_pct;
-    const battStr = batt == null || batt < 0 ? 'Not reported' : `${Math.round(batt)}%`;
+    // The newest reading says what powers the sensor NOW: no battery value there
+    // means USB power (or no battery divider), so an older stored figure must not
+    // stand in for it.
+    const batt = latest ? latest.battery_pct : device.battery_pct;
+    const battStr = batt == null || batt < 0 ? 'Not measured' : `${Math.round(batt)}%`;
     // The reporting cadence the device is currently set to (idle is ~3 h).
     const w = device.wake_seconds;
     const modeStr = w >= 3600 ? `Every ${Math.round(w / 3600)} h` : `Every ${Math.round(w / 60)} min`;
